@@ -1,0 +1,50 @@
+# Platform base: CUDA11.8-PyTorch2.0.1, Python3.10, Ubuntu22.04.
+# This builder supplies the base image and forbids FROM/CMD/ENTRYPOINT/EXPOSE.
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    MPLBACKEND=Agg \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates \
+        libgl1 \
+        libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Remove binary packages tied to the base image's PyTorch 2.0.1 before upgrade.
+RUN python -m pip uninstall --yes \
+        torch \
+        torchaudio \
+        torchvision \
+        torch-tensorrt \
+        xformers
+
+# Exact ARROW reference stack. These cp310/cu118 wheels are mirrored in China.
+RUN python -m pip install --no-cache-dir --timeout 120 --retries 10 \
+        --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+        "https://mirrors.aliyun.com/pytorch-wheels/cu118/torch-2.3.0%2Bcu118-cp310-cp310-linux_x86_64.whl" \
+        "https://mirrors.aliyun.com/pytorch-wheels/cu118/torchvision-0.18.0%2Bcu118-cp310-cp310-linux_x86_64.whl" \
+        "https://mirrors.aliyun.com/pytorch-wheels/cu118/torchaudio-2.3.0%2Bcu118-cp310-cp310-linux_x86_64.whl"
+
+RUN python -m pip install --no-cache-dir --timeout 120 --retries 10 \
+        --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+        ale-py==0.11.1 \
+        gymnasium==1.1.1 \
+        gymnasium-notices==0.0.1 \
+        matplotlib==3.10.0 \
+        numpy==1.26.4 \
+        opencv-python==4.11.0.86 \
+        sortedcontainers==2.4.0 \
+        tensorboard==2.13.0 \
+        tensorboard-data-server==0.7.2 \
+        tianshou==0.5.1 \
+        tqdm==4.67.1
+
+# Build-time checks do not require a visible GPU. They validate the compiled
+# CUDA runtime and reset every Atari environment used by ARROW.
+RUN python -c "import sys,torch,torchvision,torchaudio; assert sys.version_info[:2] == (3,10); assert torch.__version__.split('+')[0] == '2.3.0'; assert torchvision.__version__.split('+')[0] == '0.18.0'; assert torchaudio.__version__.split('+')[0] == '2.3.0'; assert torch.version.cuda == '11.8'; print(sys.version); print(torch.__version__, torch.version.cuda)"
+
+RUN python -c "import ale_py,gymnasium as gym; gym.register_envs(ale_py); games=('MsPacman','Boxing','CrazyClimber','Frostbite','Seaquest','Enduro'); envs=[gym.make('ALE/'+game+'-v5',frameskip=1,repeat_action_probability=0,full_action_space=True) for game in games]; observations=[env.reset(seed=0)[0] for env in envs]; assert all(obs.shape == (210,160,3) for obs in observations); assert all(env.action_space.n == 18 for env in envs); [env.close() for env in envs]; print('ARROW Atari environments OK:', games)"

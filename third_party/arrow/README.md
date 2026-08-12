@@ -1,0 +1,156 @@
+# ARROW: Augmented Replay for RObust World models
+
+
+## Abstract
+Continual reinforcement learning challenges agents to acquire new skills while retaining previously learned ones with the goal of improving performance in both past and future tasks. Most existing approaches rely on model-free methods with replay buffers to mitigate catastrophic forgetting; however, these solutions often face significant scalability challenges due to large memory demands. Drawing inspiration from neuroscience, where the brain replays experiences to a predictive World Model rather than directly to the policy, we present ARROW (Augmented Replay for RObust World models), a model-based continual RL algorithm that extends DreamerV3 with a memory-efficient, distribution-matching replay buffer. Unlike standard fixed-size FIFO buffers, ARROW maintains two complementary buffers: a short-term buffer for recent experiences and a long-term buffer that preserves task diversity through intelligent sampling. We evaluate ARROW on two challenging continual RL settings: Tasks without shared structure (Atari), and tasks with shared structure, where knowledge transfer is possible (Procgen CoinRun variants). Compared to model-free and model-based baselines with replay buffers of the same-size, ARROW demonstrates substantially less forgetting on tasks without shared structure, while maintaining comparable forward transfer. Our findings highlight the potential of model-based RL and bio-inspired approaches for continual reinforcement learning, warranting further research.
+
+Reviewed on OpenReview: https://openreview.net/forum?id=3FK2tFwNwK
+
+## Interactive Simulator
+
+An interactive walkthrough of ARROW is published at **[ARROW Simulator](https://azizgw.github.io/ARROW_Simulator/)**.
+
+## Repository Layout
+- `Code/`
+  - `ARROW_and_DV3/`
+    - `Atari/`
+      - `train.py` — entrypoint for ARROW/DV3 runs.
+      - `ac.py`, `wm.py`, `rssm.py`, `vae.py`, `replay.py`, `config.py`, `generate_trajectory.py` — actor-critic, world model, latent dynamics, VAE, replay buffer, default hyperparameters, and trajectory generation utilities.
+    - `CoinRun/` — same file set as Atari, tailored for Procgen CoinRun.
+  - `SAC/`
+    - `Atari/`
+      - `sac.py` — SAC entrypoint.
+      - `ac.py`, `rssm.py`, `vae.py`, `replay.py`, `config.py`, `generate_trajectory.py` — SAC components and helpers.
+    - `CoinRun/` — same file set as Atari, tailored for Procgen CoinRun.
+- `Configs/`
+  - `Atari configs/` - Note: all config files named with task (game), task id `e*`, seed `s*`, and method (ARROW, DV3, and SAC).
+    - `CL-task configs/` — continual-learning configs for ARROW, DV3, and SAC.
+    - `Single-task configs/` — per-game Atari configs for ARROW, DV3, and SAC.
+  - `ConRun configs/`
+    - `CL-task configs/` — same file set as Atari, tailored for Procgen CoinRun.
+    - `Single-task configs/` — same file set as Atari, tailored for Procgen CoinRun.
+- `requirements.txt` — Python dependencies.
+
+## Environment Setup
+```bash
+# Load conda into the current shell
+source ~/miniconda3/etc/profile.d/conda.sh
+
+# Create and activate environment
+conda create -n arrow python=3.10 -y
+conda activate arrow
+
+# Install dependencies
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+- The `requirements.txt` pins CUDA 11.8 wheels for PyTorch; adjust the `--extra-index-url` or versions if your CUDA/toolkit differs.
+  
+### Procgen installation (HPC-safe)
+
+Procgen requires a native C++ build and must not be installed in editable mode.
+```bash
+
+export TMPDIR=/tmp/${USER}-procgen
+mkdir -p "$TMPDIR"
+
+git clone https://github.com/openai/procgen.git /tmp/procgen_build
+cd /tmp/procgen_build
+git checkout 5e1dbf341d291eff40d1f9e0c0a0d5003643aebf
+pip install .
+```
+
+
+
+## Running Locally
+- `cd path/to/ARROW/Folder`
+- ARROW and DV3 (Atari): `python Code/ARROW_and_DV3/Atari/train.py --config /path/to/config.json`
+- ARROW and DV3 (CoinRun): `python Code/ARROW_and_DV3/CoinRun/train.py --config /path/to/config.json`
+- SAC: `python Code/SAC/Atari/sac.py --config /path/to/config.json`
+
+### ARROW FIFO / LTDM capacity ratio (Ablation)
+ARROW splits its trajectory-slot budget between the short-term FIFO buffer and the long-term distribution-matching (LTDM) buffer. The split is controlled by `arrow_replay_capacity_ratio`, which can be set in the config file or overridden on the command line via `--arrow-replay-ratio`. Supported values are:
+
+| Ratio | FIFO share | LTDM share |
+|------:|-----------:|-----------:|
+| `50-50` (default) | 50% | 50% |
+| `25-75` | 25% | 75% |
+| `75-25` | 75% | 25% |
+
+The same ratio is also used as the per-minibatch sampling weight between the two sub-buffers. If `--arrow-replay-ratio` is omitted, the value in the config is used; if neither is set, ARROW falls back to the `50-50` default. The flag is ignored by DV3 and SAC runs.
+
+Examples:
+```bash
+# Default 50/50 (no flag needed)
+python Code/ARROW_and_DV3/Atari/train.py --config /path/to/arrow-config.json
+
+# Explicit 50/50
+python Code/ARROW_and_DV3/Atari/train.py --config /path/to/arrow-config.json --arrow-replay-ratio 50-50
+
+# 25% FIFO / 75% LTDM
+python Code/ARROW_and_DV3/Atari/train.py --config /path/to/arrow-config.json --arrow-replay-ratio 25-75
+
+# 75% FIFO / 25% LTDM
+python Code/ARROW_and_DV3/Atari/train.py --config /path/to/arrow-config.json --arrow-replay-ratio 75-25
+```
+
+For ARROW runs, logs/checkpoints are written under `runs/<task_kind>/arrow/<ratio>/<run_name>/`, where `<ratio>` is the chosen ratio with the dash replaced by an underscore (e.g. `50_50`, `25_75`, `75_25`). DV3 and SAC runs go to `runs/<task_kind>/<algorithm>/<run_name>/`.
+
+## SLURM Usage (example)
+The jobs are typically run as arrays, one config per task id. The example below runs ARROW on the Atari single-task configs with an explicit FIFO/LTDM ratio; omit `--arrow-replay-ratio` to use the config default (`50-50`).
+```bash
+#!/bin/bash
+#SBATCH --job-name=arrow_atari
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:A100:1
+#SBATCH --time=12:00:00
+#SBATCH --mem=45G
+#SBATCH --array=0-4
+#SBATCH --output=logs/arrow/%A_%a.txt
+
+# Load conda initialization
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate arrow
+
+# Move to project directory (example)
+cd "/path/to/ARROW/"
+
+# Pick the ARROW FIFO/LTDM capacity ratio for this job:
+#   50-50 (default), 25-75, or 75-25.
+# Leave RATIO empty to fall back to the value stored in the config (defaults to 50-50).
+RATIO="50-50"
+
+# Collect config files (sorted)
+mapfile -t configs < <(ls "Configs/Atari configs/Single-task configs"/*.json | sort)
+config_file="${configs[$SLURM_ARRAY_TASK_ID]}"
+
+echo "[$SLURM_ARRAY_TASK_ID] $(date) → $config_file (ratio=${RATIO:-from-config})"
+
+# Run experiment
+if [[ -n "$RATIO" ]]; then
+    python Code/ARROW_and_DV3/Atari/train.py --config "$config_file" --arrow-replay-ratio "$RATIO"
+else
+    python Code/ARROW_and_DV3/Atari/train.py --config "$config_file"
+fi
+
+# CoinRun variant:
+#   python Code/ARROW_and_DV3/CoinRun/train.py --config "$config_file" --arrow-replay-ratio "$RATIO"
+# SAC variant (no ratio flag):
+#   python Code/SAC/Atari/sac.py --config "$config_file"
+```
+
+
+## Tips
+- Adjust SLURM directives (partition, GPU type, memory, time) to your cluster (if you're using SLURM)
+- Each config file contains the sequence of tasks (or single task), seed, and method.
+- Keep configs sorted and align seeds across methods to simplify comparisons.
+- Log files in `logs/` will follow the `%A_%a` pattern; ensure the directory exists before launching jobs.
+- Config filenames use short seed IDs (`s*`). The table below shows their corresponding numeric seeds:
+
+| Seed ID | Seed |
+|--------:|-----:|
+| `s0` | `123456789` |
+| `s1` | `1337` |
+| `s2` | `31337` |
+| `s3` | `42` |
+| `s4` | `987654321` |
