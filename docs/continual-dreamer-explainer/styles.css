@@ -136,6 +136,23 @@ li { margin: 8px 0; }
 .buffer-figure figcaption { grid-column: 1 / -1; }
 .takeaway { margin-top: 36px; padding: 20px 0; border-top: 1px solid var(--line-dark); border-bottom: 1px solid var(--line); }
 
+.related-title { min-height: 74vh; }
+.related-map-table td:nth-child(1), .related-map-table td:nth-child(2) { white-space: nowrap; }
+.related-verdict { margin-top: 36px; padding: 19px 22px; border-top: 2px solid var(--blue); border-bottom: 1px solid var(--line); background: var(--paper); font-size: 14px; }
+.related-verdict strong { color: var(--blue); }
+.research-list { max-width: 860px; margin: 28px 0 0; padding: 0; list-style: none; counter-reset: related-steps; }
+.research-list li { counter-increment: related-steps; display: grid; grid-template-columns: 38px 1fr; gap: 14px; margin: 0; padding: 15px 0; border-top: 1px solid var(--line); }
+.research-list li::before { content: counter(related-steps, decimal-leading-zero); color: var(--accent); font: 600 11px ui-monospace, monospace; }
+.research-list li:last-child { border-bottom: 1px solid var(--line); }
+.related-links { margin-top: 22px; color: var(--muted); font-size: 13px; }
+.position-statement { margin: 35px 0 42px; padding: 25px 28px; border-left: 4px solid var(--accent); background: var(--accent-soft); }
+.position-statement p { margin: 0; font-family: Georgia, "Songti SC", serif; font-size: 20px; line-height: 1.75; }
+.position-table td:first-child { font-weight: 600; }
+.references-intro { margin: -16px 0 25px; color: var(--muted); font-size: 13px; }
+.expanded-references { max-width: 900px; padding-left: 25px; }
+.expanded-references li { padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.expanded-references li:last-child { border-bottom: 0; }
+
 .result-status { display: grid; grid-template-columns: 280px 1fr; gap: 30px; padding: 20px 0; border-top: 3px solid var(--green); border-bottom: 1px solid var(--line); }
 .result-status strong { color: var(--green); font-family: Georgia, "Songti SC", serif; font-size: 19px; }
 .result-status p { margin: 0; }
@@ -252,6 +269,7 @@ footer { padding: 25px 0; border-top: 1px solid var(--line); color: var(--muted)
   .figure-arrow { transform: rotate(90deg); text-align: center; }
   .two-column { grid-template-columns: 1fr; }
   .buffer-figure { grid-template-columns: 1fr; }
+  .related-map-table td:nth-child(1), .related-map-table td:nth-child(2) { white-space: normal; }
   .metric-grid { grid-template-columns: 1fr 1fr; }
   .small-multiples { grid-template-columns: 1fr; }
   .resource-layout { grid-template-columns: 1fr; }
@@ -271,6 +289,9 @@ footer { padding: 25px 0; border-top: 1px solid var(--line); color: var(--muted)
   .metric-grid { grid-template-columns: 1fr; }
   .metric-grid article { min-height: 0; }
   .baseline-figure { padding: 14px 10px; }
+  .related-title { min-height: auto; }
+  .position-statement { padding: 20px; }
+  .position-statement p { font-size: 18px; }
   .retention-table { min-width: 760px; }
   .retention-table th, .retention-table td { min-width: 0; }
   .baseline-findings { grid-template-columns: 1fr; }
