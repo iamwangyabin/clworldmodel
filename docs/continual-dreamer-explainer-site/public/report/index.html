@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="持续世界模型强化学习问题、方法与实验设计的学术汇报。" />
+    <title>持续 Dreamer：问题、基线与研究路线</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="paper-id" href="#title">CLWM / Research Note</a>
+      <nav aria-label="汇报目录">
+        <a href="#problem">问题</a>
+        <a href="#dreamer">Dreamer</a>
+        <a href="#arrow">ARROW</a>
+        <a href="#results">结果</a>
+        <a href="#hypothesis">假设</a>
+        <a href="#experiments">实验</a>
+      </nav>
+      <button id="theme-toggle" type="button" aria-label="切换明暗主题">A/a</button>
+    </header>
+
+    <main>
+      <section class="title-page" id="title">
+        <div class="report-width">
+          <p class="venue">Continual Model-Based Reinforcement Learning · Research Discussion</p>
+          <h1>持续 Dreamer：<br />问题、基线与研究路线</h1>
+          <p class="subtitle">
+            从 ARROW 的经验回放出发，重新审视世界模型预测目标与 Actor-Critic 控制目标在持续学习中的关系。
+          </p>
+          <div class="title-meta">
+            <span>研究对象：Dreamer-style agent</span>
+            <span>初始基线：ARROW-50</span>
+            <span>环境：6-task continual Atari</span>
+            <span>状态：单 seed pilot 已完成</span>
+          </div>
+
+          <div class="abstract">
+            <h2>摘要</h2>
+            <p>
+              Dreamer 并非只优化一个目标。世界模型通过真实轨迹学习观测、latent dynamics、reward 与 termination；
+              Actor-Critic 则在模型产生的想象轨迹上优化累计回报。因此，旧任务性能下降可能来自世界预测漂移、
+              策略技能漂移、价值估计失准或策略利用模型误差。ARROW 主要通过 FIFO 与长期记忆缓冲区维持旧数据覆盖，
+              但并未区分这些故障。本文档同时纳入本地已完成的单 seed ARROW-50 pilot；结果显示旧任务保持具有明显
+              的任务差异和非单调性，因此下一步应先做组件诊断，再决定是改 replay、Actor 巩固还是世界模型结构。
+            </p>
+          </div>
+
+          <div class="claim-box">
+            <span>当前核心判断</span>
+            <p>
+              现在最有价值的并不是立即提出一个 MoE 结构，而是先确定：Dreamer 的两类学习目标在持续训练中是否
+              产生可分离的遗忘，以及它们是否需要不同的记忆与巩固机制。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="report-section" id="problem">
+        <div class="report-width">
+          <header class="section-header">
+            <span>1</span>
+            <div><p>Problem formulation</p><h2>问题定义</h2></div>
+          </header>
+
+          <h3>1.1 持续模型式强化学习</h3>
+          <p>
+            Agent 依次接触环境或任务 <span class="math-inline">M<sub>1</sub>, …, M<sub>T</sub></span>。
+            当前阶段只能与 <span class="math-inline">M<sub>t</sub></span> 交互；旧环境通常不可访问，
+            但允许保留固定预算的 replay。目标不是当前任务分数，而是训练结束后所有已见任务的控制能力。
+          </p>
+
+          <div class="equation" aria-label="持续强化学习目标">
+            <span class="eq-body">max<sub>θ,φ</sub> &nbsp; (1/T) Σ<sub>i=1</sub><sup>T</sup> J<sub>i</sub>(π<sub>φ</sub>; P<sub>i</sub>)</span>
+            <span class="eq-number">(1)</span>
+          </div>
+          <div class="equation" aria-label="资源约束">
+            <span class="eq-body">subject to &nbsp; |B| ≤ B<sub>max</sub>, &nbsp; |Θ| ≤ K, &nbsp; C<sub>update</sub> ≤ C<sub>max</sub></span>
+            <span class="eq-number">(2)</span>
+          </div>
+
+          <p>
+            其中 <span class="math-inline">θ</span> 是世界模型参数，<span class="math-inline">φ</span> 是 Actor-Critic 参数。
+            公平比较必须同时匹配环境交互、梯度更新、参数规模、replay 容量以及实际字节使用量。
+          </p>
+
+          <h3>1.2 任务困难来自哪里</h3>
+          <table>
+            <thead><tr><th>困难</th><th>在 continual Atari 中的表现</th><th>不能混淆的因素</th></tr></thead>
+            <tbody>
+              <tr><td>数据非平稳</td><td>当前游戏持续占据数据流，旧游戏只通过 replay 出现</td><td>采样不足与参数干扰不是一回事</td></tr>
+              <tr><td>世界异质</td><td>画面、动力学、reward 与 termination 同时变化</td><td>视觉变化不等于动力学变化</td></tr>
+              <tr><td>控制异质</td><td>同一 18 维动作空间承载完全不同的技能</td><td>Actor 遗忘不等于 world model 遗忘</td></tr>
+              <tr><td>尺度异质</td><td>游戏回报数量级不同，critic/advantage 容易被某些任务主导</td><td>人工 reward scale 会掩盖算法问题</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="report-section shaded" id="dreamer">
+        <div class="report-width">
+          <header class="section-header">
+            <span>2</span>
+            <div><p>Dreamer decomposition</p><h2>Dreamer 的两类学习目标</h2></div>
+          </header>
+
+          <figure class="system-figure">
+            <div class="system-row">
+              <div class="figure-node"><small>真实环境</small><strong>轨迹数据</strong><span>o, a, r, c</span></div>
+              <div class="figure-arrow">→</div>
+              <div class="figure-node replay-node"><small>有限记忆</small><strong>Replay</strong><span>sequence sampling</span></div>
+              <div class="figure-arrow">→</div>
+              <div class="figure-node world-node"><small>目标 A</small><strong>World Model</strong><span>predict the world</span></div>
+              <div class="figure-arrow">→</div>
+              <div class="figure-node"><small>内部模拟</small><strong>Imagined Rollout</strong><span>latent trajectory</span></div>
+              <div class="figure-arrow">→</div>
+              <div class="figure-node actor-node"><small>目标 B</small><strong>Actor-Critic</strong><span>maximize return</span></div>
+            </div>
+            <figcaption>图 1. Dreamer 的训练流水线。世界模型的预测学习与 Actor-Critic 的强化学习相互连接，但目标不同。</figcaption>
+          </figure>
+
+          <div class="two-column">
+            <article>
+              <h3>2.1 世界模型：预测目标</h3>
+              <div class="equation compact-equation">
+                <span class="eq-body">L<sub>WM</sub> = L<sub>dyn</sub> + L<sub>rep</sub> + L<sub>obs</sub> + L<sub>rew</sub> + L<sub>cont</sub></span>
+                <span class="eq-number">(3)</span>
+              </div>
+              <p>
+                ARROW 的 World Model 由 Encoder、RSSM、Decoder、reward predictor 和 continue predictor 构成。
+                它利用已发生轨迹拟合环境生成规律。这部分本来就属于概率建模或监督/自监督预测。
+              </p>
+              <ul>
+                <li>旧样本仍然提供有效监督信号。</li>
+                <li>适合经验回放、代表样本、预测蒸馏与结构隔离。</li>
+                <li>但较低的 pixel loss 不保证控制相关预测准确。</li>
+              </ul>
+            </article>
+
+            <article>
+              <h3>2.2 Actor-Critic：控制目标</h3>
+              <div class="equation compact-equation">
+                <span class="eq-body">L<sub>actor</sub> = − E[log π(a<sub>t</sub>|s<sub>t</sub>) Â<sub>t</sub>] − ηH(π)</span>
+                <span class="eq-number">(4)</span>
+              </div>
+              <p>
+                Actor 在 imagined rollout 上使用 advantage 加权的 policy gradient；Critic 拟合 λ-return。
+                动作不是固定标签，target 会随当前 policy、critic 和 world model 一起变化。
+              </p>
+              <ul>
+                <li>旧图片重新出现，不等于旧技能得到直接监督。</li>
+                <li>适合 policy distillation、behavior cloning 或 dream rehearsal。</li>
+                <li>但过强的旧策略约束可能伤害新任务 plasticity。</li>
+              </ul>
+            </article>
+          </div>
+
+          <aside class="caution">
+            <strong>这里不能提前下结论。</strong>
+            “世界事实应该 replay、行动技能应该 rehearsal”只是待验证假设。充分的 replay 与 imagined RL 也可能恢复旧技能；
+            反过来，Actor 的失败也可能源自 world model 或 critic 给出的错误训练信号。
+          </aside>
+        </div>
+      </section>
+
+      <section class="report-section" id="arrow">
+        <div class="report-width">
+          <header class="section-header">
+            <span>3</span>
+            <div><p>Baseline audit</p><h2>ARROW-50 的机制与边界</h2></div>
+          </header>
+
+          <h3>3.1 ARROW 实际做了什么</h3>
+          <figure class="buffer-figure">
+            <div class="buffer-box">
+              <div class="buffer-title"><strong>FIFO</strong><span>512 × 512</span></div>
+              <div class="buffer-strip recent" aria-hidden="true"></div>
+              <p>保留最近经验，提供当前任务适应所需的数据密度。</p>
+            </div>
+            <div class="sampling-rule"><span>batch sampling</span><strong>0.5 / 0.5</strong></div>
+            <div class="buffer-box">
+              <div class="buffer-title"><strong>LTDM</strong><span>512 × 512</span></div>
+              <div class="buffer-strip history" aria-hidden="true"></div>
+              <p>在整个历史流上近似均匀保留经验，维持长期覆盖。</p>
+            </div>
+            <figcaption>图 2. ARROW-50 的主要方法贡献是改变经验保留和采样分布。</figcaption>
+          </figure>
+
+          <h3>3.2 优势、限制与资源代价</h3>
+          <table class="comparison-table">
+            <thead><tr><th>维度</th><th>优势</th><th>限制</th></tr></thead>
+            <tbody>
+              <tr><td>任务信息</td><td>不依赖 task ID 或边界输入模型</td><td>无法显式隔离高度异质的动力学和技能</td></tr>
+              <tr><td>容量</td><td>总轨迹容量固定，不随任务数无限增长</td><td>任务越多，每个旧任务获得的覆盖越稀</td></tr>
+              <tr><td>实现</td><td>不改 Dreamer 主体，方法简单且可复现</td><td>无法归因 world model、critic 与 actor 的遗忘</td></tr>
+              <tr><td>存储</td><td>完整轨迹允许所有模块重新训练</td><td>上游 float32 GPU 图像 replay 约占 24 GiB</td></tr>
+              <tr><td>多任务尺度</td><td>保留每个游戏的历史回报</td><td>reward scale 仍由人工逐游戏设置</td></tr>
+            </tbody>
+          </table>
+
+          <p class="takeaway">
+            <strong>结论：</strong>ARROW 解决的是“旧数据是否仍会被训练看到”，并未回答“旧数据应该保护哪个模块、
+            哪些状态对控制最重要，以及不同目标是否应采用相同的巩固方式”。
+          </p>
+        </div>
+      </section>
+
+      <section class="report-section shaded" id="results">
+        <div class="report-width">
+          <header class="section-header">
+            <span>4</span>
+            <div><p>Completed pilot results</p><h2>本地 ARROW-50 基线结果</h2></div>
+          </header>
+
+          <div class="result-status">
+            <strong>完整训练 · seed 0 · 诊断性 pilot</strong>
+            <p>
+              该 run 已完成 541 个 epoch 和六个游戏的顺序训练。它足以观察基线行为，但只有一个 seed，
+              因而不能作为论文复现，也不能支持方法间显著性结论。
+            </p>
+          </div>
+
+          <div class="metric-grid" aria-label="基线运行摘要">
+            <article><strong>35.45M</strong><span>raw environment frames</span><small>8.86M agent decisions，frame repeat = 4</small></article>
+            <article><strong>541k</strong><span>world-model updates</span><small>每个 epoch 1000 次</small></article>
+            <article><strong>432.8k</strong><span>actor-critic updates</span><small>每个 epoch 800 次</small></article>
+            <article><strong>55 × 6</strong><span>evaluation checkpoints</span><small>每 10 epoch；目标至少 16 个完整 episode</small></article>
+            <article><strong>23.25 h</strong><span>logged stage time</span><small>训练日志中各阶段计时之和</small></article>
+            <article><strong>25.55 GiB</strong><span>peak GPU allocation</span><small>峰值 reserved 26.19 GiB</small></article>
+          </div>
+
+          <h3>4.1 六个任务的完整学习曲线</h3>
+          <p>
+            图 3 使用日志中的 <strong>scaled evaluation return</strong>。每个面板独立缩放 y 轴，阴影区是该游戏的
+            训练阶段，竖线是任务边界。这样能看清单任务动态，但不同面板的绝对高度不可直接比较。
+          </p>
+          <figure class="baseline-figure">
+            <div class="chart-legend">
+              <span><i class="legend-line"></i>evaluation mean</span>
+              <span><i class="legend-phase"></i>该任务训练阶段</span>
+              <span><i class="legend-boundary"></i>任务边界</span>
+            </div>
+            <div class="small-multiples" id="baseline-small-multiples" aria-label="六个 Atari 任务的 evaluation return 曲线"></div>
+            <figcaption>
+              图 3. ARROW-50，original task order，seed 123456789。误差未画入曲线；表 2 给出最后一次评估的 episode std。
+            </figcaption>
+          </figure>
+
+          <h3>4.2 保持率不是一个数：任务差异很大</h3>
+          <p>
+            “阶段峰值”只在该任务自己的训练区间内寻找；“最后记录”是 epoch 540 的评估。
+            保持率为最后分数除以阶段峰值，因此不受手工 reward scale 的乘法影响。
+          </p>
+          <div class="table-scroll">
+            <table class="retention-table">
+              <thead>
+                <tr><th>任务</th><th>训练阶段峰值</th><th>最后 scaled return</th><th>推回 raw return</th><th>保持率</th><th>判读</th></tr>
+              </thead>
+              <tbody id="retention-table-body"></tbody>
+            </table>
+          </div>
+          <p class="table-note">
+            表 1. “推回 raw return”由 scaled return ÷ 固定 reward scale 得到。不同游戏的 raw return 仍不可直接平均。
+            Enduro 是最后任务，没有后续任务，因此不能测量 post-task forgetting。
+          </p>
+
+          <h3>4.3 任务边界后的相对表现</h3>
+          <p>
+            表 2 将每个任务在后续边界的分数除以其自身训练阶段峰值。它展示的是 retention trajectory，
+            不是一个新的官方指标；超过 100% 表示旧任务后来高于本阶段峰值，既可能是 backward transfer，
+            也可能只是单 seed、随机评估产生的波动。
+          </p>
+          <div class="table-scroll">
+            <table class="boundary-table">
+              <thead id="boundary-table-head"></thead>
+              <tbody id="boundary-table-body"></tbody>
+            </table>
+          </div>
+
+          <div class="baseline-findings">
+            <article>
+              <span>01</span><div><strong>ARROW 不是“不遗忘”</strong><p>Frostbite、Boxing 保持较强；CrazyClimber 和 Seaquest 的最后保持率明显更低，遗忘高度任务相关。</p></div>
+            </article>
+            <article>
+              <span>02</span><div><strong>旧任务轨迹明显非单调</strong><p>旧任务既会下降，也会在后来回升。只比较阶段结束与最终点，会漏掉恢复、波动和可能的 backward transfer。</p></div>
+            </article>
+            <article>
+              <span>03</span><div><strong>训练 loss 不能解释性能曲线</strong><p>World Model loss 来自 FIFO/LTDM 混合 batch，没有逐任务分解；总 loss 稳定并不能证明旧动力学仍然正确。</p></div>
+            </article>
+            <article>
+              <span>04</span><div><strong>当前 run 还不能归因模块</strong><p>这些曲线无法告诉我们是 Encoder/RSSM、reward head、Critic 还是 Actor 导致下降；而且本 run 未保存边界 checkpoint，后续实验必须先补上。</p></div>
+            </article>
+          </div>
+
+          <h3>4.4 资源账单</h3>
+          <div class="resource-layout">
+            <div>
+              <div class="stage-bars" id="stage-bars" aria-label="运行阶段耗时"></div>
+              <p class="table-note">图 4. 日志阶段计时，不等于调度系统记录的端到端作业时长。</p>
+            </div>
+            <table class="resource-table">
+              <tbody>
+                <tr><td>Replay 轨迹槽</td><td>512 FIFO + 512 LTDM</td></tr>
+                <tr><td>序列长度</td><td>512 transitions</td></tr>
+                <tr><td>图像观测总数</td><td>524,288</td></tr>
+                <tr><td>float32 图像理论体积</td><td>24.00 GiB</td></tr>
+                <tr><td>建议 GPU memory</td><td>30.12 GiB</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <aside class="caution result-caution">
+            <strong>三个读数陷阱。</strong>
+            评估环境也使用逐游戏 reward scale，所以日志分数不是 raw Atari return；Actor 评估是随机采样，表中的 std 是 episode
+            波动而不是 seed 置信区间；epoch 540 的评估发生在该 epoch 的模型更新之前，因此它是最后记录的评估点，
+            不是最后一次更新后的重新评估。
+          </aside>
+
+          <p class="provenance">
+            数据源：<code>runs/arrow_ar50_original_s0_a100_optimized</code>。网页数据由
+            <code>scripts/extract_arrow_baseline_results.py</code> 从原始 log/config 生成；upstream pin
+            <code>cb05e7d97ed83c3cf6e528960db0da6868e29232</code>。
+          </p>
+        </div>
+      </section>
+
+      <section class="report-section" id="diagnosis">
+        <div class="report-width">
+          <header class="section-header">
+            <span>5</span>
+            <div><p>Component-level diagnosis</p><h2>旧任务回报为什么下降</h2></div>
+          </header>
+
+          <p>
+            最终需要解释的是旧任务真实回报，而不是某个训练 loss。可以通过旧/新 World Model、Actor 与 Critic 的
+            交叉置换，把相同的性能下降分解为不同故障来源。
+          </p>
+
+          <div class="equation long-equation">
+            <span class="eq-body">
+              F<sub>i</sub> =
+              [J<sub>Pᵢ</sub>(π<sub>i</sub>) − J<sub>P̂ₜ</sub>(π<sub>i</sub>)] +
+              [J<sub>P̂ₜ</sub>(π<sub>i</sub>) − J<sub>P̂ₜ</sub>(π<sub>t</sub>)] +
+              [J<sub>P̂ₜ</sub>(π<sub>t</sub>) − J<sub>Pᵢ</sub>(π<sub>t</sub>)]
+            </span>
+            <span class="eq-number">(5)</span>
+          </div>
+          <p class="equation-note">
+            式 (5) 是分析视角，不是 Dreamer 或 ARROW 的原始训练目标。三项分别近似描述旧技能上的模型误差、
+            固定模型下的策略漂移，以及当前策略对模型误差的利用。
+          </p>
+
+          <table>
+            <thead><tr><th>候选故障</th><th>直接测量</th><th>关键干预</th><th>对应方法</th></tr></thead>
+            <tbody>
+              <tr><td>World Model 遗忘</td><td>旧轨迹上的 latent/reward/continue error</td><td>固定旧 Actor，替换旧/新 WM</td><td>代表 replay、预测蒸馏、条件动力学</td></tr>
+              <tr><td>Actor 遗忘</td><td>旧状态 policy KL、动作排名、成功率</td><td>固定同一 WM，替换旧/新 Actor</td><td>策略蒸馏、CLEAR、dream rehearsal</td></tr>
+              <tr><td>Critic 漂移</td><td>value calibration、λ-return error</td><td>替换 Critic 或使用 MC return</td><td>PopArt、分组 Critic、value distillation</td></tr>
+              <tr><td>模型利用</td><td>imagined return 与 real return 差距</td><td>真实短 rollout 或独立 ensemble 验证</td><td>不确定度惩罚、value-aware error</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="report-section" id="hypothesis">
+        <div class="report-width">
+          <header class="section-header">
+            <span>6</span>
+            <div><p>Research hypotheses</p><h2>由讨论形成的三个可证伪假设</h2></div>
+          </header>
+
+          <article class="hypothesis">
+            <div class="hypothesis-id">H1</div>
+            <div>
+              <h3>双目标遗忘具有可分离性</h3>
+              <p>World Model 的旧任务预测能力与 Actor 的旧技能保留并不总是同步；单一 aggregate return 会掩盖主导故障。</p>
+              <p class="falsify"><strong>反证：</strong>跨任务、跨 seed 的组件置换无法稳定地区分 WM 与 Actor 的贡献。</p>
+            </div>
+          </article>
+
+          <article class="hypothesis">
+            <div class="hypothesis-id">H2</div>
+            <div>
+              <h3>相同 replay 并非两类目标的最优记忆</h3>
+              <p>世界模型需要覆盖生成机制的证据，而 Actor 更依赖决策关键状态及其行为目标；同一轨迹可以共享，但采样价值与附加信息不同。</p>
+              <p class="falsify"><strong>反证：</strong>匹配字节与更新次数后，分目标记忆不优于统一随机/ARROW replay。</p>
+            </div>
+          </article>
+
+          <article class="hypothesis">
+            <div class="hypothesis-id">H3</div>
+            <div>
+              <h3>世界模型容量应按控制相关差异分配</h3>
+              <p>若采用条件专家，路由应优先反映对 reward、value 或长期 latent rollout 的影响，而非仅根据 task ID 或 pixel similarity。</p>
+              <p class="falsify"><strong>反证：</strong>value-aware routing 在匹配容量后不优于 task/context routing，或训练明显不稳定。</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="report-section shaded" id="methods">
+        <div class="report-width">
+          <header class="section-header">
+            <span>7</span>
+            <div><p>Candidate methods</p><h2>候选方法及其优劣</h2></div>
+          </header>
+
+          <table class="method-table">
+            <thead>
+              <tr><th>方法</th><th>作用对象</th><th>核心优势</th><th>主要风险</th><th>研究角色</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>ARROW-50</td><td>数据覆盖</td><td>简单、task-agnostic、固定容量</td><td>存储大，不区分模块遗忘</td><td>主基线</td></tr>
+              <tr><td>代表性 World Replay</td><td>World Model</td><td>按 dynamics/latent coverage 压缩旧证据</td><td>表示漂移；代表性未必等于控制重要性</td><td>低存储基线</td></tr>
+              <tr><td>Policy Distillation</td><td>Actor</td><td>直接保护旧状态上的动作分布，附加字节较少</td><td>模仿次优旧策略；抑制 plasticity</td><td>技能记忆基线</td></tr>
+              <tr><td>Dream Rehearsal</td><td>Actor</td><td>利用世界模型生成并筛选旧技能监督</td><td>依赖 model fidelity 与 grading</td><td>强 Actor 基线</td></tr>
+              <tr><td>Conditional RSSM</td><td>World Model</td><td>共享骨干与专用容量兼顾；计算可稀疏</td><td>退化为任务分类；参数与路由复杂</td><td>结构消融</td></tr>
+              <tr><td>Value-aware Routing</td><td>WM / Control 接口</td><td>容量分配与最终 return 更一致</td><td>value 非平稳、有偏，训练耦合强</td><td>潜在新方法</td></tr>
+            </tbody>
+          </table>
+
+          <h3>7.1 条件世界模型的最小结构</h3>
+          <figure class="architecture-figure">
+            <div class="arch-line">
+              <div class="figure-node"><small>可选冻结</small><strong>视觉 Encoder</strong><span>o<sub>t</sub> → x<sub>t</sub></span></div>
+              <div class="figure-arrow">→</div>
+              <div class="figure-node"><small>任务未知</small><strong>History Context</strong><span>c<sub>t</sub></span></div>
+              <div class="figure-arrow">→</div>
+              <div class="expert-block">
+                <strong>Shared RSSM + K Residual Experts</strong>
+                <div><span>E1</span><span>E2</span><span>E3</span><span>E4</span></div>
+                <small>固定 K；Top-k condition execution</small>
+              </div>
+              <div class="figure-arrow">→</div>
+              <div class="figure-node"><strong>Reward / Continue</strong><span>Actor / Critic</span></div>
+            </div>
+            <figcaption>图 5. 条件专家只是一种实现。论文贡献必须来自路由依据、持续更新规则或与控制目标的联系。</figcaption>
+          </figure>
+
+          <table>
+            <thead><tr><th>路由</th><th>优势</th><th>缺陷</th></tr></thead>
+            <tbody>
+              <tr><td>Task-ID routing</td><td>最清楚的 oracle，可验证专家结构是否有上限收益</td><td>依赖特权标签，不能作为最终 task-agnostic 方法</td></tr>
+              <tr><td>History-context routing</td><td>根据轨迹自动推断环境条件</td><td>可能只是隐式识别游戏，理论新意有限</td></tr>
+              <tr><td>Value-aware routing</td><td>按对回报相关预测的贡献分配容量</td><td>估计噪声大，容易与 Critic 误差互相放大</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="report-section" id="experiments">
+        <div class="report-width">
+          <header class="section-header">
+            <span>8</span>
+            <div><p>Experimental design</p><h2>实验路线与判别标准</h2></div>
+          </header>
+
+          <div class="experiment-steps">
+            <article><span>Phase 0</span><h3>复现 ARROW-50</h3><p>冻结任务顺序、环境步数、更新次数、replay 容量和 reward scale，获得多 seed 基线与资源账单。</p></article>
+            <article><span>Phase 1</span><h3>组件级交叉置换</h3><p>保存每个任务边界的 WM、Actor 与 Critic；在旧任务上交叉组合，识别主导遗忘模块。</p></article>
+            <article><span>Phase 2</span><h3>两类巩固独立消融</h3><p>比较仅 World replay、仅 Actor rehearsal、二者组合及匹配计算量的统一 replay。</p></article>
+            <article><span>Phase 3</span><h3>条件结构消融</h3><p>比较 shared RSSM、oracle routing、context routing 与 value-aware routing，匹配参数和 FLOPs。</p></article>
+            <article><span>Phase 4</span><h3>严格记忆压缩</h3><p>在 100%、10%、1% replay 字节预算下报告结果，区分轨迹容量与实际存储。</p></article>
+          </div>
+
+          <h3>8.1 必须报告的指标</h3>
+          <table>
+            <thead><tr><th>层次</th><th>主要指标</th><th>目的</th></tr></thead>
+            <tbody>
+              <tr><td>最终控制</td><td>Raw return、final average、forgetting、BWT/FWT</td><td>回答方法是否真的保留技能</td></tr>
+              <tr><td>世界模型</td><td>latent KL、reward/continue error、multi-step rollout error</td><td>定位预测机制漂移</td></tr>
+              <tr><td>Actor-Critic</td><td>policy KL、action agreement、value calibration</td><td>定位策略和价值漂移</td></tr>
+              <tr><td>结构行为</td><td>router entropy、expert overlap、load balance</td><td>判断 MoE 是否真正产生机制复用</td></tr>
+              <tr><td>资源</td><td>参数、checkpoint bytes、replay bytes、FLOPs、updates</td><td>排除通过更多资源取得的伪增益</td></tr>
+            </tbody>
+          </table>
+
+          <h3>8.2 决定论文故事的结果模式</h3>
+          <div class="result-matrix">
+            <article><strong>WM 稳定，Actor 失效</strong><p>优先研究技能记忆、dream rehearsal 与 policy consolidation。</p></article>
+            <article><strong>WM 与 Actor 同时失效</strong><p>双目标处理有依据；需要分别保护预测与控制。</p></article>
+            <article><strong>WM 是主瓶颈</strong><p>集中研究代表 replay、条件 dynamics 与 control-aware model learning。</p></article>
+            <article><strong>统一 replay 已足够</strong><p>双记忆假设被否定；研究重点应转向存储压缩或更困难协议。</p></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="report-section conclusion-section" id="conclusion">
+        <div class="report-width">
+          <header class="section-header">
+            <span>9</span>
+            <div><p>Current conclusion</p><h2>当前结论</h2></div>
+          </header>
+          <ol class="conclusions">
+            <li>Dreamer 的世界模型预测目标与 Actor-Critic 控制目标必须在分析上区分，但不应未经实验就假设它们必须使用两套物理 buffer。</li>
+            <li>ARROW 的核心贡献是历史覆盖；它尚未提供组件级遗忘归因，也没有针对 Actor 技能保存设计专门目标。</li>
+            <li>本地单 seed pilot 已经否定了“ARROW 对所有任务都稳定”的直觉：Boxing/Frostbite 保持较好，CrazyClimber/Seaquest 明显更脆弱。</li>
+            <li>直接加入 MoE 的故事过于传统。MoE 只能是容量分配工具，真正的研究问题是按什么信号共享或隔离，以及是否保护最终 return。</li>
+            <li>最优先的工作不是设计复杂网络，而是完成旧/新 WM、Actor、Critic 的交叉干预，建立六个 Atari 上的遗忘结构。</li>
+            <li>只有诊断表明双目标确实存在不同故障，才能合理推出“双类记忆”“Actor rehearsal”或“value-aware conditional world model”。</li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="references" id="references">
+        <div class="report-width">
+          <h2>参考工作</h2>
+          <ol>
+            <li><a href="https://arxiv.org/abs/2603.11395">ARROW: Augmented Replay for Robust World Models.</a></li>
+            <li><a href="https://arxiv.org/html/2602.01270">Mixture-of-World Models: Scaling Multi-Task RL with Modular Latent Dynamics.</a></li>
+            <li><a href="https://papers.neurips.cc/paper_files/paper/2019/hash/fa7cdfad1a5aaf8370ebeda47a1ff1c3-Abstract.html">CLEAR: Experience Replay for Continual Learning.</a></li>
+            <li><a href="https://openreview.net/forum?id=91hfMEUukm">RECALL: Replay-enhanced Continual Reinforcement Learning.</a></li>
+            <li><a href="https://arxiv.org/abs/2607.19749">The World Model Remembers, the Actor Forgets.</a></li>
+            <li><a href="https://proceedings.mlr.press/v232/kessler23a.html">The Effectiveness of World Models for Continual Reinforcement Learning.</a></li>
+          </ol>
+        </div>
+      </section>
+    </main>
+
+    <footer><div class="report-width">Research note · claims marked as hypotheses until validated</div></footer>
+    <script src="baseline-results.js"></script>
+    <script src="script.js"></script>
+  </body>
+</html>
