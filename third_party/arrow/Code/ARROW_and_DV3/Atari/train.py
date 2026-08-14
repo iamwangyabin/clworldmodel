@@ -1,11 +1,12 @@
-import time
-from datetime import datetime
 import argparse
-from pathlib import Path
-from typing import Optional
+import hashlib
 import os
 import socket
+import time
 from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
 import numpy as np
 import torch
 from torch.optim import Adam
@@ -112,6 +113,102 @@ def _stage_elapsed(start: float, enabled: bool) -> float:
     return _stage_clock(True) - start
 
 
+def _task_boundary_metadata(config: Config, epoch: int) -> Optional[dict]:
+    if config.esc.env_schedule_type is not SequentialEnvironments:
+        return None
+    swap_sched = config.esc.kwargs.get("swap_sched")
+    if not isinstance(swap_sched, int) or swap_sched < 1:
+        raise ValueError("Sequential environment schedule requires positive swap_sched")
+
+    completed_epochs = epoch + 1
+    if completed_epochs % swap_sched != 0:
+        return None
+
+    boundary_index = completed_epochs // swap_sched
+    task_index = (boundary_index - 1) % len(config.esc.env_configs)
+    task = config.esc.env_configs[task_index]
+    return {
+        "boundary_index": boundary_index,
+        "task_index": task_index,
+        "task_name": task.name,
+        "task_reward_scale": task.rew_scale,
+    }
+
+
+def _cpu_state_dict(module: torch.nn.Module) -> dict[str, torch.Tensor]:
+    return {name: value.detach().cpu() for name, value in module.state_dict().items()}
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _save_analysis_snapshot(
+    snapshot_dir: Path,
+    *,
+    config: Config,
+    wm: WorldModel,
+    aco: ActorCriticOpt,
+    epoch: int,
+    world_model_updates: int,
+    total_env_steps: int,
+    reason: str,
+    task_metadata: Optional[dict] = None,
+) -> Path:
+    """Save portable weights for offline diagnosis, not resumable training state."""
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    if reason == "task_boundary":
+        if task_metadata is None:
+            raise ValueError("task-boundary snapshot requires task metadata")
+        filename = (
+            f"boundary_{task_metadata['boundary_index']:02d}_"
+            f"task_{task_metadata['task_index']:02d}_epoch_{epoch:04d}.pt"
+        )
+    elif reason == "final":
+        filename = f"final_epoch_{epoch:04d}.pt"
+    else:
+        raise ValueError(f"Unknown analysis snapshot reason: {reason}")
+
+    path = snapshot_dir / filename
+    if path.exists():
+        raise FileExistsError(f"Refusing to overwrite analysis snapshot: {path}")
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    payload = {
+        "schema_version": 1,
+        "artifact_kind": "analysis_snapshot",
+        "resumable": False,
+        "reason": reason,
+        "epoch": epoch,
+        "completed_epochs": epoch + 1,
+        "world_model_updates": world_model_updates,
+        "actor_critic_updates": (epoch + 1) * config.ac_train_steps,
+        "total_raw_environment_frames": total_env_steps,
+        "algorithm": config.algorithm,
+        "seed": config.seed,
+        "task": task_metadata,
+        "config": config.to_dict(),
+        "world_model_state_dict": _cpu_state_dict(wm),
+        "actor_critic_state_dict": _cpu_state_dict(aco.ac),
+    }
+    torch.save(payload, temporary_path)
+    os.replace(temporary_path, path)
+
+    digest = _sha256(path)
+    digest_path = path.with_suffix(path.suffix + ".sha256")
+    temporary_digest_path = digest_path.with_suffix(digest_path.suffix + ".tmp")
+    temporary_digest_path.write_text(f"{digest}  {path.name}\n", encoding="ascii")
+    os.replace(temporary_digest_path, digest_path)
+    print(
+        f"[analysis-snapshot] reason={reason} epoch={epoch} "
+        f"path={path} sha256={digest}"
+    )
+    return path
+
+
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
@@ -130,11 +227,30 @@ if __name__ == "__main__":
         action="store_true",
         help="Synchronize at stage boundaries and print per-epoch wall times.",
     )
-    save_nets = False
-    log_dir = None
-    log_images = False
-    
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        help="Explicit run directory for TensorBoard events and resolved config.",
+    )
+    parser.add_argument(
+        "--analysis-snapshot-dir",
+        type=Path,
+        help=(
+            "Save portable world-model and actor-critic weights at task boundaries "
+            "and at training end. These snapshots do not contain replay, optimizers, "
+            "or RNG state and are not resumable checkpoints."
+        ),
+    )
     args = parser.parse_args()
+
+    save_nets = False
+    log_dir = args.log_dir.resolve() if args.log_dir is not None else None
+    log_images = False
+    analysis_snapshot_dir = (
+        args.analysis_snapshot_dir.resolve()
+        if args.analysis_snapshot_dir is not None
+        else None
+    )
     torch.set_float32_matmul_precision("high" if args.tf32 else "highest")
     if args.config is not None:
         config = Config.from_file(Path(args.config))
@@ -180,8 +296,7 @@ if __name__ == "__main__":
     # OPTIONAL: Load from existing
     aco: Optional[ActorCriticOpt] = None
 
-    if not log_dir:
-
+    if log_dir is None:
         current_time = datetime.now().strftime("%b%d_%H-%M-%S")
         job_id = os.getenv("SLURM_JOB_ID")
         run_name = f"{current_time}_{socket.gethostname()}_{config.seed}_{job_id}"
@@ -207,6 +322,9 @@ if __name__ == "__main__":
         log_dir = log_root / run_name
         log_dir.mkdir(parents=True, exist_ok=True)
         print(f"[DEBUG] log_dir={log_dir}")
+    else:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[DEBUG] log_dir={log_dir} (explicit)")
 
 
     writer = SummaryWriter(log_dir=log_dir)
@@ -396,8 +514,35 @@ if __name__ == "__main__":
         if save_nets:
             torch.save(wm.state_dict(), log_dir / "save_wm.pt")
             torch.save(aco.ac.state_dict(), log_dir / "save_ac.pt")
-        
-        
+
+        if analysis_snapshot_dir is not None:
+            boundary_metadata = _task_boundary_metadata(config, epoch)
+            if boundary_metadata is not None:
+                _save_analysis_snapshot(
+                    analysis_snapshot_dir,
+                    config=config,
+                    wm=wm,
+                    aco=aco,
+                    epoch=epoch,
+                    world_model_updates=global_step,
+                    total_env_steps=total_env_steps,
+                    reason="task_boundary",
+                    task_metadata=boundary_metadata,
+                )
+                writer.flush()
+            if epoch == config.epochs - 1:
+                _save_analysis_snapshot(
+                    analysis_snapshot_dir,
+                    config=config,
+                    wm=wm,
+                    aco=aco,
+                    epoch=epoch,
+                    world_model_updates=global_step,
+                    total_env_steps=total_env_steps,
+                    reason="final",
+                )
+                writer.flush()
+
         envs.step()
         torch.cuda.empty_cache()
         if args.profile_stages:
@@ -414,5 +559,5 @@ if __name__ == "__main__":
                 f"overhead={max(0.0, epoch_seconds - measured):.3f}s "
                 f"total={epoch_seconds:.3f}s"
             )
+    writer.close()
     _print_cuda_memory("training_end")
-

@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from git_provenance import git_state, require_synced_training_git_state
+
 ROOT = Path(__file__).resolve().parents[1]
 ARROW_ROOT = ROOT / "third_party" / "arrow"
 UPSTREAM_COMMIT = "cb05e7d97ed83c3cf6e528960db0da6868e29232"
@@ -112,6 +114,9 @@ def _check_cuda(python: Path, env: dict[str, str]) -> None:
 
 def main() -> int:
     args = _parser().parse_args()
+    project_git = (
+        git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
+    )
     python = args.python.resolve()
     config_path = _config_path(args.curriculum, args.seed)
     config = _verify_primary_config(config_path, args.curriculum, args.seed)
@@ -135,6 +140,7 @@ def main() -> int:
     launch = {
         "method": "ARROW-50",
         "runtime": "vendored-optimized",
+        "project_git": project_git,
         "profile_stages": args.profile_stages,
         "optimizations": [
             "distribution-free-categorical-kernels",

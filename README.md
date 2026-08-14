@@ -11,6 +11,7 @@ The repository is intentionally at the baseline stage. It currently contains:
 
 - the maintained ARROW source based on a pinned upstream commit;
 - the canonical ARROW-50 Atari launcher;
+- the matched DreamerV3/FIFO Atari control launcher;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -61,5 +62,26 @@ python scripts/run_arrow_ar50_atari.py --seed 0 --dry-run
 
 The launcher pins `--arrow-replay-ratio 50-50`, validates the official replay
 and curriculum parameters, and enables the documented optimized runtime.
+
+## Matched control: DreamerV3/FIFO
+
+The DreamerV3 control uses one 1,024-trajectory FIFO buffer, matching
+ARROW-50's total trajectory and raw observation-byte capacity. Its canonical
+launcher also preserves portable world-model and actor-critic analysis
+snapshots at every task boundary and at training end:
+
+```bash
+python scripts/run_dv3_fifo_atari.py --seed 0 --dry-run
+python scripts/run_dv3_fifo_atari.py \
+  --seed 0 \
+  --output-dir /persistent/path/dv3_fifo_original_s0_analysis
+```
+
+The snapshots support offline checkpoint differencing but are not resumable
+training checkpoints because replay, optimizers, RNG, and schedule state are
+not included. See `docs/protocols/dv3_fifo_atari.md` for the frozen protocol
+and artifact semantics. The component-level research questions, diagnostic-set
+rules, interpretation matrix, and planned result tables are defined in
+`docs/protocols/component_forgetting_audit.md`.
 
 Project-wide research and engineering constraints are defined in `AGENTS.md`.

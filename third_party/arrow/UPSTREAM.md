@@ -29,6 +29,11 @@ documented here, covered by focused parity tests, and followed by regenerating
    optimizations by default.
 5. Remove the unused AutoROM dependency because the pinned `ale-py` wheel
    already supplies the required ROMs.
+6. Add optional explicit run and analysis-snapshot directories to the Atari
+   trainer. When requested, it atomically saves CPU-portable world-model and
+   actor-critic weights with checksums at sequential task boundaries and at
+   training end. These artifacts are labeled non-resumable and the default
+   upstream execution remains unchanged when the options are omitted.
 
 ## Known issues at import
 

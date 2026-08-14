@@ -199,6 +199,17 @@ new environment. Environment-specific behavior belongs in adapters and config.
 
 ## Reproducibility contract
 
+### Git launch provenance
+
+Every command that starts environment interaction or gradient updates, including
+smoke, pilot, ablation, and official training, must run from a clean commit
+that has already been pushed to its configured GitHub upstream. Before launch,
+fetch the upstream, verify the branch is neither ahead nor behind, and record
+the full commit hash and upstream relation in the run manifest. A dry-run that
+does not interact with the environment or update parameters is exempt. Never
+launch training from unstaged, uncommitted, or local-only code; a later commit
+must not be used to retroactively identify an earlier run.
+
 Every non-smoke run must save a self-contained run manifest containing:
 
 - project git commit and dirty-worktree status;
