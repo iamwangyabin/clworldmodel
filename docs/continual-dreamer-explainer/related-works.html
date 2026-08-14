@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="持续世界模型强化学习的相关工作梳理与项目定位。" />
-    <title>持续 Dreamer：Related Work</title>
+    <meta name="description" content="持续世界模型强化学习的问题定义、Continual-Dreamer 与 ARROW 基线梳理。" />
+    <title>持续 Dreamer：问题与基线</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -25,295 +25,188 @@
     <main>
       <section class="title-page related-title" id="title">
         <div class="report-width">
-          <p class="venue">Continual Model-Based Reinforcement Learning · Related Work</p>
-          <h1>相关工作：<br />我们究竟站在哪里</h1>
+          <p class="venue">Continual Model-Based Reinforcement Learning · Problem and Baselines</p>
+          <h1>持续世界模型：<br />问题、方法与基线</h1>
           <p class="subtitle">
-            不是罗列论文，而是逐条检查已有路线已经保护了什么、默认了什么、以及它们为何还不能回答
-            Dreamer 在持续学习里究竟忘了哪个模块。
+            先不谈 MoE、冻结 Encoder 或 Actor rehearsal。这里先把同一个问题说清楚：在固定资源、没有 task ID 的顺序任务中，
+            Dreamer 为什么会在旧任务掉分；Continual-Dreamer 和 ARROW 分别实际改变了什么。
           </p>
           <div class="title-meta">
-            <span>范围：continual / multi-task MBRL</span>
-            <span>核心对象：World Model + Actor-Critic</span>
-            <span>协议：task-agnostic 为主</span>
-            <span>结论：当前问题仍未被闭合</span>
+            <span>协议：顺序、task-agnostic</span>
+            <span>资源：固定 replay / updates</span>
+            <span>对象：WM + Actor-Critic</span>
+            <span>目标：旧任务回报保持</span>
           </div>
           <div class="abstract">
-            <h2>阅读结论</h2>
+            <h2>一句话</h2>
             <p>
-              现有工作大致分成五类：保留真实经验、维护预测模型、直接保护行为、用条件结构处理多任务冲突、
-              以及把视觉表征从在线强化学习中剥离。每类都解决了真实问题，但它们通常把“性能下降”整体当作一个问题。
-              对 Dreamer-style agent 而言，世界模型、价值估计与 Actor 的训练信号不同，不能因为都在 replay 上训练就默认它们
-              遗忘相同，也不能因为某一论文中 world model 稳定就把它当成普遍定律。
+              Continual-Dreamer 和 ARROW 都先回答“有限 memory 里如何让旧数据继续被看见”；它们并没有直接证明
+              世界模型、Critic、Actor 中究竟是谁造成旧回报下降。这正是我们后续方法之前必须先做的诊断。
             </p>
           </div>
         </div>
       </section>
 
-      <section class="report-section" id="map">
+      <section class="report-section" id="problem-definition">
         <div class="report-width">
           <header class="section-header">
-            <span>R1</span>
-            <div><p>Landscape</p><h2>先把问题空间分清楚</h2></div>
+            <span>01</span>
+            <div><p>Problem</p><h2>我们到底在解什么问题</h2></div>
           </header>
           <p>
-            下面这张表不是 leaderboard。它的目的只有一个：避免把不同设定下的成功方案，误当作同一个问题的答案。
-            特别是“并行多任务训练”“顺序持续训练”“有 task ID 的条件控制”和“完全 task-agnostic”不能混在一起比较。
+            给定按顺序到来的任务 <span class="math-inline">M<sub>1</sub>, ..., M<sub>T</sub></span>，agent 在任务
+            <span class="math-inline">t</span> 期间只能和当前环境交互。任务切换后，旧环境不可再采样；模型和策略也不接收 task ID。
+            它只能保留一个总容量固定的 replay buffer，并用其中的数据持续更新同一套 Dreamer 参数。
           </p>
-          <table class="related-map-table">
-            <thead>
-              <tr><th>路线</th><th>代表工作</th><th>主要保护对象</th><th>关键假设</th><th>尚未回答的问题</th></tr>
-            </thead>
+          <div class="equation compact-equation">
+            <span class="eq-body">D<sub>t</sub> &rarr; B<sub>t</sub> = U(B<sub>t-1</sub>, D<sub>t</sub>), &nbsp; B<sub>t</sub> &rarr; (&theta;<sub>WM</sub>, &theta;<sub>Actor</sub>, &theta;<sub>Critic</sub>), &nbsp; maximize (1/T)&Sigma;<sub>i=1</sub><sup>T</sup> J<sub>i</sub>(&theta;<sub>T</sub>)</span>
+          </div>
+          <p>
+            公平比较至少固定四件事：每任务交互步数、世界模型和 Actor-Critic 的更新次数、总 replay 容量及实际字节数、评估日程。
+            不然“更不忘”可能只是存得更多、训练得更久，或者用了 task 标签。
+          </p>
+          <table>
+            <thead><tr><th>层次</th><th>真正的问题</th><th>仅看最终旧任务 return 能否回答</th></tr></thead>
             <tbody>
-              <tr><td>真实 replay</td><td>ER / CLEAR / RECALL / ARROW</td><td>旧轨迹在训练分布中的可见性</td><td>看见旧数据足以恢复全部模块</td><td>世界模型、Critic、Actor 是否同样从 replay 获益？</td></tr>
-              <tr><td>持续世界模型</td><td>Continual-Dreamer / online model planning</td><td>动力学、探索或规划模型</td><td>模型学习与控制学习可被整体处理</td><td>预测保持是否等于控制技能保持？</td></tr>
-              <tr><td>Actor rehearsal</td><td>CLEAR / dream rehearsal</td><td>旧状态上的动作分布或成功行为</td><td>可获得可信的行为 target</td><td>哪些状态值得模仿？模型何时足以生成有效 rehearsal？</td></tr>
-              <tr><td>多任务模块化</td><td>CARE / Soft Modules / PaCo / MoW</td><td>共享与专用参数的分配</td><td>可用任务标签、上下文或共同训练稳定路由</td><td>顺序、task-agnostic 条件下如何避免路由本身遗忘？</td></tr>
-              <tr><td>预训练视觉</td><td>DINO-WM / MuDreamer</td><td>视觉表征或预测目标</td><td>视觉可与控制/动力学解耦</td><td>固定特征在 continual Atari 动力学与 reward 上是否足够？</td></tr>
+              <tr><td>数据层</td><td>固定 memory 下，哪些旧轨迹还应留在训练分布里？</td><td>不能；它只告诉我们结果，不告诉我们哪类轨迹缺失。</td></tr>
+              <tr><td>模型层</td><td>旧动力学、reward、continuation 或表征是否漂移？</td><td>不能；旧策略失效不等于世界模型一定忘了。</td></tr>
+              <tr><td>控制层</td><td>在仍可用的 latent model 上，Critic 或 Actor 是否已不能恢复旧行为？</td><td>不能；同一掉分可由 Actor、Critic 或 imagined-state 分布改变造成。</td></tr>
             </tbody>
           </table>
           <aside class="caution">
-            <strong>本项目的判断标准。</strong>
-            任何候选方法都必须同时说明它保护的是 <em>data coverage</em>、<em>predictive model</em>、
-            <em>value target</em> 还是 <em>policy behavior</em>；若只报告最终平均分数，就不足以支撑模块层面的叙事。
+            <strong>研究边界。</strong>
+            回放策略首先改变的是训练数据分布；它不是对任何一个网络模块的直接保护。因而“回放有效”与“世界模型不忘”是两句话，不能混为一句。
           </aside>
         </div>
       </section>
 
-      <section class="report-section shaded" id="dreamer-family">
+      <section class="report-section shaded" id="continual-dreamer">
         <div class="report-width">
           <header class="section-header">
-            <span>R2</span>
-            <div><p>Dreamer family</p><h2>Dreamer 给了什么，也留下了什么</h2></div>
-          </header>
-          <h3>R2.1 DreamerV3：世界模型不是策略本身</h3>
-          <p>
-            DreamerV3 将真实经验压缩为 latent state，学习 reward 与 continuation，并在 imagined rollout 中训练 Actor-Critic。
-            它证明了统一世界模型可在大量域中使用固定超参数，但它研究的是跨域鲁棒性，不是顺序任务下旧技能的保持。
-            因而它不能回答：一个训练良好的 RSSM 发生轻微漂移时，Actor 是否还能使用它完成旧游戏。
-            <a href="https://arxiv.org/abs/2301.04104">[DreamerV3]</a>
-          </p>
-          <h3>R2.2 Continual-Dreamer：选择 replay 的关键基线</h3>
-          <p>
-            Continual-Dreamer 系统比较了多种 selective experience replay，并明确讨论了 retention、transfer 和 exploration。
-            它是“世界模型天然适合 continual learning”这条路线最重要的早期证据。可它仍主要以任务回报判断方案，
-            没有将同一次性能下降拆成 WM、Critic 与 Actor 的可干预贡献。因此它告诉我们“什么 replay 在一些基准上有效”，
-            却没有告诉我们“为什么本次掉分，以及应该保护谁”。<a href="https://proceedings.mlr.press/v232/kessler23a.html">[Continual-Dreamer]</a>
-          </p>
-          <h3>R2.3 Online world-model planning：理论上的“不忘”不等于 Dreamer 不忘</h3>
-          <p>
-            Online world-model planning 通过在线学习与规划器给出特定假设下的 regret/forgetting 保证。这类结论针对浅层、
-            显式规划的模型与其协议；它不自动转移到高维像素、神经 RSSM、想象策略梯度或固定 replay 的 Dreamer。
-            所以它是重要的理论参照，而不是对“Dreamer 世界模型本质不会忘”的证明。<a href="https://proceedings.mlr.press/v267/liu25p.html">[Online World Models]</a>
-          </p>
-          <div class="related-verdict">
-            <strong>对本项目的含义：</strong>Continual-Dreamer 是 replay 设计上的强先例；但“world model 有 replay”与
-            “old policy 能控制”之间仍隔着 Critic、imagination distribution 与 Actor optimization 三层机制。
-          </div>
-        </div>
-      </section>
-
-      <section class="report-section" id="replay">
-        <div class="report-width">
-          <header class="section-header">
-            <span>R3</span>
-            <div><p>Replay and memory</p><h2>经验回放解决覆盖，不自动解决归因</h2></div>
-          </header>
-          <h3>R3.1 从监督持续学习到持续强化学习</h3>
-          <p>
-            在分类持续学习中，reservoir sampling、herding、coreset 和优先级方法回答的是：在固定 memory 下，
-            哪些样本最能近似历史数据分布或决策边界。迁移到 RL 后，样本不再是静态 <em>(x, y)</em>；一段轨迹同时承担
-            视觉、动力学、reward、termination、value bootstrap 与行为学习的监督。一个“代表样本”对 Encoder 可能足够，
-            对稀有决策状态却可能完全不够。
-          </p>
-          <h3>R3.2 CLEAR 与 RECALL：直接回放行为，但有自己的前提</h3>
-          <p>
-            CLEAR 将 off-policy replay 与 behavioral cloning 结合，明确把旧策略的动作分布作为巩固目标；RECALL 则探索
-            生成式 replay 增强持续 RL。两者提醒我们，旧技能不该只靠重新做 RL “碰巧学回来”。但它们多在 model-free
-            设定讨论，不能回答 dream state 是否可信、Actor 应在真实轨迹还是想象轨迹上巩固，以及 value target 如何处理。
-            <a href="https://papers.neurips.cc/paper_files/paper/2019/hash/fa7cdfad1a5aaf8370ebeda47a1ff1c3-Abstract.html">[CLEAR]</a>
-            <a href="https://openreview.net/forum?id=91hfMEUukm">[RECALL]</a>
-          </p>
-          <h3>R3.3 ARROW：双 buffer 的贡献与边界</h3>
-          <p>
-            ARROW 将固定轨迹预算分为 FIFO 与长期分布匹配记忆，在不显式给模型 task ID 的前提下，同时维持当前适应与历史覆盖。
-            它的创新在 <strong>retention distribution</strong>，而不是在 Dreamer 模块的更新规则。尤其在我们自己的 6-task Atari
-            pilot 中，Frostbite/Boxing 的保持较好，CrazyClimber/Seaquest 更脆弱，说明同一个 buffer 机制对不同任务并不等价。
-            这不能证明 ARROW 失败，但足够说明“有历史轨迹”不是完整诊断。<a href="https://arxiv.org/abs/2603.11395">[ARROW]</a>
-          </p>
-          <table>
-            <thead><tr><th>记忆策略</th><th>近似保持什么</th><th>在 Dreamer 里缺少什么</th><th>我们应做的匹配控制</th></tr></thead>
-            <tbody>
-              <tr><td>FIFO</td><td>当前分布密度</td><td>历史覆盖随任务数稀释</td><td>固定总 trajectory / byte 预算</td></tr>
-              <tr><td>Reservoir / LTDM</td><td>历史流的无偏覆盖</td><td>不识别控制关键状态</td><td>同容量、同采样比的随机控制</td></tr>
-              <tr><td>Herding / coreset</td><td>表示空间代表性</td><td>表征会漂移；代表性未必是 reward-relevant</td><td>冻结 encoder 与在线 encoder 两种协议</td></tr>
-              <tr><td>Priority / value-aware</td><td>高 TD error 或高价值状态</td><td>Critic 非平稳会让选择偏置自我强化</td><td>匹配 sample count 与更新次数</td></tr>
-              <tr><td>行为克隆 target</td><td>旧策略技能</td><td>保留旧行为不代表它仍最优</td><td>真实回放与 graded dream 分开消融</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="report-section shaded" id="actor">
-        <div class="report-width">
-          <header class="section-header">
-            <span>R4</span>
-            <div><p>Actor, critic, and dreams</p><h2>“Actor 忘了”是强假设，不是默认事实</h2></div>
-          </header>
-          <h3>R4.1 Dream rehearsal 的关键发现</h3>
-          <p>
-            <em>The World Model Remembers, the Actor Forgets</em> 在它的 never-clear replay 协议下做了组件级 probe：
-            旧任务的 reward discrimination、value 与 termination 可以保持，而 Actor 行为坍塌；在相同冻结 world model
-            上继续 imagined RL 不能恢复技能，但从经过评分的 dreams 做自模仿可以。这是目前与我们问题最直接的工作，
-            因为它不是只报告 return，而是干预模块。<a href="https://arxiv.org/abs/2607.19749">[Dream Rehearsal]</a>
-          </p>
-          <h3>R4.2 为什么不能直接把它当作结论</h3>
-          <p>
-            该结论依赖其环境、模型、replay 语义、评估与 grading 机制。ARROW 的 finite FIFO/LTDM、不同 Atari 动力学、
-            像素重建、reward scale 和训练日程都可能改变瓶颈。即使世界模型在一些指标上稳定，也不代表长 horizon latent rollout
-            对旧策略没有 control-relevant error。反过来，Actor 看似忘记也可能来自 Critic 校准漂移或 imagined state distribution
-            改变。它给了我们一个<strong>可检验的竞争假设</strong>，不是要我们跳过诊断直接做 imitation。
-          </p>
-          <h3>R4.3 本项目的必要复现实验</h3>
-          <ol class="research-list">
-            <li>在每个任务边界保存 WM、Actor、Critic 和 replay provenance。</li>
-            <li>在旧真实环境上测新旧组件交叉组合，而非只看最终单个 agent。</li>
-            <li>固定旧 Actor，替换新/旧 WM；固定 WM，替换新/旧 Actor；再单独替换 Critic。</li>
-            <li>比较 real-episode cloning、ungraded dream、graded dream 和无 Actor 保护，所有方法匹配字节、updates 和参数。</li>
-          </ol>
-          <div class="related-verdict">
-            <strong>对本项目的含义：</strong>若 ARROW 上也出现“WM 稳定、Actor 失效”，Actor rehearsal 才是主线；若 RSSM/reward/continue
-            或 critic 已先坏，直接蒸馏 Actor 只能是补丁。
-          </div>
-        </div>
-      </section>
-
-      <section class="report-section" id="multitask">
-        <div class="report-width">
-          <header class="section-header">
-            <span>R5</span>
-            <div><p>Multi-task and modularity</p><h2>MoE 不是创新点，它只是一个容量工具</h2></div>
+            <span>02</span>
+            <div><p>Continual-Dreamer</p><h2>先证明 world model 是持续 RL 的强基线</h2></div>
           </header>
           <p>
-            多任务 RL 已经长期处理负迁移、梯度冲突与容量共享。PCGrad 在梯度层面减少冲突；Soft Modularization、CARE 与 PaCo
-            通过条件模块或参数组合决定共享方式；MoW 把这一思想扩展到视觉 world model，并使用任务条件专家与梯度聚类。
-            这些工作说明“共享骨干 + 专用容量”是合理工程方向，但它们的大多数训练设定是并行/联合多任务，或拥有任务 metadata。
+            Continual-Dreamer 建立在 <strong>DreamerV2</strong> 上。DreamerV2 用 replay 中的真实轨迹训练 RSSM world model，
+            再在 latent imagination 中训练 Actor 和 Critic。该工作把 replay 跨任务保留，并系统比较 buffer 的写入和采样策略；
+            最终把 <strong>reservoir sampling 的 DreamerV2</strong> 称为 Continual-Dreamer。带 world-model uncertainty exploration 的版本称为
+            Continual-Dreamer + Plan2Explore。整个方法不向网络输入 task ID。
+            <a href="https://proceedings.mlr.press/v232/kessler23a.html">[论文]</a>
           </p>
           <table class="related-map-table">
-            <thead><tr><th>路线</th><th>解决的真实难点</th><th>与持续 Dreamer 的错位</th><th>对我们的约束</th></tr></thead>
+            <thead><tr><th>项目</th><th>Continual-Dreamer 的选择</th><th>它回答了什么</th><th>它没有回答什么</th></tr></thead>
             <tbody>
-              <tr><td>PCGrad</td><td>并行任务的梯度冲突</td><td>顺序任务下旧梯度只来自有限 replay</td><td>不能以“减少冲突”替代 retention 测试</td></tr>
-              <tr><td>CARE</td><td>用 context 选择状态表征，缓解负迁移</td><td>默认可用任务相关 metadata</td><td>task ID 只能作为 oracle 上界，不可作为最终输入</td></tr>
-              <tr><td>Soft Modules / PaCo</td><td>模块路由或策略参数组合</td><td>主要保护 policy capacity，不定位 world model / critic</td><td>需匹配参数、激活 FLOPs 与任务标签信息</td></tr>
-              <tr><td>MoW</td><td>视觉压缩与动力学模块化</td><td>联合 26 task，不是顺序有限回放遗忘协议</td><td>先做 shared RSSM 与 oracle/context routing 上界</td></tr>
+              <tr><td>骨干</td><td>DreamerV2；WM 与 Actor-Critic 仍端到端更新</td><td>像素 world model 能在 task-agnostic CRL 中成为有效 agent</td><td>掉分时哪个模块先失效</td></tr>
+              <tr><td>记忆</td><td>跨任务 persistent replay；主配置用 reservoir sampling 保持历史覆盖</td><td>FIFO 会逐渐挤掉早期任务；reservoir 可缓解 forgetting</td><td>哪些保存的轨迹对控制最关键</td></tr>
+              <tr><td>探索</td><td>可加 Plan2Explore 的 intrinsic reward</td><td>世界模型的 uncertainty 可帮助新任务探索</td><td>探索改善是否也等于旧技能保持</td></tr>
+              <tr><td>环境</td><td>MiniGrid 与 MiniHack 的顺序图像任务</td><td>在这些稀疏奖励任务上可兼顾学习与保留</td><td>结论是否迁移到 Atari / DreamerV3 / 不同预算</td></tr>
             </tbody>
           </table>
-          <p>
-            因而“给 RSSM 加 MoE”本身没有足够新意。能成立的研究问题是：在没有 task ID、历史数据有限的顺序训练中，
-            <strong>路由依据能否由 control-relevant prediction error 或 value consequence 给出</strong>，并且这种路由是否真的
-            减少了被组件干预确认的遗忘，而不是仅把任务分类到不同专家。
-          </p>
-          <p class="related-links">
-            代表来源：<a href="https://proceedings.mlr.press/v139/sodhani21a.html">[CARE]</a>
-            <a href="https://openreview.net/forum?id=LYXTPNWJLr">[PaCo]</a>
-            <a href="https://arxiv.org/abs/2602.01270">[MoW]</a>
-          </p>
-        </div>
-      </section>
-
-      <section class="report-section shaded" id="representation">
-        <div class="report-width">
-          <header class="section-header">
-            <span>R6</span>
-            <div><p>Representation and prediction target</p><h2>视觉编码器可不可以退出持续学习？</h2></div>
-          </header>
-          <h3>R6.1 这不是细枝末节，而是协议分叉</h3>
-          <p>
-            DreamerV3/ARROW 从 64×64 像素训练 Encoder 和 decoder，并使用重建项。DINO-WM 则在预训练视觉特征上学习动作条件预测，
-            不重建像素；MuDreamer 进一步表明 Dreamer-style world model 可用价值和动作等预测目标避免像素重建。它们共同动摇了一个默认：
-            为了学控制相关 dynamics，必须持续更新像素 encoder/decoder。<a href="https://arxiv.org/abs/2411.04983">[DINO-WM]</a>
-            <a href="https://arxiv.org/abs/2405.15083">[MuDreamer]</a>
-          </p>
-          <h3>R6.2 但不能偷换成“冻结 encoder 一定更好”</h3>
-          <p>
-            DINO-WM 的目标是预训练视觉特征上的规划，MuDreamer 的目标是鲁棒预测学习；两者都不等同于顺序 Atari 中的 Dreamer actor-critic。
-            固定 encoder 可能显著减少存储和稳定性压力，也可能丢掉游戏中 reward-critical 的细节。更重要的是，一旦我们冻结 encoder，
-            研究问题就从“端到端世界模型抗遗忘”变成“固定视觉表征上的持续动力学与控制”。这是合理、甚至更干净的协议，
-            但必须明确命名，并和端到端 ARROW 公平比较。
-          </p>
+          <h3>它比较的 baseline 是什么？</h3>
           <table>
-            <thead><tr><th>方案</th><th>应保留什么</th><th>省掉什么</th><th>新增风险</th></tr></thead>
+            <thead><tr><th>类别</th><th>论文中的对照</th><th>比较意图</th></tr></thead>
             <tbody>
-              <tr><td>端到端 Dreamer / ARROW</td><td>raw o,a,r,c</td><td>无额外预训练假设</td><td>视觉、解码、dynamics、Actor 同时漂移；replay 大</td></tr>
-              <tr><td>冻结 encoder，存 latent feature</td><td>feature,a,r,c，且须记 encoder version</td><td>不必存 raw pixel；不更新视觉 backbone</td><td>feature 对 reward/dynamics 可能不充分；公平性协议改变</td></tr>
-              <tr><td>预测而非重建</td><td>control-relevant target</td><td>像素 decoder 与多数重建损失</td><td>target 选择不当会遗漏可控变量</td></tr>
+              <tr><td>原始 world-model 基线</td><td>DreamerV2；DreamerV2 + Plan2Explore</td><td>先看不做 selective replay 的 Dreamer 是否能持续学习。</td></tr>
+              <tr><td>task-agnostic CRL 基线</td><td>CLEAR；IMPALA</td><td>与当时不依赖 task identity 的持续 RL 方法比较学习、forgetting 与 transfer。</td></tr>
+              <tr><td>replay 消融</td><td>FIFO、reservoir、coverage maximization、uncertainty / reward sampling、50:50 recent-history sampling、增大 buffer</td><td>分开检查 buffer 如何写入和 minibatch 如何组成。</td></tr>
+              <tr><td>task-aware 上界/对照</td><td>围绕上一任务最优参数的 L2 regularization</td><td>说明给 task-aware 正则并不自动优于 task-agnostic replay。</td></tr>
             </tbody>
           </table>
           <div class="related-verdict">
-            <strong>对本项目的含义：</strong>冻结视觉编码器不是“优化小技巧”，而是一个强且值得单独研究的假设。
-            它可以成为低存储协议的基线，但不可悄悄替换 ARROW 的端到端设定后仍称为公平比较。
+            <strong>该文的核心贡献：</strong>它不是提出一个新 RSSM，而是把 DreamerV2 + reservoir replay 确立为 task-agnostic continual RL 的强模型化基线。
+            它的结论是“这样配 replay 在其任务上更好”，不是“world model 因此本质不会忘”。
           </div>
         </div>
       </section>
 
-      <section class="report-section" id="position">
+      <section class="report-section" id="arrow-method">
         <div class="report-width">
           <header class="section-header">
-            <span>R7</span>
-            <div><p>Project position</p><h2>我们目前真正的研究空缺</h2></div>
+            <span>03</span>
+            <div><p>ARROW</p><h2>在同一 DreamerV3 上，只重做 replay 分配</h2></div>
           </header>
           <p>
-            目前不能声称“第一个解决持续世界模型遗忘”，也不能声称“第一个让 Actor 不忘”。已有工作已经分别研究了 replay、
-            selective memory、dream rehearsal、条件专家和无重建世界模型。我们可成立的空间更窄，也更扎实：
+            ARROW 的骨干是 <strong>DreamerV3</strong>。它不把 Actor-Critic 改成额外的持续学习算法，也不把 world model 换成 MoE；
+            直接贡献是 Augmented Replay：在同一总 memory 下并存一个短期 FIFO 和一个长期 LTDM buffer，并从两者抽取数据训练
+            DreamerV3 world model。Actor-Critic 仍通过 world model 的 imagined rollouts 学习。
+            <a href="https://openreview.net/pdf?id=3FK2tFwNwK">[论文]</a>
           </p>
-          <div class="position-statement">
-            <p>
-              <strong>在固定资源、task-agnostic、顺序任务的 Dreamer-style agent 中，先用可干预组件诊断确定旧回报下降的因果来源；
-              再只对被确认的目标设计 memory、rehearsal 或条件容量，并同时报告轨迹容量、实际字节、更新次数、参数与计算量。</strong>
-            </p>
+          <div class="equation compact-equation">
+            <span class="eq-body">B = B<sub>FIFO</sub> &cup; B<sub>LTDM</sub>, &nbsp; |B<sub>FIFO</sub>| + |B<sub>LTDM</sub>| = B<sub>total</sub></span>
           </div>
-          <table class="position-table">
-            <thead><tr><th>已有观察</th><th>不能直接推出</th><th>必须补的证据</th><th>可能的后续方法</th></tr></thead>
+          <table class="related-map-table">
+            <thead><tr><th>项目</th><th>ARROW-50 主设置</th><th>作用</th><th>不改变的部分</th></tr></thead>
             <tbody>
-              <tr><td>ARROW pilot 的保持率任务异质、非单调</td><td>某一个模块一定是瓶颈</td><td>WM / Actor / Critic 交叉置换</td><td>诊断优先，不先押 MoE</td></tr>
-              <tr><td>Dream rehearsal 在另一协议中发现 Actor 是瓶颈</td><td>ARROW 上 Actor 一定是瓶颈</td><td>同协议复现 probe；真实与 dream rehearsal 对照</td><td>graded dream 或 policy distillation</td></tr>
-              <tr><td>MoW 等多任务方法能用模块化扩容</td><td>条件专家本身就是创新</td><td>oracle/context/value-aware routing 消融</td><td>control-aware conditional RSSM</td></tr>
-              <tr><td>DINO-WM / MuDreamer 弱化像素重建必要性</td><td>冻结 encoder 对 Atari CL 无损</td><td>端到端 / frozen feature 同预算比较</td><td>feature replay 与持续 dynamics</td></tr>
+              <tr><td>FIFO</td><td>总 trajectory 容量的一半</td><td>高密度保留最近任务数据，保持适应新任务的 plasticity</td><td>Encoder、RSSM、reward/continue head 与 Actor-Critic 架构</td></tr>
+              <tr><td>LTDM</td><td>总 trajectory 容量的一半</td><td>以长期、近似均匀的历史覆盖避免早期任务完全消失</td><td>世界模型 loss 与 imagination actor-critic 训练范式</td></tr>
+              <tr><td>采样</td><td>FIFO / LTDM 各 0.5 的 minibatch 来源概率</td><td>同时保留 current adaptation 和 historical rehearsal</td><td>不输入 task ID；不直接给 Actor 加 behavior cloning target</td></tr>
+              <tr><td>评估</td><td>Atari 的无共享任务与 CoinRun variants 的共享结构任务</td><td>分别看 retention 与 possible transfer</td><td>不能从总 return 单独定位 WM、Critic 或 Actor</td></tr>
             </tbody>
           </table>
+          <h3>它比较的 baseline 是什么？</h3>
+          <table>
+            <thead><tr><th>对照</th><th>和 ARROW 的关系</th><th>应该怎样读</th></tr></thead>
+            <tbody>
+              <tr><td>DreamerV3 / FIFO</td><td>同一个 DreamerV3 backbone，只保留固定大小 FIFO replay</td><td>这是最关键的 matched model-based baseline：隔离“混合 replay 分配”本身的作用。</td></tr>
+              <tr><td>TES-SAC</td><td>模型无关 continual RL baseline</td><td>比较模型化路线与 model-free replay/controller 路线，不用于定位 Dreamer 内部模块。</td></tr>
+              <tr><td>AR25 / AR75</td><td>FIFO / LTDM 的 25:75、75:25 容量与采样比例消融</td><td>它们是 ARROW 的 memory-allocation ablation，不是独立外部 baseline。</td></tr>
+            </tbody>
+          </table>
+          <div class="related-verdict">
+            <strong>ARROW 的贡献：</strong>在不改变 DreamerV3 核心网络、不给 task ID、且匹配总 replay 容量的前提下，
+            用“近期 + 长期”的 replay 分布处理 stability-plasticity。它提供的是一个非常干净的 <em>data-distribution</em> baseline，
+            不是模块级遗忘机制的答案。
+          </div>
+        </div>
+      </section>
+
+      <section class="report-section shaded" id="comparison">
+        <div class="report-width">
+          <header class="section-header">
+            <span>04</span>
+            <div><p>Comparison</p><h2>两篇论文放在同一张图里</h2></div>
+          </header>
+          <table class="position-table">
+            <thead><tr><th>问题</th><th>Continual-Dreamer</th><th>ARROW</th><th>对我们意味着什么</th></tr></thead>
+            <tbody>
+              <tr><td>骨干</td><td>DreamerV2</td><td>DreamerV3</td><td>不能直接把两者的绝对分数、容量或结论横比。</td></tr>
+              <tr><td>主要改动</td><td>persistent replay 中的 reservoir / selective replay 选择</td><td>FIFO + LTDM 的固定预算混合 replay</td><td>两者的第一性动作都是控制历史数据在训练中的可见性。</td></tr>
+              <tr><td>最重要 baseline</td><td>DreamerV2 FIFO、CLEAR、IMPALA</td><td>DreamerV3 FIFO；另有 TES-SAC</td><td>本项目应先以 ARROW-50 vs DreamerV3/FIFO 做严格匹配控制。</td></tr>
+              <tr><td>已证实</td><td>reservoir replay 在其 MiniGrid/MiniHack 协议可减轻 forgetting</td><td>双 buffer replay 在其 Atari/CoinRun 协议改善 retention</td><td>replay distribution 很重要。</td></tr>
+              <tr><td>未证实</td><td>旧回报下降由哪个 Dreamer 模块导致</td><td>旧回报下降由哪个 DreamerV3 模块导致</td><td>必须做组件交叉置换，不能先把“Actor 忘了”写成事实。</td></tr>
+            </tbody>
+          </table>
+          <div class="position-statement">
+            <p>
+              <strong>因此我们的起点不是“再发明一种存样本”，而是：在 ARROW 的固定预算与 task-agnostic 协议下，
+              先区分历史数据覆盖不足、world-model 预测漂移、Critic 失准和 Actor 行为遗忘。只有诊断稳定后，
+              才决定该做 replay、rehearsal，还是条件化容量。</strong>
+            </p>
+          </div>
           <aside class="caution">
-            <strong>论文叙事的止损线。</strong>
-            如果组件诊断显示统一 ARROW replay 已能同时保持 WM、Critic 和 Actor，那么不应硬写“双类记忆”或 MoE；
-            应转向更小 memory、更多任务或更严格的 byte budget。反之，只有某类故障跨 seed 稳定出现，结构方法才有必要。
+            <strong>当前可检验假设。</strong>
+            若替换回旧 world model 就恢复旧任务，而新 Actor 不行，才有理由研究 Actor-specific rehearsal；若新 world model 已无法提供旧任务所需预测，
+            则应先改 memory / representation / dynamics，而不是直接上 MoE。
           </aside>
         </div>
       </section>
 
       <section class="references" id="references">
         <div class="report-width">
-          <h2>核心参考文献</h2>
-          <p class="references-intro">以下工作按上文的论证作用排列。它们是项目设计的直接比较对象，不是装饰性书目。</p>
+          <h2>核心来源</h2>
+          <p class="references-intro">只保留定义问题与解释两条 baseline 路线所必需的来源。</p>
           <ol class="expanded-references">
-            <li>Hafner et al. <a href="https://arxiv.org/abs/2301.04104">Mastering Diverse Domains through World Models (DreamerV3)</a>, 2023.</li>
             <li>Kessler et al. <a href="https://proceedings.mlr.press/v232/kessler23a.html">The Effectiveness of World Models for Continual Reinforcement Learning (Continual-Dreamer)</a>, 2023.</li>
-            <li>Alyahya et al. <a href="https://arxiv.org/abs/2603.11395">ARROW: Augmented Replay for Robust World Models</a>, 2026.</li>
-            <li>Nijjer. <a href="https://arxiv.org/abs/2607.19749">The World Model Remembers, the Actor Forgets: Dream Rehearsal for Continual Model-Based RL</a>, 2026.</li>
-            <li>Liu et al. <a href="https://proceedings.mlr.press/v267/liu25p.html">Continual Reinforcement Learning by Planning with Online World Models</a>, 2025.</li>
+            <li>Alyahya et al. <a href="https://openreview.net/pdf?id=3FK2tFwNwK">ARROW: Augmented Replay for Robust World Models</a>, 2026.</li>
+            <li>Hafner et al. <a href="https://arxiv.org/abs/2010.02193">Mastering Atari with Discrete World Models (DreamerV2)</a>, 2020.</li>
+            <li>Hafner et al. <a href="https://arxiv.org/abs/2301.04104">Mastering Diverse Domains through World Models (DreamerV3)</a>, 2023.</li>
             <li>Rolnick et al. <a href="https://papers.neurips.cc/paper_files/paper/2019/hash/fa7cdfad1a5aaf8370ebeda47a1ff1c3-Abstract.html">Experience Replay for Continual Learning (CLEAR)</a>, 2019.</li>
-            <li>Riemer et al. <a href="https://openreview.net/forum?id=91hfMEUukm">RECALL: Replay-enhanced Continual Reinforcement Learning</a>, 2023.</li>
-            <li>Caccia et al. <a href="https://proceedings.mlr.press/v232/caccia23a.html">Task-Agnostic Continual Reinforcement Learning</a>, 2023.</li>
-            <li>Kaplanis et al. <a href="https://proceedings.mlr.press/v80/kaplanis18a.html">Continual Reinforcement Learning with Complex Synapses</a>, 2018.</li>
-            <li>Sodhani et al. <a href="https://proceedings.mlr.press/v139/sodhani21a.html">Multi-Task Reinforcement Learning with Context-Based Representations (CARE)</a>, 2021.</li>
-            <li>Sun et al. <a href="https://openreview.net/forum?id=LYXTPNWJLr">PaCo: Parameter-Compositional Multi-Task Reinforcement Learning</a>, 2022.</li>
-            <li>Zhang et al. <a href="https://arxiv.org/abs/2602.01270">Mixture-of-World Models: Scaling Multi-Task RL with Modular Latent Dynamics</a>, 2026.</li>
-            <li>Zhou et al. <a href="https://arxiv.org/abs/2411.04983">DINO-WM: World Models on Pre-trained Visual Features Enable Zero-shot Planning</a>, 2024.</li>
-            <li>Burchi and Timofte. <a href="https://arxiv.org/abs/2405.15083">MuDreamer: Learning Predictive World Models without Reconstruction</a>, 2024.</li>
-            <li>Kauvar et al. <a href="https://proceedings.mlr.press/v202/kauvar23a.html">Curious Replay for Model-based Adaptation</a>, 2023.</li>
           </ol>
         </div>
       </section>
     </main>
 
-    <footer><div class="report-width">Related Work · claims are tied to protocols, not paper titles</div></footer>
+    <footer><div class="report-width">Related Work · define the protocol before proposing the mechanism</div></footer>
     <script src="script.js"></script>
   </body>
 </html>
