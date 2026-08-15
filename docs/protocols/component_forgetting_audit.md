@@ -29,7 +29,7 @@
 | Actor/critic/representation evaluator | 已完成 | 使用同一 observation history；actor KL/agreement、anchored critic MAE、linear CKA |
 | Versioned report generator | 已完成 | 保存 raw per-chunk metrics、JSON summary 和 Markdown report |
 | Paired conclusion-data reporter | 已完成 | `scripts/summarize_component_audit.py`；用 episode-cluster paired bootstrap 对比 `$C_i$` 与 C6 |
-| Frozen parameter-swap audit | 已实现，待运行 | `scripts/component_swap_audit.py`；不重训，以 C6/`$C_i$` component restoration 定位 co-adaptation |
+| Frozen parameter-swap audit | 已完成 | 5 个旧任务、10 个 C6/`$C_i$` restoration 条件；不重训，定位 co-adaptation |
 
 Analysis snapshot 保存 world model 与 actor-critic 权重，但不包含 replay、
 optimizer、RNG 或 environment-schedule state，因此不可声称为等价的可恢复训练
