@@ -86,6 +86,12 @@ clustered uncertainty interval.  Full raw per-chunk arrays, input checksums,
 script hash, snapshot hashes, command line, and resolved metric definitions
 must accompany every report.
 
+A chunk whose old encoder trace has zero centered temporal feature energy has
+no feature geometry for CKA or Procrustes to compare. Those chunks are excluded
+from both encoder-geometry summaries for every later checkpoint of that old
+task, and the per-row eligible/excluded counts are retained. This avoids
+mistaking a mathematically undefined CKA for zero retention.
+
 ## What the audit can and cannot establish
 
 The audit estimates *where and how strongly module outputs drift* over a

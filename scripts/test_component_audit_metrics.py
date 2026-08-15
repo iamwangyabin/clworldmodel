@@ -31,6 +31,10 @@ class ComponentAuditMetricTests(unittest.TestCase):
         values["encoder.procrustes_residual"] = np.asarray([0.0, 5e-8])
         _assert_baseline_invariance(values)
 
+        values["encoder.linear_cka"] = np.asarray([1.0, np.nan])
+        values["encoder.procrustes_residual"] = np.asarray([0.0, np.nan])
+        _assert_baseline_invariance(values)
+
         values["encoder.procrustes_residual"] = np.asarray([0.0, 1e-4])
         with self.assertRaises(RuntimeError):
             _assert_baseline_invariance(values)

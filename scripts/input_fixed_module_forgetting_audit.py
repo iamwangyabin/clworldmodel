@@ -65,13 +65,13 @@ METRICS = (
         "encoder.linear_cka",
         "encoder",
         "higher_is_better",
-        "Linear CKA between paired image-embedder outputs on the same old observations.",
+        "Linear CKA between paired image-embedder outputs on the same old observations; chunks with no old-feature variation are excluded.",
     ),
     MetricSpec(
         "encoder.procrustes_residual",
         "encoder",
         "lower_is_better",
-        "Centered feature residual after best global orthogonal alignment.",
+        "Centered feature residual after best global orthogonal alignment; chunks with no old-feature variation are excluded.",
     ),
     MetricSpec(
         "posterior.symmetric_kl",
@@ -192,6 +192,25 @@ def _feature_chunk_metrics(reference: Any, comparison: Any, *, start: int) -> di
     cka_values = []
     procrustes_values = []
     for reference_chunk, comparison_chunk in zip(reference_chunks, comparison_chunks):
+        reference_centered = reference_chunk - reference_chunk.mean(axis=0, keepdims=True)
+        comparison_centered = comparison_chunk - comparison_chunk.mean(axis=0, keepdims=True)
+        reference_energy = float(np.square(reference_centered).sum())
+        comparison_energy = float(np.square(comparison_centered).sum())
+        if reference_energy <= np.finfo(np.float64).eps:
+            # A static old feature trace has no temporal geometry.  Do not
+            # silently turn its undefined similarity into a zero-retention
+            # score; summary code excludes this same fixed old chunk for every
+            # later checkpoint.
+            cka_values.append(float("nan"))
+            procrustes_values.append(float("nan"))
+            continue
+        if comparison_energy <= np.finfo(np.float64).eps:
+            # The old trace varies but the later encoder collapsed it.  This is
+            # a finite, maximally unaligned comparison rather than an undefined
+            # old-task coordinate system.
+            cka_values.append(0.0)
+            procrustes_values.append(1.0)
+            continue
         cka_values.append(linear_cka(reference_chunk, comparison_chunk))
         procrustes_values.append(orthogonal_procrustes_residual(reference_chunk, comparison_chunk))
     return {
@@ -396,8 +415,13 @@ def _validate_metric_bundle(values: Mapping[str, np.ndarray], expected_chunks: i
         extra = sorted(set(values) - set(METRIC_BY_NAME))
         raise ValueError(f"Unexpected metric bundle; missing={missing}, extra={extra}")
     for metric, array in values.items():
-        if array.shape != (expected_chunks,) or not np.isfinite(array).all():
+        if array.shape != (expected_chunks,):
             raise ValueError(f"Malformed {metric} values: shape={array.shape}")
+        if metric in {"encoder.linear_cka", "encoder.procrustes_residual"}:
+            if np.isinf(array).any() or not np.isfinite(array).any():
+                raise ValueError(f"Malformed encoder geometry values for {metric}")
+        elif not np.isfinite(array).all():
+            raise ValueError(f"Malformed {metric} values: non-finite entries")
 
 
 def _validate_model_interface(reference_model: Any, comparison_model: Any) -> None:
@@ -453,13 +477,20 @@ def _evaluate_pair(
 def _assert_baseline_invariance(values: Mapping[str, np.ndarray]) -> None:
     """Fail closed if a C_i module does not match itself under identical inputs."""
 
-    if not np.allclose(values["encoder.linear_cka"], 1.0, atol=1e-10, rtol=1e-10):
+    encoder_cka = values["encoder.linear_cka"]
+    valid_encoder_cka = encoder_cka[np.isfinite(encoder_cka)]
+    if not len(valid_encoder_cka) or not np.allclose(
+        valid_encoder_cka, 1.0, atol=1e-10, rtol=1e-10
+    ):
         raise RuntimeError("Baseline encoder CKA is not exactly one")
     if not np.allclose(values["actor_head.top1_agreement"], 1.0, atol=0, rtol=0):
         raise RuntimeError("Baseline actor agreement is not exactly one")
     for metric, metric_values in values.items():
         if metric in {"encoder.linear_cka", "actor_head.top1_agreement", "reward_head.target_symlog_mse", "continue_head.target_bce", "critic_head.anchored_return_mae"}:
             continue
+        metric_values = metric_values[np.isfinite(metric_values)]
+        if not len(metric_values):
+            raise RuntimeError(f"Baseline input-fixed drift has no valid values for {metric}")
         # The compact SVD used for per-chunk Procrustes can leave a tiny
         # numerical residual even when the paired feature arrays are identical.
         tolerance = 1e-7 if metric == "encoder.procrustes_residual" else 1e-8
@@ -480,6 +511,12 @@ def _summary_row(
     bootstrap_seed: int,
     repetitions: int,
 ) -> dict[str, Any]:
+    valid = np.isfinite(reference_values) & np.isfinite(comparison_values)
+    if not valid.any():
+        raise ValueError(f"No finite paired values for {metric.name}")
+    reference_values = reference_values[valid]
+    comparison_values = comparison_values[valid]
+    episode_ids = episode_ids[valid]
     paired = paired_episode_bootstrap_difference(
         reference_values,
         comparison_values,
@@ -518,6 +555,7 @@ def _summary_row(
         "comparison_ci_high": float(current_summary["ci_high"]),
         "n_chunks": int(paired["n_chunks"]),
         "n_episodes": int(paired["n_episodes"]),
+        "n_excluded_chunks": int((~valid).sum()),
     }
 
 
