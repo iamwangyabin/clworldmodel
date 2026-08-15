@@ -48,6 +48,7 @@ SCHEMA_VERSION = 2
 DEFAULT_BURN_IN = 16
 DEFAULT_BATCH_SIZE = 16
 DEFAULT_BOOTSTRAP_SEED = 20260816
+ENCODER_GEOMETRY_RELATIVE_ENERGY_TOLERANCE = 1e-10
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,18 @@ def _chunk_temporal_mean(values: Any, *, start: int) -> np.ndarray:
     return selected.mean(dim=0).detach().cpu().numpy().astype(np.float64, copy=False)
 
 
+def _has_encoder_temporal_geometry(features: np.ndarray) -> bool:
+    """Return whether a chunk has feature variation beyond float32-level jitter."""
+
+    values = np.asarray(features, dtype=np.float64)
+    centered = values - values.mean(axis=0, keepdims=True)
+    centered_energy = float(np.square(centered).sum())
+    total_energy = float(np.square(values).sum())
+    return centered_energy > ENCODER_GEOMETRY_RELATIVE_ENERGY_TOLERANCE * max(
+        total_energy, 1.0
+    )
+
+
 def _feature_chunk_metrics(reference: Any, comparison: Any, *, start: int) -> dict[str, np.ndarray]:
     """Compute encoder geometry measurements independently for each audit chunk."""
 
@@ -192,11 +205,7 @@ def _feature_chunk_metrics(reference: Any, comparison: Any, *, start: int) -> di
     cka_values = []
     procrustes_values = []
     for reference_chunk, comparison_chunk in zip(reference_chunks, comparison_chunks):
-        reference_centered = reference_chunk - reference_chunk.mean(axis=0, keepdims=True)
-        comparison_centered = comparison_chunk - comparison_chunk.mean(axis=0, keepdims=True)
-        reference_energy = float(np.square(reference_centered).sum())
-        comparison_energy = float(np.square(comparison_centered).sum())
-        if reference_energy <= np.finfo(np.float64).eps:
+        if not _has_encoder_temporal_geometry(reference_chunk):
             # A static old feature trace has no temporal geometry.  Do not
             # silently turn its undefined similarity into a zero-retention
             # score; summary code excludes this same fixed old chunk for every
@@ -204,7 +213,7 @@ def _feature_chunk_metrics(reference: Any, comparison: Any, *, start: int) -> di
             cka_values.append(float("nan"))
             procrustes_values.append(float("nan"))
             continue
-        if comparison_energy <= np.finfo(np.float64).eps:
+        if not _has_encoder_temporal_geometry(comparison_chunk):
             # The old trace varies but the later encoder collapsed it.  This is
             # a finite, maximally unaligned comparison rather than an undefined
             # old-task coordinate system.

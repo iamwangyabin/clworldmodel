@@ -20,10 +20,22 @@ from component_audit_metrics import (
 )
 from summarize_component_audit import MetricSpec, _paired_row
 from component_swap_audit import _merged_state_dict
-from input_fixed_module_forgetting_audit import METRICS, _assert_baseline_invariance
+from input_fixed_module_forgetting_audit import (
+    METRICS,
+    _assert_baseline_invariance,
+    _has_encoder_temporal_geometry,
+)
 
 
 class ComponentAuditMetricTests(unittest.TestCase):
+    def test_encoder_geometry_ignores_float32_level_static_jitter(self) -> None:
+        static = np.ones((48, 5), dtype=np.float32)
+        static[1::2] += np.float32(1e-7)
+        dynamic = static.copy()
+        dynamic[:, 0] += np.linspace(0.0, 1.0, len(dynamic), dtype=np.float32)
+        self.assertFalse(_has_encoder_temporal_geometry(static))
+        self.assertTrue(_has_encoder_temporal_geometry(dynamic))
+
     def test_input_fixed_baseline_allows_only_svd_scale_residual(self) -> None:
         values = {metric.name: np.zeros(2, dtype=np.float64) for metric in METRICS}
         values["encoder.linear_cka"] = np.ones(2, dtype=np.float64)
