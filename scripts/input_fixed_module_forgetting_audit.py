@@ -256,8 +256,8 @@ def _old_coordinate_metrics(
     if time_steps <= burn_in:
         raise ValueError("Burn-in must leave at least one evaluated timestep")
 
-    channels, height, width = 3, 64, 64
     observations = reference["observations"]
+    channels, height, width = observations.shape[-3:]
     comparison_encoder_features = comparison_model.world_model.rssm.image_embedder(
         observations.reshape(-1, channels, height, width)
     ).view(time_steps, chunk_count, -1)
@@ -265,8 +265,14 @@ def _old_coordinate_metrics(
         reference["encoder_features"], comparison_encoder_features, start=burn_in
     )
 
-    comparison_posterior = comparison_model.world_model.rssm.representation(
-        reference["encoder_features"], hiddens
+    # These two vendored primitives intentionally accept one batch at a time.
+    # Iterate across time rather than flattening it into the batch axis, so the
+    # comparison receives exactly the paired old-coordinate activation at t.
+    comparison_posterior = torch.stack(
+        [
+            comparison_model.world_model.rssm.representation(encoder_features_t, hidden_t)
+            for encoder_features_t, hidden_t in zip(reference["encoder_features"], hiddens)
+        ]
     )
     metrics["posterior.symmetric_kl"] = _chunk_temporal_mean(
         _symmetric_kl_torch(reference["posterior_log_probs"], comparison_posterior), start=burn_in
@@ -280,11 +286,16 @@ def _old_coordinate_metrics(
     transition_resets = resets[1:]
     transition_z = posterior_z[:-1] * (1 - transition_resets).unsqueeze(-1)
     transition_h = hiddens[:-1] * (1 - transition_resets)
-    comparison_hiddens = comparison_model.world_model.rssm.recurrent(
-        transition_z, actions[1:], transition_h
+    comparison_hiddens = torch.stack(
+        [
+            comparison_model.world_model.rssm.recurrent(z_t, action_t, hidden_t)
+            for z_t, action_t, hidden_t in zip(transition_z, actions[1:], transition_h)
+        ]
     )
     reference_hiddens = hiddens[1:]
-    comparison_priors = comparison_model.world_model.rssm.transition(comparison_hiddens)
+    # The prior is its own module measurement: both prior heads take the old
+    # boundary hidden state, rather than letting recurrent drift leak into it.
+    comparison_priors = comparison_model.world_model.rssm.transition(reference_hiddens)
     reference_priors = reference_model.world_model.rssm.transition(reference_hiddens)
     hidden_difference = (comparison_hiddens - reference_hiddens).square().mean(dim=-1).sqrt()
     hidden_scale = (
@@ -449,7 +460,10 @@ def _assert_baseline_invariance(values: Mapping[str, np.ndarray]) -> None:
     for metric, metric_values in values.items():
         if metric in {"encoder.linear_cka", "actor_head.top1_agreement", "reward_head.target_symlog_mse", "continue_head.target_bce", "critic_head.anchored_return_mae"}:
             continue
-        if not np.allclose(metric_values, 0.0, atol=1e-8, rtol=1e-8):
+        # The compact SVD used for per-chunk Procrustes can leave a tiny
+        # numerical residual even when the paired feature arrays are identical.
+        tolerance = 1e-7 if metric == "encoder.procrustes_residual" else 1e-8
+        if not np.allclose(metric_values, 0.0, atol=tolerance, rtol=1e-8):
             raise RuntimeError(f"Baseline input-fixed drift is not zero for {metric}")
 
 

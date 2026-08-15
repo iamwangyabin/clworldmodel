@@ -54,7 +54,7 @@ on its own.
 | Encoder | Raw old observations `x(t)` | linear CKA and Procrustes residual of `e_i(t)` vs `e_j(t)` | Feature geometry/coordinate drift caused by the image encoder itself. |
 | Posterior/representation | `e_i(t), h_i(t)` | symmetric KL of posterior categorical distributions | Drift of the observation-to-latent recognition mapping under the old coordinate system. |
 | RSSM recurrent transition | `z_i(t-1), h_i(t-1), a(t), reset(t)` | normalized hidden-state RMSE | Drift of deterministic state transition under the old coordinate system. |
-| RSSM prior | resulting reference transition state | symmetric KL of prior categorical distributions | Drift of the one-step latent prior. |
+| RSSM prior | old transition state `h_i(t)` | symmetric KL of prior categorical distributions | Drift of the one-step latent prior, isolated from recurrent-state drift. |
 | Reward head | `u_i(t)` | output drift plus fixed old reward error | Reward-readout retention, not environment return. |
 | Continue head | `u_i(t)` | probability drift, BCE, Brier score | Continuation-readout retention. Terminal discrimination needs the event subset. |
 | Actor head | `s_i(t)` | symmetric action KL and top-1 disagreement | Policy-head drift on exactly the same old state. |

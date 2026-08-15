@@ -20,9 +20,21 @@ from component_audit_metrics import (
 )
 from summarize_component_audit import MetricSpec, _paired_row
 from component_swap_audit import _merged_state_dict
+from input_fixed_module_forgetting_audit import METRICS, _assert_baseline_invariance
 
 
 class ComponentAuditMetricTests(unittest.TestCase):
+    def test_input_fixed_baseline_allows_only_svd_scale_residual(self) -> None:
+        values = {metric.name: np.zeros(2, dtype=np.float64) for metric in METRICS}
+        values["encoder.linear_cka"] = np.ones(2, dtype=np.float64)
+        values["actor_head.top1_agreement"] = np.ones(2, dtype=np.float64)
+        values["encoder.procrustes_residual"] = np.asarray([0.0, 5e-8])
+        _assert_baseline_invariance(values)
+
+        values["encoder.procrustes_residual"] = np.asarray([0.0, 1e-4])
+        with self.assertRaises(RuntimeError):
+            _assert_baseline_invariance(values)
+
     def test_linear_cka_is_one_for_identical_centered_features(self) -> None:
         features = np.asarray([[1.0, 0.0], [0.0, 1.0], [2.0, 3.0]])
         self.assertAlmostEqual(linear_cka(features, features), 1.0, places=12)
