@@ -17,6 +17,7 @@ from component_audit_metrics import (
     symmetric_kl_from_log_probs,
 )
 from summarize_component_audit import MetricSpec, _paired_row
+from component_swap_audit import _merged_state_dict
 
 
 class ComponentAuditMetricTests(unittest.TestCase):
@@ -78,6 +79,16 @@ class ComponentAuditMetricTests(unittest.TestCase):
         self.assertAlmostEqual(row["comparison_minus_baseline_ci_low"], -1.0)
         self.assertAlmostEqual(row["comparison_minus_baseline_ci_high"], -1.0)
         self.assertAlmostEqual(row["degradation_score"], 1.0)
+
+    def test_component_swap_replaces_only_requested_parameter_group(self) -> None:
+        restored = _merged_state_dict(
+            {"rssm.transition.weight": 1, "decoder.weight": 2, "reward_fc.weight": 3},
+            {"rssm.transition.weight": 10, "decoder.weight": 20, "reward_fc.weight": 30},
+            ("rssm.",),
+        )
+        self.assertEqual(restored["rssm.transition.weight"], 10)
+        self.assertEqual(restored["decoder.weight"], 2)
+        self.assertEqual(restored["reward_fc.weight"], 3)
 
     def test_raw_metric_bundle_allows_different_dataset_sizes(self) -> None:
         with TemporaryDirectory() as temporary:
