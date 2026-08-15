@@ -579,7 +579,7 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
         "complete": True,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "label": args.label,
-        "role": "pilot" if args.pilot else "analysis",
+        "role": args.role,
         "project_git": git,
         "source_run": str(run_dir),
         "source_run_manifest_sha256": _sha256(run_dir / "launch.json"),
@@ -1241,7 +1241,7 @@ def evaluate_diagnostic_sets(args: argparse.Namespace) -> None:
         "artifact_kind": "component_forgetting_audit_results",
         "complete": True,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "role": "pilot" if args.pilot else "analysis",
+        "role": args.role,
         "project_git": git_state(ROOT),
         "source_run": str(run_dir),
         "source_audit": str(audit_dir),
@@ -1311,7 +1311,7 @@ def _parser() -> argparse.ArgumentParser:
     collect.add_argument("--chunk-selection-seed", type=int, default=610_000)
     collect.add_argument("--max-episodes", type=_positive_int, default=2_000)
     collect.add_argument("--max-episode-decisions", type=_positive_int, default=20_000)
-    collect.add_argument("--pilot", action="store_true")
+    collect.add_argument("--role", choices=("smoke", "pilot"), default="pilot")
     collect.set_defaults(handler=collect_diagnostic_sets)
 
     evaluate = subparsers.add_parser("evaluate", help="Evaluate snapshots on frozen diagnostic chunks")
@@ -1324,7 +1324,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--horizons", type=_parse_horizons, default=DEFAULT_HORIZONS)
     evaluate.add_argument("--evaluation-seed", type=int, default=710_000)
     evaluate.add_argument("--bootstrap-seed", type=int, default=810_000)
-    evaluate.add_argument("--pilot", action="store_true")
+    evaluate.add_argument("--role", choices=("smoke", "pilot"), default="pilot")
     evaluate.set_defaults(handler=evaluate_diagnostic_sets)
     return parser
 
