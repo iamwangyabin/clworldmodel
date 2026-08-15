@@ -265,9 +265,11 @@ def _one_hot(action: int, action_space: int) -> np.ndarray:
 def _make_atari_environment(task: Mapping[str, Any], env_repeat: int) -> Any:
     try:
         import gymnasium as gym
+        import ale_py
         from gymnasium.wrappers import AtariPreprocessing
     except ModuleNotFoundError as error:  # pragma: no cover - server dependency
         raise RuntimeError("Gymnasium Atari dependencies are required for collection") from error
+    gym.register_envs(ale_py)
     raw = gym.make(
         str(task["name"]),
         frameskip=1,
