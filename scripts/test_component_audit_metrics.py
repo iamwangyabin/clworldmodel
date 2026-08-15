@@ -13,6 +13,8 @@ from component_audit_metrics import (
     discounted_returns,
     linear_cka,
     mean_and_episode_bootstrap_ci,
+    normalized_rmse,
+    orthogonal_procrustes_residual,
     paired_episode_bootstrap_difference,
     symmetric_kl_from_log_probs,
 )
@@ -24,6 +26,18 @@ class ComponentAuditMetricTests(unittest.TestCase):
     def test_linear_cka_is_one_for_identical_centered_features(self) -> None:
         features = np.asarray([[1.0, 0.0], [0.0, 1.0], [2.0, 3.0]])
         self.assertAlmostEqual(linear_cka(features, features), 1.0, places=12)
+
+    def test_procrustes_residual_removes_global_rotation(self) -> None:
+        reference = np.asarray([[1.0, 0.0], [0.0, 2.0], [-1.0, 1.0]])
+        rotation = np.asarray([[0.0, -1.0], [1.0, 0.0]])
+        comparison = reference @ rotation * 3.0
+        self.assertAlmostEqual(
+            orthogonal_procrustes_residual(reference, comparison), 0.0, places=12
+        )
+
+    def test_normalized_rmse_is_zero_for_identical_values(self) -> None:
+        values = np.asarray([[1.0, 2.0], [3.0, 4.0]])
+        self.assertAlmostEqual(normalized_rmse(values, values), 0.0, places=12)
 
     def test_symmetric_kl_is_zero_for_identical_policies(self) -> None:
         log_probs = np.log(np.asarray([[0.25, 0.75], [0.5, 0.5]]))

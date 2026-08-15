@@ -26,13 +26,91 @@ def linear_cka(features_x: np.ndarray, features_y: np.ndarray) -> float:
 
     x = x - x.mean(axis=0, keepdims=True)
     y = y - y.mean(axis=0, keepdims=True)
-    cross_sq = float(np.square(x.T @ y).sum())
-    x_sq = float(np.square(x.T @ x).sum())
-    y_sq = float(np.square(y.T @ y).sum())
+    # Use the smaller of the sample-space and feature-space Gram matrices.
+    # Audit chunks contain far fewer timesteps than encoder channels, whereas
+    # the global statistic often has the opposite shape.
+    if x.shape[0] <= x.shape[1]:
+        x_gram = x @ x.T
+        y_gram = y @ y.T
+        cross_sq = float((x_gram * y_gram).sum())
+        x_sq = float(np.square(x_gram).sum())
+        y_sq = float(np.square(y_gram).sum())
+    else:
+        cross_sq = float(np.square(x.T @ y).sum())
+        x_sq = float(np.square(x.T @ x).sum())
+        y_sq = float(np.square(y.T @ y).sum())
     denominator = math.sqrt(x_sq * y_sq)
     if denominator == 0:
         return 0.0
     return cross_sq / denominator
+
+
+def orthogonal_procrustes_residual(
+    reference_features: np.ndarray, comparison_features: np.ndarray
+) -> float:
+    """Return the centered relative residual after the best orthogonal alignment.
+
+    This complements CKA for encoder features.  CKA asks whether pairwise
+    geometry is retained; this statistic asks how far the comparison features
+    remain after removing a global rotation/reflection and scale.  It is zero
+    for identical features and is deliberately not interpreted as a universal
+    cross-module score.
+    """
+
+    reference = np.asarray(reference_features, dtype=np.float64)
+    comparison = np.asarray(comparison_features, dtype=np.float64)
+    if reference.ndim != 2 or comparison.ndim != 2:
+        raise ValueError("Procrustes residual expects two rank-2 feature matrices")
+    if reference.shape != comparison.shape:
+        raise ValueError("Procrustes residual requires paired feature matrices of equal shape")
+    if reference.shape[0] < 2:
+        raise ValueError("Procrustes residual requires at least two paired samples")
+
+    reference = reference - reference.mean(axis=0, keepdims=True)
+    comparison = comparison - comparison.mean(axis=0, keepdims=True)
+    reference_norm = float(np.linalg.norm(reference))
+    comparison_norm = float(np.linalg.norm(comparison))
+    if reference_norm == 0 or comparison_norm == 0:
+        return 0.0 if np.array_equal(reference, comparison) else float("inf")
+
+    reference /= reference_norm
+    comparison /= comparison_norm
+
+    # Features have many more channels than paired examples in the audit.  The
+    # non-zero singular values of comparison.T @ reference can be obtained
+    # from compact left singular factors, avoiding a costly channel-by-channel
+    # SVD for every diagnostic chunk.
+    def compact_left_svd(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        eigenvalues, left_vectors = np.linalg.eigh(values @ values.T)
+        keep = eigenvalues > np.finfo(np.float64).eps
+        return left_vectors[:, keep], np.sqrt(eigenvalues[keep])
+
+    reference_left, reference_singular = compact_left_svd(reference)
+    comparison_left, comparison_singular = compact_left_svd(comparison)
+    middle = (
+        comparison_singular[:, None]
+        * (comparison_left.T @ reference_left)
+        * reference_singular[None, :]
+    )
+    nuclear_norm = float(np.linalg.svd(middle, compute_uv=False).sum())
+    squared_residual = max(0.0, 2.0 - 2.0 * nuclear_norm)
+    return float(np.sqrt(squared_residual))
+
+
+def normalized_rmse(reference: np.ndarray, comparison: np.ndarray, *, epsilon: float = 1e-12) -> float:
+    """Return RMSE normalized by the centered RMS scale of the reference tensor."""
+
+    base = np.asarray(reference, dtype=np.float64)
+    current = np.asarray(comparison, dtype=np.float64)
+    if base.shape != current.shape:
+        raise ValueError("normalized RMSE requires tensors with identical shapes")
+    if base.size == 0:
+        raise ValueError("normalized RMSE requires at least one value")
+    if epsilon <= 0:
+        raise ValueError("epsilon must be positive")
+    rmse = float(np.sqrt(np.mean(np.square(current - base))))
+    scale = float(np.sqrt(np.mean(np.square(base - base.mean()))))
+    return rmse / max(scale, epsilon)
 
 
 def symmetric_kl_from_log_probs(
