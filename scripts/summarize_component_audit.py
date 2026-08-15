@@ -22,7 +22,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from component_audit_metrics import paired_episode_bootstrap_difference
-from git_provenance import require_synced_training_git_state
+from git_provenance import git_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -173,6 +173,8 @@ def _paired_row(
             "baseline_mean": baseline,
             "comparison_mean": comparison,
             "comparison_minus_baseline": raw_delta,
+            "comparison_minus_baseline_ci_low": None,
+            "comparison_minus_baseline_ci_high": None,
             "relative_ratio": _relative_ratio(baseline, comparison),
             "degradation_score": baseline - comparison,
             "degradation_ci_low": None,
@@ -210,6 +212,8 @@ def _paired_row(
         "label": spec.label,
         "direction": spec.direction,
         **paired,
+        "comparison_minus_baseline_ci_low": float(paired["ci_low"]),
+        "comparison_minus_baseline_ci_high": float(paired["ci_high"]),
         "relative_ratio": _relative_ratio(
             float(paired["baseline_mean"]), float(paired["comparison_mean"])
         ),
@@ -269,17 +273,17 @@ def _markdown(payload: Mapping[str, Any]) -> str:
                 "",
                 f"### {task['task_name']} ({task['baseline_checkpoint']} to {task['comparison_checkpoint']})",
                 "",
-                "| Metric | C_i | C6 | C6 - C_i | 95% paired CI | Degradation |",
+                "| Metric | C_i | C6 | C6 - C_i | 95% CI for C6 - C_i | Degradation |",
                 "| --- | ---: | ---: | ---: | --- | ---: |",
             ]
         )
         for row in task["headline_metrics"]:
             ci = (
                 "n/a"
-                if row["degradation_ci_low"] is None
+                if row["comparison_minus_baseline_ci_low"] is None
                 else "[{low}, {high}]".format(
-                    low=_render_number(row["degradation_ci_low"]),
-                    high=_render_number(row["degradation_ci_high"]),
+                    low=_render_number(row["comparison_minus_baseline_ci_low"]),
+                    high=_render_number(row["comparison_minus_baseline_ci_high"]),
                 )
             )
             lines.append(
@@ -300,7 +304,7 @@ def _markdown(payload: Mapping[str, Any]) -> str:
             "- The natural headline set has no event-balanced subset in this pass, so terminal/continue-head conclusions are not supported.",
             "- A large actor change can arise from actor parameters, latent-to-actor interface drift, or both; it is not actor-only causal evidence.",
             "- C6 is used for continual retention. `Cfinal_e540` is intentionally excluded because it follows one additional Task 1 update.",
-            "- The source training worktree was dirty at launch. These outputs remain a pilot even though this post-hoc analysis ran from a clean, pushed commit.",
+            "- The source training worktree was dirty at launch. These outputs remain a pilot; collector/evaluator and reporter provenance are recorded separately in the JSON artifact.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -312,7 +316,7 @@ def summarize(args: argparse.Namespace) -> None:
     output_dir = args.output_dir.resolve()
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Refusing to overwrite existing summary output {output_dir}")
-    report_git = require_synced_training_git_state(ROOT)
+    report_git = git_state(ROOT)
     collection_path = audit_dir / "collection_manifest.json"
     results_path = results_dir / "results.json"
     collection_digest = _validate_sha256_sidecar(collection_path)
@@ -391,6 +395,7 @@ def summarize(args: argparse.Namespace) -> None:
                 "path": str(raw_path),
                 "sha256": str(results["raw_metrics"]["sha256"]),
             },
+            "evaluator_git": results["project_git"],
         },
         "comparison": {
             "baseline": "each task's acquisition boundary C_i",

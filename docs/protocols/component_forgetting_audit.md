@@ -23,12 +23,12 @@
 | Snapshot SHA-256 与原子写盘 | 已完成 | 每个 `.pt` 有相邻 checksum |
 | Launch/config/log/status provenance | 已完成 | `launch.json`, config, `train.log`, `run_status.json` |
 | Snapshot serialization runtime verification | 已完成 | 7 个实际写入的 `.pt` 与 sidecar 都已校验；加载 smoke 在审计启动时重复验证 |
-| Held-out diagnostic-set collector | 已实现，待运行 | `scripts/component_forgetting_audit.py collect`；只读 snapshots，不写 replay |
-| Teacher-forced evaluator | 已实现，待运行 | deterministic posterior mode；不调用训练更新 |
-| Open-loop evaluator | 已实现，待运行 | 固定真实 action，horizons 1, 2, 4, 8, 16 |
-| Actor/critic/representation evaluator | 已实现，待运行 | 使用同一 observation history；actor KL/agreement、anchored critic MAE、linear CKA |
-| Versioned report generator | 已实现，待运行 | 保存 raw per-chunk metrics、JSON summary 和 Markdown report |
-| Paired conclusion-data reporter | 已实现，待运行 | `scripts/summarize_component_audit.py`；用 episode-cluster paired bootstrap 对比 `$C_i$` 与 C6 |
+| Held-out diagnostic-set collector | 已完成 | 6 个 task 各 256 个 natural chunks；只读 snapshots，不写 replay |
+| Teacher-forced evaluator | 已完成 | deterministic posterior mode；不调用训练更新 |
+| Open-loop evaluator | 已完成 | 固定真实 action，horizons 1, 2, 4, 8, 16 |
+| Actor/critic/representation evaluator | 已完成 | 使用同一 observation history；actor KL/agreement、anchored critic MAE、linear CKA |
+| Versioned report generator | 已完成 | 保存 raw per-chunk metrics、JSON summary 和 Markdown report |
+| Paired conclusion-data reporter | 已完成 | `scripts/summarize_component_audit.py`；用 episode-cluster paired bootstrap 对比 `$C_i$` 与 C6 |
 
 Analysis snapshot 保存 world model 与 actor-critic 权重，但不包含 replay、
 optimizer、RNG 或 environment-schedule state，因此不可声称为等价的可恢复训练

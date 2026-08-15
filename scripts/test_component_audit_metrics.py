@@ -16,6 +16,7 @@ from component_audit_metrics import (
     paired_episode_bootstrap_difference,
     symmetric_kl_from_log_probs,
 )
+from summarize_component_audit import MetricSpec, _paired_row
 
 
 class ComponentAuditMetricTests(unittest.TestCase):
@@ -58,6 +59,25 @@ class ComponentAuditMetricTests(unittest.TestCase):
         self.assertAlmostEqual(result["comparison_minus_baseline"], -1.0)
         self.assertEqual(result["n_chunks"], 3)
         self.assertEqual(result["n_episodes"], 2)
+
+    def test_higher_is_better_summary_preserves_raw_delta_ci(self) -> None:
+        row = _paired_row(
+            MetricSpec("actor.top1_agreement", "actor agreement", "higher_is_better"),
+            task_index=0,
+            baseline_label="C1_e89",
+            comparison_label="C6_e539",
+            episode_ids=np.asarray([4, 5]),
+            raw_metrics={
+                (0, "natural", "C1_e89", "actor.top1_agreement"): np.asarray([1.0, 1.0]),
+                (0, "natural", "C6_e539", "actor.top1_agreement"): np.asarray([0.0, 0.0]),
+            },
+            summary_rows={},
+            bootstrap_seed=3,
+        )
+        self.assertAlmostEqual(row["comparison_minus_baseline"], -1.0)
+        self.assertAlmostEqual(row["comparison_minus_baseline_ci_low"], -1.0)
+        self.assertAlmostEqual(row["comparison_minus_baseline_ci_high"], -1.0)
+        self.assertAlmostEqual(row["degradation_score"], 1.0)
 
     def test_raw_metric_bundle_allows_different_dataset_sizes(self) -> None:
         with TemporaryDirectory() as temporary:
