@@ -2,8 +2,9 @@
 
 ## 文档状态
 
-- 状态：实验设计草案，尚未产生 component-level 结果。
-- 当前阶段：baseline instrumentation 已完成，训练尚未启动。
+- 状态：Pilot P1 训练与分析快照已完成；component-level 离线审计正在执行。
+- 当前阶段：已冻结 DreamerV3/FIFO seed-0 的训练产物，正从 task-boundary
+  snapshots 生成 held-out diagnostics 并做 checkpoint differencing。
 - 第一目标：定位 DreamerV3/FIFO 在连续任务训练中哪里发生功能性遗忘。
 - 第二目标：比较 ARROW-50 改变了哪些遗忘通道。
 - 非目标：现在不提出 targeted replay，不根据单 seed 结果宣称新方法有效。
@@ -21,16 +22,27 @@
 | Final analysis snapshot | 已完成 | epoch 540，和第六任务边界分开保存 |
 | Snapshot SHA-256 与原子写盘 | 已完成 | 每个 `.pt` 有相邻 checksum |
 | Launch/config/log/status provenance | 已完成 | `launch.json`, config, `train.log`, `run_status.json` |
-| Snapshot serialization runtime smoke test | 待完成 | 长训练前必须验证一次真实 PyTorch 写入和加载 |
-| Held-out diagnostic-set collector | 待实现 | checkpoint 存在后可以离线收集 |
-| Teacher-forced evaluator | 待实现 | 不得调用训练更新 |
-| Open-loop evaluator | 待实现 | horizons 1, 2, 4, 8, 16 |
-| Actor/critic/representation evaluator | 待实现 | 使用同一 observation history |
-| Versioned report generator | 待实现 | 从原始审计指标生成表格和图 |
+| Snapshot serialization runtime verification | 已完成 | 7 个实际写入的 `.pt` 与 sidecar 都已校验；加载 smoke 在审计启动时重复验证 |
+| Held-out diagnostic-set collector | 已实现，待运行 | `scripts/component_forgetting_audit.py collect`；只读 snapshots，不写 replay |
+| Teacher-forced evaluator | 已实现，待运行 | deterministic posterior mode；不调用训练更新 |
+| Open-loop evaluator | 已实现，待运行 | 固定真实 action，horizons 1, 2, 4, 8, 16 |
+| Actor/critic/representation evaluator | 已实现，待运行 | 使用同一 observation history；actor KL/agreement、anchored critic MAE、linear CKA |
+| Versioned report generator | 已实现，待运行 | 保存 raw per-chunk metrics、JSON summary 和 Markdown report |
 
 Analysis snapshot 保存 world model 与 actor-critic 权重，但不包含 replay、
 optimizer、RNG 或 environment-schedule state，因此不可声称为等价的可恢复训练
 checkpoint。它们足够支持本文定义的离线 checkpoint differencing。
+
+### Pilot P1 已有产物
+
+`dv3_fifo_original_s0_analysis` 已正常结束（epoch 540，return code 0），并在本地
+`runs/dv3_fifo_original_s0_analysis/` 保存了完整的 log、TensorBoard、7 份 snapshot
+及全目录 checksum manifest。它提供单个 DreamerV3/FIFO seed 的 pilot 数据：可用于
+验证诊断指标、发现候选遗忘通道，但不能作为跨 seed 的论文结论。
+
+该训练启动时的 worktree 不是 clean，因此在当前项目治理规则下必须标记为 `pilot`，
+不得被重新描述为 official baseline。此限制不影响其作为 evaluator 工程验证和假设
+生成数据的价值。
 
 ## 核心研究问题
 
