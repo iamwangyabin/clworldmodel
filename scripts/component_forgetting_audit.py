@@ -287,8 +287,13 @@ def _episode_arrays(
     reset_seed: int,
     policy_seed: int,
     max_decisions: int,
-) -> dict[str, np.ndarray]:
-    """Collect one complete, isolated episode in the upstream replay convention."""
+) -> tuple[dict[str, np.ndarray], bool]:
+    """Collect one bounded episode segment and report whether it really ended.
+
+    A collector cap must not fabricate a terminal transition.  A capped segment
+    is valid for the natural, all-continue diagnostic set, but never for the
+    terminal-event subset.  The caller records the distinction in the manifest.
+    """
     torch = _torch()
     torch.manual_seed(policy_seed)
     if torch.cuda.is_available():
@@ -312,6 +317,7 @@ def _episode_arrays(
         previous_action = torch.zeros(1, action_space, device=model.device)
         previous_action[:, 0] = 1
         reset_flag = torch.ones(1, 1, device=model.device)
+        completed = False
         with torch.no_grad():
             for _ in range(max_decisions):
                 image = (
@@ -348,24 +354,24 @@ def _episode_arrays(
                 ).unsqueeze(0)
                 reset_flag = torch.zeros(1, 1, device=model.device)
                 if finished:
+                    completed = True
                     break
-            else:
-                raise RuntimeError(
-                    f"Episode for {task['name']} exceeded {max_decisions} decisions without ending"
-                )
     finally:
         environment.close()
 
-    return {
-        "actions": np.asarray(actions, dtype=np.uint8),
-        "observations": np.asarray(observations, dtype=np.uint8).transpose(0, 3, 1, 2),
-        "raw_rewards": np.asarray(raw_rewards, dtype=np.float32)[:, None],
-        "scaled_rewards": np.asarray(scaled_rewards, dtype=np.float32)[:, None],
-        "continues": np.asarray(continues, dtype=np.uint8)[:, None],
-        "resets": np.asarray(resets, dtype=np.uint8)[:, None],
-        "terminated": np.asarray(terminateds, dtype=np.uint8)[:, None],
-        "truncated": np.asarray(truncateds, dtype=np.uint8)[:, None],
-    }
+    return (
+        {
+            "actions": np.asarray(actions, dtype=np.uint8),
+            "observations": np.asarray(observations, dtype=np.uint8).transpose(0, 3, 1, 2),
+            "raw_rewards": np.asarray(raw_rewards, dtype=np.float32)[:, None],
+            "scaled_rewards": np.asarray(scaled_rewards, dtype=np.float32)[:, None],
+            "continues": np.asarray(continues, dtype=np.uint8)[:, None],
+            "resets": np.asarray(resets, dtype=np.uint8)[:, None],
+            "terminated": np.asarray(terminateds, dtype=np.uint8)[:, None],
+            "truncated": np.asarray(truncateds, dtype=np.uint8)[:, None],
+        },
+        completed,
+    )
 
 
 def _slice_chunk(
@@ -506,14 +512,22 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
         natural_candidates: list[dict[str, np.ndarray | int]] = []
         event_candidates: list[dict[str, np.ndarray | int]] = []
         target_natural_candidates = max(args.chunks * 2, args.chunks)
+        completed_segments = 0
+        capped_segments = 0
+        segments_started = 0
         for episode_id in range(args.max_episodes):
-            episode = _episode_arrays(
+            episode, completed = _episode_arrays(
                 model,
                 task,
                 reset_seed=args.environment_seed + task_index * 100_000 + episode_id,
                 policy_seed=args.policy_seed + task_index * 100_000 + episode_id,
                 max_decisions=args.max_episode_decisions,
             )
+            segments_started += 1
+            if completed:
+                completed_segments += 1
+            else:
+                capped_segments += 1
             natural_candidates.extend(
                 _natural_candidates(
                     episode,
@@ -522,7 +536,11 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
                     rng=selector,
                 )
             )
-            event = _event_candidate(episode, chunk_length=args.chunk_length, episode_id=episode_id)
+            event = (
+                _event_candidate(episode, chunk_length=args.chunk_length, episode_id=episode_id)
+                if completed
+                else None
+            )
             if event is not None:
                 event_candidates.append(event)
             if len(natural_candidates) >= target_natural_candidates and (
@@ -532,8 +550,8 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
         else:
             raise RuntimeError(
                 f"Task {task_index} did not yield enough diagnostic chunks within "
-                f"{args.max_episodes} completed episodes (natural={len(natural_candidates)}, "
-                f"event={len(event_candidates)})"
+                f"{args.max_episodes} collection segments (natural={len(natural_candidates)}, "
+                f"event={len(event_candidates)}, capped={capped_segments})"
             )
 
         natural_indices = selector.choice(len(natural_candidates), size=args.chunks, replace=False)
@@ -549,6 +567,13 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
                 "chunk_length": args.chunk_length,
                 "burn_in": args.burn_in,
                 "candidate_count": len(natural_candidates),
+            },
+            "collection_segments": {
+                "started": segments_started,
+                "completed_with_environment_terminal": completed_segments,
+                "capped_nonterminal": capped_segments,
+                "max_decisions": args.max_episode_decisions,
+                "capped_segments_event_excluded": True,
             },
         }
         if args.event_chunks:
@@ -568,7 +593,8 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
         datasets.append(task_entry)
         print(
             f"[audit-collect] task={task_index} natural={args.chunks} "
-            f"event={args.event_chunks} candidates={len(natural_candidates)}"
+            f"event={args.event_chunks} candidates={len(natural_candidates)} "
+            f"terminal_segments={completed_segments} capped_segments={capped_segments}"
         )
         del model
         torch = _torch()

@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 
-from component_forgetting_audit import _write_metrics_npz
+from component_forgetting_audit import _event_candidate, _natural_candidates, _write_metrics_npz
 from component_audit_metrics import (
     discounted_returns,
     linear_cka,
@@ -55,6 +55,28 @@ class ComponentAuditMetricTests(unittest.TestCase):
             with np.load(Path(temporary) / "metrics.npz", allow_pickle=False) as archive:
                 np.testing.assert_array_equal(archive["offsets"], np.asarray([0, 2, 3]))
                 np.testing.assert_array_equal(archive["values"], np.asarray([1.0, 2.0, 3.0]))
+
+    def test_capped_nonterminal_segment_is_natural_only(self) -> None:
+        length = 128
+        episode = {
+            "actions": np.zeros((length, 2), dtype=np.uint8),
+            "observations": np.zeros((length, 3, 64, 64), dtype=np.uint8),
+            "raw_rewards": np.zeros((length, 1), dtype=np.float32),
+            "scaled_rewards": np.zeros((length, 1), dtype=np.float32),
+            "continues": np.ones((length, 1), dtype=np.uint8),
+            "resets": np.zeros((length, 1), dtype=np.uint8),
+            "terminated": np.zeros((length, 1), dtype=np.uint8),
+            "truncated": np.zeros((length, 1), dtype=np.uint8),
+        }
+        episode["resets"][0, 0] = 1
+        candidates = _natural_candidates(
+            episode,
+            chunk_length=64,
+            episode_id=3,
+            rng=np.random.default_rng(2),
+        )
+        self.assertGreaterEqual(len(candidates), 1)
+        self.assertIsNone(_event_candidate(episode, chunk_length=64, episode_id=3))
 
 
 if __name__ == "__main__":

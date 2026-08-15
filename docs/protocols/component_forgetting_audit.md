@@ -161,6 +161,13 @@ Reward 和 termination 事件在自然分布中可能稀少。可以从同一批
 每个 dataset 保存独立 manifest，包括 checkpoint checksum、环境和 actor seeds、
 任务顺序、collection policy、shape/dtype、preprocessing、reward scale 和文件 hash。
 
+为避免一个极长的 Atari episode 阻塞自然分布审计，collector 对单个 collection
+segment 使用显式的 decision cap。达到 cap 而未发生真实 `terminated`/`truncated`
+时，该 segment 仍只能贡献全 `continue=1` 的 natural chunks；绝不会被伪造成
+terminal event。每个 task manifest 记录已完成环境 episode 数、capped nonterminal
+segment 数和 cap 值。Pilot P1 首先完成 natural headline tensor；event subset 仅在
+能够收集到足量真实终止样本时作为补充运行。
+
 ## Checkpoint audit tensor
 
 对所有 \(j\geq i\)，在相同 \(D_i\) 上评估 \(C_j\)：
