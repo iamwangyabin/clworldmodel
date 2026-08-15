@@ -503,7 +503,7 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
         selector = np.random.default_rng(args.chunk_selection_seed + task_index)
         natural_candidates: list[dict[str, np.ndarray | int]] = []
         event_candidates: list[dict[str, np.ndarray | int]] = []
-        target_natural_candidates = max(args.chunks * 2, args.chunks + 64)
+        target_natural_candidates = max(args.chunks * 2, args.chunks)
         for episode_id in range(args.max_episodes):
             episode = _episode_arrays(
                 model,
