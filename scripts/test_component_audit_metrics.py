@@ -25,9 +25,31 @@ from input_fixed_module_forgetting_audit import (
     _assert_baseline_invariance,
     _has_encoder_temporal_geometry,
 )
+from decoder_forgetting_audit import (
+    METRICS as DECODER_METRICS,
+    _assert_baseline_invariance as _assert_decoder_baseline_invariance,
+)
 
 
 class ComponentAuditMetricTests(unittest.TestCase):
+    def test_decoder_metric_contract_is_decoder_only(self) -> None:
+        self.assertEqual(
+            {metric.name for metric in DECODER_METRICS},
+            {
+                "decoder.output_normalized_rmse",
+                "decoder.output_pixel_mse",
+                "decoder.target_pixel_mse",
+            },
+        )
+        self.assertTrue(all(metric.group == "decoder" for metric in DECODER_METRICS))
+        self.assertTrue(all(metric.direction == "lower_is_better" for metric in DECODER_METRICS))
+        baseline = {metric.name: np.zeros(2, dtype=np.float64) for metric in DECODER_METRICS}
+        baseline["decoder.target_pixel_mse"] = np.asarray([0.2, 0.3])
+        _assert_decoder_baseline_invariance(baseline)
+        baseline["decoder.output_pixel_mse"] = np.asarray([0.0, 1e-3])
+        with self.assertRaises(RuntimeError):
+            _assert_decoder_baseline_invariance(baseline)
+
     def test_encoder_geometry_ignores_float32_level_static_jitter(self) -> None:
         static = np.ones((48, 5), dtype=np.float32)
         static[1::2] += np.float32(1e-7)
