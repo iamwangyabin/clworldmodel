@@ -28,6 +28,7 @@
 | Open-loop evaluator | 已实现，待运行 | 固定真实 action，horizons 1, 2, 4, 8, 16 |
 | Actor/critic/representation evaluator | 已实现，待运行 | 使用同一 observation history；actor KL/agreement、anchored critic MAE、linear CKA |
 | Versioned report generator | 已实现，待运行 | 保存 raw per-chunk metrics、JSON summary 和 Markdown report |
+| Paired conclusion-data reporter | 已实现，待运行 | `scripts/summarize_component_audit.py`；用 episode-cluster paired bootstrap 对比 `$C_i$` 与 C6 |
 
 Analysis snapshot 保存 world model 与 actor-critic 权重，但不包含 replay、
 optimizer、RNG 或 environment-schedule state，因此不可声称为等价的可恢复训练

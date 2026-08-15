@@ -105,6 +105,56 @@ def mean_and_episode_bootstrap_ci(
     }
 
 
+def paired_episode_bootstrap_difference(
+    baseline_values: np.ndarray,
+    comparison_values: np.ndarray,
+    episode_ids: np.ndarray,
+    *,
+    seed: int,
+    repetitions: int = 1_000,
+    confidence: float = 0.95,
+) -> dict[str, float | int]:
+    """Compare paired chunk metrics with an episode-cluster bootstrap CI.
+
+    The returned difference is always ``comparison - baseline``.  Callers that
+    use a higher-is-better metric can reverse its sign explicitly when they
+    render a directional forgetting score, while this primitive keeps the raw
+    effect and its interval unambiguous.
+    """
+    baseline = np.asarray(baseline_values, dtype=np.float64).reshape(-1)
+    comparison = np.asarray(comparison_values, dtype=np.float64).reshape(-1)
+    clusters = np.asarray(episode_ids).reshape(-1)
+    if baseline.shape != comparison.shape or baseline.shape != clusters.shape:
+        raise ValueError("paired values and episode ids must have identical shapes")
+    if baseline.size == 0:
+        raise ValueError("cannot compare empty metrics")
+    if repetitions < 1:
+        raise ValueError("bootstrap repetitions must be positive")
+    if not 0 < confidence < 1:
+        raise ValueError("confidence must be in (0, 1)")
+
+    unique_ids, inverse = np.unique(clusters, return_inverse=True)
+    cluster_counts = np.bincount(inverse, minlength=len(unique_ids))
+    baseline_sums = np.bincount(inverse, weights=baseline, minlength=len(unique_ids))
+    comparison_sums = np.bincount(inverse, weights=comparison, minlength=len(unique_ids))
+    rng = np.random.default_rng(seed)
+    draws = rng.integers(0, len(unique_ids), size=(repetitions, len(unique_ids)))
+    draw_counts = cluster_counts[draws].sum(axis=1)
+    bootstrap_differences = (
+        comparison_sums[draws].sum(axis=1) - baseline_sums[draws].sum(axis=1)
+    ) / draw_counts
+    alpha = (1 - confidence) / 2
+    return {
+        "baseline_mean": float(baseline.mean()),
+        "comparison_mean": float(comparison.mean()),
+        "comparison_minus_baseline": float(comparison.mean() - baseline.mean()),
+        "n_chunks": int(baseline.size),
+        "n_episodes": int(len(unique_ids)),
+        "ci_low": float(np.quantile(bootstrap_differences, alpha)),
+        "ci_high": float(np.quantile(bootstrap_differences, 1 - alpha)),
+    }
+
+
 def scalar_rows(values: Iterable[float]) -> np.ndarray:
     """Convert a scalar iterable to a finite float64 vector with clear validation."""
     array = np.asarray(list(values), dtype=np.float64)

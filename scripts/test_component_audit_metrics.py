@@ -13,6 +13,7 @@ from component_audit_metrics import (
     discounted_returns,
     linear_cka,
     mean_and_episode_bootstrap_ci,
+    paired_episode_bootstrap_difference,
     symmetric_kl_from_log_probs,
 )
 
@@ -43,6 +44,20 @@ class ComponentAuditMetricTests(unittest.TestCase):
         self.assertEqual(result["n_chunks"], 3)
         self.assertEqual(result["n_episodes"], 2)
         self.assertAlmostEqual(result["mean"], 14.0 / 3.0)
+
+    def test_paired_episode_bootstrap_retains_difference_direction(self) -> None:
+        result = paired_episode_bootstrap_difference(
+            np.asarray([1.0, 3.0, 10.0]),
+            np.asarray([2.0, 4.0, 5.0]),
+            np.asarray([7, 7, 8]),
+            seed=9,
+            repetitions=100,
+        )
+        self.assertAlmostEqual(result["baseline_mean"], 14.0 / 3.0)
+        self.assertAlmostEqual(result["comparison_mean"], 11.0 / 3.0)
+        self.assertAlmostEqual(result["comparison_minus_baseline"], -1.0)
+        self.assertEqual(result["n_chunks"], 3)
+        self.assertEqual(result["n_episodes"], 2)
 
     def test_raw_metric_bundle_allows_different_dataset_sizes(self) -> None:
         with TemporaryDirectory() as temporary:
