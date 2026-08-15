@@ -495,7 +495,7 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
         raise ValueError("Snapshot task count does not match its config")
 
     _seed_everything(args.collection_seed)
-    output_dir.mkdir(parents=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     datasets = []
     for task_index, boundary in enumerate(boundaries):
         if boundary.task_index != task_index:
