@@ -113,6 +113,30 @@ def normalized_rmse(reference: np.ndarray, comparison: np.ndarray, *, epsilon: f
     return rmse / max(scale, epsilon)
 
 
+def relative_rms_perturbation(
+    reference: np.ndarray, comparison: np.ndarray, *, epsilon: float = 1e-12
+) -> float:
+    """Return direct output perturbation relative to the old output RMS.
+
+    Unlike ``normalized_rmse``, this deliberately does not center, rotate, or
+    rescale either feature tensor. It is intended for an interface-compatibility
+    question: how large is the new output's raw perturbation in the old output
+    coordinate system?
+    """
+
+    base = np.asarray(reference, dtype=np.float64)
+    current = np.asarray(comparison, dtype=np.float64)
+    if base.shape != current.shape:
+        raise ValueError("relative RMS perturbation requires tensors with identical shapes")
+    if base.size == 0:
+        raise ValueError("relative RMS perturbation requires at least one value")
+    if epsilon <= 0:
+        raise ValueError("epsilon must be positive")
+    perturbation_rms = float(np.sqrt(np.mean(np.square(current - base))))
+    reference_rms = float(np.sqrt(np.mean(np.square(base))))
+    return perturbation_rms / max(reference_rms, epsilon)
+
+
 def symmetric_kl_from_log_probs(
     log_probs_p: np.ndarray, log_probs_q: np.ndarray
 ) -> np.ndarray:

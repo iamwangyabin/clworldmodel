@@ -16,6 +16,7 @@ from component_audit_metrics import (
     normalized_rmse,
     orthogonal_procrustes_residual,
     paired_episode_bootstrap_difference,
+    relative_rms_perturbation,
     symmetric_kl_from_log_probs,
 )
 from summarize_component_audit import MetricSpec, _paired_row
@@ -29,9 +30,34 @@ from decoder_forgetting_audit import (
     METRICS as DECODER_METRICS,
     _assert_baseline_invariance as _assert_decoder_baseline_invariance,
 )
+from encoder_feature_forgetting_audit import (
+    METRICS as ENCODER_FEATURE_METRICS,
+    _assert_baseline_invariance as _assert_encoder_feature_baseline_invariance,
+)
 
 
 class ComponentAuditMetricTests(unittest.TestCase):
+    def test_encoder_feature_metric_contract_uses_direct_perturbation(self) -> None:
+        self.assertEqual(
+            {metric.name for metric in ENCODER_FEATURE_METRICS},
+            {
+                "encoder.feature_relative_rms_perturbation",
+                "encoder.feature_rms_perturbation",
+            },
+        )
+        self.assertTrue(all(metric.group == "encoder" for metric in ENCODER_FEATURE_METRICS))
+        self.assertTrue(all(metric.direction == "lower_is_better" for metric in ENCODER_FEATURE_METRICS))
+        _assert_encoder_feature_baseline_invariance(
+            {metric.name: np.zeros(2, dtype=np.float64) for metric in ENCODER_FEATURE_METRICS}
+        )
+        with self.assertRaises(RuntimeError):
+            _assert_encoder_feature_baseline_invariance(
+                {
+                    "encoder.feature_relative_rms_perturbation": np.asarray([0.0, 1e-3]),
+                    "encoder.feature_rms_perturbation": np.zeros(2, dtype=np.float64),
+                }
+            )
+
     def test_decoder_metric_contract_is_decoder_only(self) -> None:
         self.assertEqual(
             {metric.name for metric in DECODER_METRICS},
@@ -88,6 +114,14 @@ class ComponentAuditMetricTests(unittest.TestCase):
     def test_normalized_rmse_is_zero_for_identical_values(self) -> None:
         values = np.asarray([[1.0, 2.0], [3.0, 4.0]])
         self.assertAlmostEqual(normalized_rmse(values, values), 0.0, places=12)
+
+    def test_relative_rms_perturbation_uses_the_old_raw_feature_scale(self) -> None:
+        reference = np.asarray([[3.0, 4.0]])
+        comparison = np.asarray([[6.0, 8.0]])
+        self.assertAlmostEqual(relative_rms_perturbation(reference, comparison), 1.0)
+
+        with self.assertRaises(ValueError):
+            relative_rms_perturbation(reference, np.asarray([[3.0]]))
 
     def test_symmetric_kl_is_zero_for_identical_policies(self) -> None:
         log_probs = np.log(np.asarray([[0.25, 0.75], [0.5, 0.5]]))
