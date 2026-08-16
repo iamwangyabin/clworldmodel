@@ -44,6 +44,11 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(launch["fifo_slots"], 512)
         self.assertEqual(launch["ltdm_slots"], 512)
         self.assertEqual(launch["replay_buffer_selection"], {"fifo": 0.5, "ltdm": 0.5})
+        replay_storage = launch["replay_storage_budget"]
+        self.assertEqual(replay_storage["dtype"], "float32")
+        self.assertEqual(replay_storage["observation_bytes"], 25_769_803_776)
+        self.assertEqual(replay_storage["allocated_tensor_bytes"], 25_813_843_968)
+        self.assertEqual(replay_storage["actor_comparison_difference_bytes"], 0)
         self.assertEqual(launch["observation_objective"]["name"], "reconstruction")
         self.assertTrue(launch["observation_objective"]["decoder_enabled"])
         self.assertIsNone(launch["r2_dreamer_reference"])
@@ -56,6 +61,8 @@ class TrainingLauncherTests(unittest.TestCase):
 
         command = launch["command"]
         self.assertNotIn("--observation-objective", command)
+        self.assertNotIn("--evaluate-final", command)
+        self.assertFalse(launch["final_evaluation"]["enabled"])
         self.assertEqual(command[command.index("--arrow-replay-ratio") + 1], "50-50")
         self.assertEqual(command[command.index("--log-dir") + 1], str(output_dir.resolve()))
         self.assertEqual(
@@ -90,6 +97,84 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(command[command.index("--r2-barlow-loss-scale") + 1], "0.05")
         self.assertEqual(command[command.index("--r2-redundancy-scale") + 1], "0.0005")
         self.assertEqual(command[command.index("--r2-normalization-eps") + 1], "1e-08")
+
+    def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:
+        launch = self._arrow_dry_run("--actor-network", "relu_kan")
+
+        self.assertEqual(launch["method"], "ARROW-KANActor-50")
+        self.assertEqual(launch["role"], "actor-architecture-ablation")
+        self.assertEqual((launch["fifo_slots"], launch["ltdm_slots"]), (512, 512))
+        self.assertEqual(launch["replay_buffer_selection"], {"fifo": 0.5, "ltdm": 0.5})
+        self.assertEqual(launch["observation_objective"]["name"], "reconstruction")
+
+        actor = launch["actor"]
+        self.assertEqual(actor["network"], "relu_kan")
+        self.assertEqual(actor["critic_network"], "mlp")
+        self.assertEqual(actor["input_features"], 1536)
+        self.assertEqual(actor["recurrent_features"], 512)
+        self.assertEqual(actor["kan_hidden_features"], 64)
+        self.assertEqual(actor["kan_basis_count"], 8)
+        self.assertEqual(actor["kan_input_range"], [0.0, 1.0])
+        self.assertFalse(actor["kan_grid_trainable"])
+        self.assertEqual(actor["trainable_parameters"], 795730)
+        self.assertEqual(
+            launch["project_pythonpath_prepend"], str((ROOT / "src").resolve())
+        )
+
+        command = launch["command"]
+        self.assertEqual(command[command.index("--actor-network") + 1], "relu_kan")
+        self.assertEqual(command[command.index("--arrow-replay-ratio") + 1], "50-50")
+
+    def test_kan_actor_cannot_be_mixed_with_r2_in_one_run(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/run_arrow_ar50_atari.py",
+                "--actor-network",
+                "relu_kan",
+                "--observation-objective",
+                "r2",
+                "--dry-run",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be tested independently", result.stderr)
+
+    def test_two_task_kan_pilot_stops_at_second_boundary(self) -> None:
+        launch = self._arrow_dry_run(
+            "--actor-network", "relu_kan", "--task-prefix-length", "2"
+        )
+
+        self.assertEqual(launch["method"], "ARROW-KANActor-50-T2Pilot")
+        self.assertEqual(launch["role"], "actor-architecture-pilot")
+        self.assertEqual(launch["training_scope"]["task_prefix_length"], 2)
+        self.assertEqual(launch["training_scope"]["epochs"], 180)
+        self.assertEqual(
+            launch["training_scope"]["tasks"],
+            ["ALE/MsPacman-v5", "ALE/Boxing-v5"],
+        )
+        self.assertEqual(
+            launch["analysis_snapshot_semantics"]["task_boundary_epochs"], [89, 179]
+        )
+        self.assertEqual(launch["analysis_snapshot_semantics"]["final_epoch"], 179)
+        self.assertTrue(
+            launch["analysis_snapshot_semantics"][
+                "final_coincides_with_task_boundary"
+            ]
+        )
+        command = launch["command"]
+        self.assertEqual(command[command.index("--epochs") + 1], "180")
+        self.assertIn("--evaluate-final", command)
+        self.assertEqual(command[command.index("--arrow-replay-ratio") + 1], "50-50")
+        self.assertTrue(launch["final_evaluation"]["enabled"])
+        self.assertEqual(launch["final_evaluation"]["rollouts_per_task"], 16)
+        self.assertFalse(launch["final_evaluation"]["enters_replay"])
+        self.assertTrue(
+            launch["final_evaluation"]["reports_raw_and_scaled_returns"]
+        )
 
 
 if __name__ == "__main__":

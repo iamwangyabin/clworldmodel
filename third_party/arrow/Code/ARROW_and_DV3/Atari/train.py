@@ -114,6 +114,45 @@ def _stage_elapsed(start: float, enabled: bool) -> float:
     return _stage_clock(True) - start
 
 
+def _evaluate_policy_tasks(
+    config: Config,
+    wm: WorldModel,
+    aco: Optional[ActorCriticOpt],
+    eval_funcs,
+) -> tuple[list[float], list[float]]:
+    means = []
+    stds = []
+    for env_fns in eval_funcs:
+        mean, std = evaluate(
+            config.n_sync,
+            wm=wm,
+            ac=aco.ac if aco is not None else None,
+            env_fns=env_fns,
+            env_repeat=config.env_repeat,
+            n_rollouts=16,
+        )
+        means.append(mean)
+        stds.append(std)
+    return means, stds
+
+
+def _raw_return_statistics(
+    task_configs, scaled_means: list[float], scaled_stds: list[float]
+) -> tuple[list[float], list[float]]:
+    if not (len(task_configs) == len(scaled_means) == len(scaled_stds)):
+        raise ValueError("Evaluation tasks and statistics must have matching lengths")
+    raw_means = []
+    raw_stds = []
+    for task, scaled_mean, scaled_std in zip(
+        task_configs, scaled_means, scaled_stds
+    ):
+        if task.rew_scale == 0:
+            raise ValueError(f"Task {task.name!r} has zero reward scale")
+        raw_means.append(float(scaled_mean / task.rew_scale))
+        raw_stds.append(float(scaled_std / abs(task.rew_scale)))
+    return raw_means, raw_stds
+
+
 def _task_boundary_metadata(config: Config, epoch: int) -> Optional[dict]:
     if config.esc.env_schedule_type is not SequentialEnvironments:
         return None
@@ -149,6 +188,38 @@ def _parameter_accounting(module: torch.nn.Module) -> dict[str, int]:
         ),
         "parameter_bytes": sum(
             parameter.numel() * parameter.element_size() for parameter in parameters
+        ),
+    }
+
+
+def _module_state_accounting(module: torch.nn.Module) -> dict[str, int]:
+    accounting = _parameter_accounting(module)
+    buffers = list(module.buffers())
+    buffer_values = sum(buffer.numel() for buffer in buffers)
+    buffer_bytes = sum(buffer.numel() * buffer.element_size() for buffer in buffers)
+    return {
+        **accounting,
+        "buffers": buffer_values,
+        "buffer_bytes": buffer_bytes,
+        "parameter_and_buffer_bytes": accounting["parameter_bytes"] + buffer_bytes,
+    }
+
+
+def _actor_critic_parameter_accounting(aco: ActorCriticOpt) -> dict:
+    actor = aco.ac.actor
+    critic = aco.ac.critic
+    if not isinstance(actor, torch.nn.Module) or not isinstance(critic, torch.nn.Module):
+        raise TypeError("Actor and critic must be torch modules for resource accounting")
+    return {
+        "schema_version": 1,
+        "actor_class": type(actor).__name__,
+        "actor": _module_state_accounting(actor),
+        "critic_class": type(critic).__name__,
+        "critic": _module_state_accounting(critic),
+        "actor_critic": _module_state_accounting(aco.ac),
+        "accounting_scope": (
+            "parameters and persistent buffers; excludes gradients, optimizer state, "
+            "and activations"
         ),
     }
 
@@ -258,9 +329,21 @@ if __name__ == "__main__":
         default=None,
         help="Optional world-model observation-objective override.",
     )
+    parser.add_argument(
+        "--actor-network",
+        choices=["mlp", "relu_kan"],
+        default=None,
+        help="Optional actor architecture override; the critic remains unchanged.",
+    )
     parser.add_argument("--r2-barlow-loss-scale", type=float, default=None)
     parser.add_argument("--r2-redundancy-scale", type=float, default=None)
     parser.add_argument("--r2-normalization-eps", type=float, default=None)
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=None,
+        help="Optional explicit training-epoch override for a named pilot protocol.",
+    )
     parser.add_argument("--compile-world-model", action="store_true")
     parser.add_argument("--fused-adam", action="store_true")
     parser.add_argument("--tf32", action="store_true")
@@ -283,6 +366,11 @@ if __name__ == "__main__":
             "or RNG state and are not resumable checkpoints."
         ),
     )
+    parser.add_argument(
+        "--evaluate-final",
+        action="store_true",
+        help="Evaluate the final frozen policy after all configured training epochs.",
+    )
     args = parser.parse_args()
 
     save_nets = False
@@ -304,17 +392,22 @@ if __name__ == "__main__":
         config_overrides["arrow_replay_capacity_ratio"] = args.arrow_replay_ratio
     if args.observation_objective is not None:
         config_overrides["observation_objective"] = args.observation_objective
+    if args.actor_network is not None:
+        config_overrides["actor_network"] = args.actor_network
     if args.r2_barlow_loss_scale is not None:
         config_overrides["r2_barlow_loss_scale"] = args.r2_barlow_loss_scale
     if args.r2_redundancy_scale is not None:
         config_overrides["r2_redundancy_scale"] = args.r2_redundancy_scale
     if args.r2_normalization_eps is not None:
         config_overrides["r2_normalization_eps"] = args.r2_normalization_eps
+    if args.epochs is not None:
+        config_overrides["epochs"] = args.epochs
     config = Config.from_dict(config_overrides)
 
     if config.algorithm == "arrow":
         print(f"ARROW FIFO/LTDM capacity ratio: {config.arrow_replay_capacity_ratio}")
     print(f"World-model observation objective: {config.observation_objective}")
+    print(f"Actor network: {config.actor_network}")
 
     if config.algorithm == "sac":
         exit(0)
@@ -394,6 +487,7 @@ if __name__ == "__main__":
         encoding="utf-8",
     )
     os.replace(temporary_accounting_path, parameter_accounting_path)
+    actor_accounting_path = log_dir / "actor_critic_parameter_accounting.json"
 
     
     total_env_steps = 0        # number of *real* environment interactions so far
@@ -448,20 +542,12 @@ if __name__ == "__main__":
         # Evaluation games
         eval_started = _stage_clock(args.profile_stages)
         if epoch % 10 == 0:
-            eval_results_mean = []
-            eval_results_std = []
-            eval_funcs = envs.eval_funcs()
-            for env_fns in eval_funcs:
-                ev_eps_mean, ev_eps_std = evaluate(
-                    config.n_sync,
-                    wm=wm,
-                    ac=aco.ac if aco is not None else aco,
-                    env_fns=env_fns,
-                    env_repeat=config.env_repeat,
-                    n_rollouts=16,
-                )
-                eval_results_mean.append(ev_eps_mean)
-                eval_results_std.append(ev_eps_std)
+            eval_results_mean, eval_results_std = _evaluate_policy_tasks(
+                config, wm, aco, envs.eval_funcs()
+            )
+            eval_raw_mean, eval_raw_std = _raw_return_statistics(
+                config.esc.env_configs, eval_results_mean, eval_results_std
+            )
             writer.add_scalars(
                 "Perf/eval_rew_eps_mean",
                 {f"{i}": m for i, m in enumerate(eval_results_mean)},
@@ -472,9 +558,21 @@ if __name__ == "__main__":
                 {f"{i}": s for i, s in enumerate(eval_results_std)},
                 global_step,
             )
+            writer.add_scalars(
+                "Perf/eval_raw_return_mean",
+                {f"{i}": mean for i, mean in enumerate(eval_raw_mean)},
+                global_step,
+            )
+            writer.add_scalars(
+                "Perf/eval_raw_return_std",
+                {f"{i}": std for i, std in enumerate(eval_raw_std)},
+                global_step,
+            )
             print("Eval for epoch: ",epoch)
             print(f"Eval means: {eval_results_mean}")
             print(f"Eval stds: {eval_results_std}")
+            print(f"Eval raw means: {eval_raw_mean}")
+            print(f"Eval raw stds: {eval_raw_std}")
 
         eval_seconds = _stage_elapsed(eval_started, args.profile_stages)
 
@@ -559,6 +657,15 @@ if __name__ == "__main__":
                 config.ac_train_sync,
                 dream_steps=16,
                 lr=4e-4,
+                actor_network=config.actor_network,
+                actor_kan_hidden_features=config.actor_kan_hidden_features,
+                actor_kan_grid_size=config.actor_kan_grid_size,
+                actor_kan_spline_order=config.actor_kan_spline_order,
+                actor_kan_input_min=config.actor_kan_input_min,
+                actor_kan_input_max=config.actor_kan_input_max,
+                actor_kan_normalize_recurrent_state=(
+                    config.actor_kan_normalize_recurrent_state
+                ),
             )
         else:
             aco, approx_perf = train_ac_from_wm(
@@ -569,9 +676,27 @@ if __name__ == "__main__":
                 dream_steps=16,
                 aco=aco,
                 lr=1e-4,
+                actor_network=config.actor_network,
+                actor_kan_hidden_features=config.actor_kan_hidden_features,
+                actor_kan_grid_size=config.actor_kan_grid_size,
+                actor_kan_spline_order=config.actor_kan_spline_order,
+                actor_kan_input_min=config.actor_kan_input_min,
+                actor_kan_input_max=config.actor_kan_input_max,
+                actor_kan_normalize_recurrent_state=(
+                    config.actor_kan_normalize_recurrent_state
+                ),
             )
 
         actor_seconds = _stage_elapsed(actor_started, args.profile_stages)
+        if not actor_accounting_path.exists():
+            temporary_actor_accounting_path = actor_accounting_path.with_suffix(
+                ".json.tmp"
+            )
+            temporary_actor_accounting_path.write_text(
+                json.dumps(_actor_critic_parameter_accounting(aco), indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary_actor_accounting_path, actor_accounting_path)
         writer.add_scalar("Perf/approx_perf", approx_perf, global_step)
         _print_cuda_memory(f"epoch_end_{epoch}")
 
@@ -623,5 +748,84 @@ if __name__ == "__main__":
                 f"overhead={max(0.0, epoch_seconds - measured):.3f}s "
                 f"total={epoch_seconds:.3f}s"
             )
+
+    if args.evaluate_final:
+        eval_funcs = envs.eval_funcs()
+        task_configs = config.esc.env_configs
+        if config.esc.env_schedule_type is SequentialEnvironments:
+            swap_sched = config.esc.kwargs["swap_sched"]
+            seen_tasks = min(
+                len(task_configs), (config.epochs + swap_sched - 1) // swap_sched
+            )
+            eval_funcs = eval_funcs[:seen_tasks]
+            task_configs = task_configs[:seen_tasks]
+        final_scaled_means, final_scaled_stds = _evaluate_policy_tasks(
+            config, wm, aco, eval_funcs
+        )
+        final_raw_means, final_raw_stds = _raw_return_statistics(
+            task_configs, final_scaled_means, final_scaled_stds
+        )
+        final_evaluation = {
+            "schema_version": 1,
+            "evaluation_after_completed_epochs": config.epochs,
+            "policy": "stochastic",
+            "rollouts_per_task": 16,
+            "tasks": [
+                {
+                    "task_index": index,
+                    "task_name": task.name,
+                    "reward_scale": task.rew_scale,
+                    "scaled_return_mean": scaled_mean,
+                    "scaled_return_std": scaled_std,
+                    "raw_return_mean": raw_mean,
+                    "raw_return_std": raw_std,
+                }
+                for index, (
+                    task,
+                    scaled_mean,
+                    scaled_std,
+                    raw_mean,
+                    raw_std,
+                ) in enumerate(
+                    zip(
+                        task_configs,
+                        final_scaled_means,
+                        final_scaled_stds,
+                        final_raw_means,
+                        final_raw_stds,
+                    )
+                )
+            ],
+        }
+        final_evaluation_path = log_dir / "final_evaluation.json"
+        temporary_final_evaluation_path = final_evaluation_path.with_suffix(".json.tmp")
+        temporary_final_evaluation_path.write_text(
+            json.dumps(final_evaluation, indent=2) + "\n", encoding="utf-8"
+        )
+        os.replace(temporary_final_evaluation_path, final_evaluation_path)
+        writer.add_scalars(
+            "Perf/final_eval_rew_eps_mean",
+            {f"{i}": mean for i, mean in enumerate(final_scaled_means)},
+            global_step,
+        )
+        writer.add_scalars(
+            "Perf/final_eval_rew_eps_std",
+            {f"{i}": std for i, std in enumerate(final_scaled_stds)},
+            global_step,
+        )
+        writer.add_scalars(
+            "Perf/final_eval_raw_return_mean",
+            {f"{i}": mean for i, mean in enumerate(final_raw_means)},
+            global_step,
+        )
+        writer.add_scalars(
+            "Perf/final_eval_raw_return_std",
+            {f"{i}": std for i, std in enumerate(final_raw_stds)},
+            global_step,
+        )
+        print(f"Final eval scaled means: {final_scaled_means}")
+        print(f"Final eval scaled stds: {final_scaled_stds}")
+        print(f"Final eval raw means: {final_raw_means}")
+        print(f"Final eval raw stds: {final_raw_stds}")
     writer.close()
     _print_cuda_memory("training_end")

@@ -44,12 +44,68 @@ def rew_symlog_to_2hot(x: RewardSymlogT) -> RewardSymlogCatT:
     return res
 
 
-class ActorCritic(nn.Module):
-    def __init__(self, in_dim: int, act_space: int) -> None:
-        super().__init__()
-        self.actor: Callable[[AcStateT], ActionLogT] = nn.Sequential(
+def build_actor(
+    in_dim: int,
+    act_space: int,
+    *,
+    actor_network: str,
+    h_dim: int,
+    kan_hidden_features: int,
+    kan_grid_size: int,
+    kan_spline_order: int,
+    kan_input_min: float,
+    kan_input_max: float,
+    kan_normalize_recurrent_state: bool,
+) -> nn.Module:
+    if actor_network == "mlp":
+        return nn.Sequential(
             *get_mlp_layers(in_dim, act_space, final_activation=None),
             nn.LogSoftmax(-1),
+        )
+    if actor_network == "relu_kan":
+        from clworldmodel.models.relu_kan import ReLUKANActor
+
+        return ReLUKANActor(
+            in_dim,
+            act_space,
+            recurrent_features=h_dim,
+            hidden_features=kan_hidden_features,
+            grid_size=kan_grid_size,
+            spline_order=kan_spline_order,
+            input_min=kan_input_min,
+            input_max=kan_input_max,
+            normalize_recurrent_state=kan_normalize_recurrent_state,
+        )
+    raise ValueError(f"Unknown actor network: {actor_network!r}")
+
+
+class ActorCritic(nn.Module):
+    def __init__(
+        self,
+        in_dim: int,
+        act_space: int,
+        *,
+        actor_network: str = "mlp",
+        h_dim: int = 512,
+        kan_hidden_features: int = 64,
+        kan_grid_size: int = 5,
+        kan_spline_order: int = 3,
+        kan_input_min: float = 0.0,
+        kan_input_max: float = 1.0,
+        kan_normalize_recurrent_state: bool = True,
+    ) -> None:
+        super().__init__()
+        self.actor: Callable[[AcStateT], ActionLogT] = build_actor(
+            in_dim,
+            act_space,
+            actor_network=actor_network,
+            h_dim=h_dim,
+            kan_hidden_features=kan_hidden_features,
+            kan_grid_size=kan_grid_size,
+            kan_spline_order=kan_spline_order,
+            kan_input_min=kan_input_min,
+            kan_input_max=kan_input_max,
+            kan_normalize_recurrent_state=kan_normalize_recurrent_state,
         )
         self.symlog_bins: torch.Tensor
         self.register_buffer(
@@ -189,9 +245,27 @@ def train_ac_from_wm(
     dream_steps: int = 16,
     aco: Optional[ActorCriticOpt] = None,
     lr: float = 3e-5,
+    actor_network: str = "mlp",
+    actor_kan_hidden_features: int = 64,
+    actor_kan_grid_size: int = 5,
+    actor_kan_spline_order: int = 3,
+    actor_kan_input_min: float = 0.0,
+    actor_kan_input_max: float = 1.0,
+    actor_kan_normalize_recurrent_state: bool = True,
 ) -> tuple[ActorCriticOpt, torch.Tensor]:
     if aco is None:
-        ac = ActorCritic(np.prod(wm.ls) + wm.h_dim, wm.a_dim).cuda()
+        ac = ActorCritic(
+            np.prod(wm.ls) + wm.h_dim,
+            wm.a_dim,
+            actor_network=actor_network,
+            h_dim=wm.h_dim,
+            kan_hidden_features=actor_kan_hidden_features,
+            kan_grid_size=actor_kan_grid_size,
+            kan_spline_order=actor_kan_spline_order,
+            kan_input_min=actor_kan_input_min,
+            kan_input_max=actor_kan_input_max,
+            kan_normalize_recurrent_state=actor_kan_normalize_recurrent_state,
+        ).cuda()
         aco = ActorCriticOpt(ac, Adam(ac.parameters(), lr=lr))
     ac, opt = aco
     for g in opt.param_groups:

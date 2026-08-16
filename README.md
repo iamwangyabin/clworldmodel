@@ -7,20 +7,23 @@ distribution-matching (LTDM) replay budget.
 
 ## Current status
 
-The repository contains the maintained baseline stack plus one implementation-
-ready, unrun representation-objective ablation:
+The repository contains the maintained baseline stack plus two implementation-
+ready, unrun method ablations:
 
 - the maintained ARROW source based on a pinned upstream commit;
 - the canonical ARROW-50 Atari launcher;
 - the matched DreamerV3/FIFO Atari control launcher;
 - an opt-in decoder-free R2 representation-objective ablation with ARROW-50
   replay;
+- an opt-in, parameter-matched fixed-grid ReLU-KAN actor with ARROW-50 replay
+  and a named two-task screening protocol;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
 The reusable R2 projector and loss are project-owned components under
-`src/clworldmodel/`. The trainer remains the documented vendored ARROW runtime;
-this is not yet a clean project-owned Dreamer implementation.
+`src/clworldmodel/`, alongside the project-owned ReLU-KAN layers and actor. The
+trainer remains the documented vendored ARROW runtime; this is not yet a clean
+project-owned Dreamer implementation.
 
 ## Setup
 
@@ -114,5 +117,25 @@ This is an unrun representation-objective ablation, not a reproduced R2-Dreamer
 baseline and not evidence of improved retention. See
 `docs/protocols/arrow_r2rep_atari.md` for the exact objective, frozen comparison,
 accounting, and experiment ladder.
+
+## Actor ablation: ARROW-KANActor-50
+
+`ARROW-KANActor-50` keeps the ARROW-50 FIFO/LTDM replay strategy, world model,
+critic, budgets, and curriculum unchanged. It replaces only the
+`1536 -> 512 -> 18` MLP actor with a parameter-matched
+`1536 -> 64 -> 18` fixed-grid ReLU-KAN actor. The first screen covers just
+`MsPacman -> Boxing` and ends after epoch 179:
+
+```bash
+python scripts/run_arrow_ar50_atari.py \
+  --actor-network relu_kan \
+  --task-prefix-length 2 \
+  --seed 0 \
+  --dry-run
+```
+
+This is an unrun actor-architecture pilot, not evidence that KAN prevents
+forgetting. See `docs/protocols/arrow_kan_actor_atari.md` for the exact basis,
+parameter accounting, matched MLP control, two-task metrics, and decision rule.
 
 Project-wide research and engineering constraints are defined in `AGENTS.md`.

@@ -15,6 +15,7 @@ T = TypeVar("T", bound="Serialisable")
 
 ArrowReplayCapacityRatio = Literal["50-50", "25-75", "75-25"]
 ObservationObjective = Literal["reconstruction", "r2"]
+ActorNetwork = Literal["mlp", "relu_kan"]
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -182,6 +183,15 @@ class Config(Serialisable):
     mlp_layers: int = 2
     wall_time_optimisation: bool = False
 
+    actor_network: ActorNetwork = "mlp"
+    actor_kan_hidden_features: int = 64
+    actor_kan_grid_size: int = 5
+    actor_kan_spline_order: int = 3
+    actor_kan_input_min: float = 0.0
+    actor_kan_input_max: float = 1.0
+    actor_kan_trainable_grid: bool = False
+    actor_kan_normalize_recurrent_state: bool = True
+
     observation_objective: ObservationObjective = "reconstruction"
     r2_barlow_loss_scale: float = 0.05
     r2_redundancy_scale: float = 5e-4
@@ -200,6 +210,8 @@ class Config(Serialisable):
         return cls(**data)
 
     def __post_init__(self) -> None:
+        if self.epochs < 1:
+            raise ValueError("epochs must be positive")
         assert self.n_sync * self.gen_seq_len == self.data_n * self.data_t
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
@@ -213,6 +225,35 @@ class Config(Serialisable):
             raise ValueError("r2_redundancy_scale must be non-negative")
         if self.r2_normalization_eps <= 0:
             raise ValueError("r2_normalization_eps must be positive")
+        if self.actor_network not in {"mlp", "relu_kan"}:
+            raise ValueError(f"Unknown actor network: {self.actor_network!r}")
+        if self.actor_kan_hidden_features < 1:
+            raise ValueError("actor_kan_hidden_features must be positive")
+        if self.actor_kan_grid_size < 1:
+            raise ValueError("actor_kan_grid_size must be positive")
+        if self.actor_kan_spline_order < 0:
+            raise ValueError("actor_kan_spline_order must be non-negative")
+        if (
+            self.actor_kan_input_min != 0.0
+            or self.actor_kan_input_max != 1.0
+        ):
+            raise ValueError("The first KAN-Actor protocol requires a [0, 1] grid")
+        if self.actor_kan_trainable_grid:
+            raise ValueError("The first KAN-Actor protocol requires a fixed grid")
+        if not self.actor_kan_normalize_recurrent_state:
+            raise ValueError(
+                "The fixed [0, 1] KAN-Actor grid requires recurrent-state normalization"
+            )
+        if self.actor_network == "relu_kan":
+            basis_count = self.actor_kan_grid_size + self.actor_kan_spline_order
+            if self.actor_kan_hidden_features * basis_count != self.mlp_features:
+                raise ValueError(
+                    "KAN-Actor coefficient matching requires "
+                    "actor_kan_hidden_features * "
+                    "(actor_kan_grid_size + actor_kan_spline_order) == "
+                    f"mlp_features, got {self.actor_kan_hidden_features} * "
+                    f"{basis_count} != {self.mlp_features}"
+                )
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

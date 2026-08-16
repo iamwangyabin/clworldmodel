@@ -45,6 +45,22 @@ documented here, covered by focused parity tests, and followed by regenerating
 8. Persist world-model and observation-head parameter counts and parameter
    bytes in `model_parameter_accounting.json` for both objectives. The artifact
    explicitly excludes gradients, optimizer state, and activations.
+9. Add an opt-in Atari `relu_kan` actor bridge for the named
+   `ARROW-KANActor-50` ablation. The critic and all world-model modules remain
+   unchanged. The bridge calls the independently implemented project-owned
+   fixed-grid ReLU-KAN actor under `src/clworldmodel/`; the default remains the
+   upstream MLP actor. Fixed-formula, tensor-shape, gradient, parameter-budget,
+   config, critic-isolation, and default-MLP parity tests cover the change.
+10. Persist actor, critic, and combined parameter, persistent-buffer, and byte
+    accounting in `actor_critic_parameter_accounting.json` after actor creation.
+    Optimizer state, gradients, and activations are explicitly out of scope.
+11. Add opt-in explicit epoch and final-evaluation controls for named truncated
+    pilots. Final evaluation uses the upstream stochastic-policy semantics,
+    evaluates only tasks seen during a sequential prefix, and never adds its
+    transitions to replay. Persist both optimization-scaled returns and raw
+    game returns recovered from the fixed task reward scales; regular
+    evaluation also logs both units. Omitting the pilot flags preserves
+    upstream duration and training behavior.
 
 ## Known issues at import
 
