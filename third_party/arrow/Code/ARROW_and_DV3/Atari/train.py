@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import socket
 import time
 from datetime import datetime
@@ -412,8 +413,9 @@ if __name__ == "__main__":
     if config.algorithm == "sac":
         exit(0)
     
-    torch.random.manual_seed(config.seed)
+    random.seed(config.seed)
     np.random.seed(config.seed)
+    torch.random.manual_seed(config.seed)
     print("Training with seed: ", config.seed)
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()

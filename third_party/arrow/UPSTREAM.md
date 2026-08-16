@@ -61,6 +61,10 @@ documented here, covered by focused parity tests, and followed by regenerating
     game returns recovered from the fixed task reward scales; regular
     evaluation also logs both units. Omitting the pilot flags preserves
     upstream duration and training behavior.
+12. Seed Python `random` from the resolved run seed because ARROW's mixed replay
+    uses it to select FIFO versus LTDM. NumPy and PyTorch retain the same seed.
+    The launcher records the still-unseeded environment reset path and
+    nondeterministic CUDA setting rather than implying bitwise reproducibility.
 
 ## Known issues at import
 

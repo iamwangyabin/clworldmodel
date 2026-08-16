@@ -199,14 +199,43 @@ def _arrow_replay_storage_budget(config: dict) -> dict:
     }
 
 
-def _cuda_info(python: Path, env: dict[str, str]) -> dict:
-    probe_code = (
-        "import json, torch; "
-        "assert torch.cuda.is_available() and torch.cuda.device_count() >= 1; "
-        "p=torch.cuda.get_device_properties(0); "
-        "print(json.dumps({'device_count': torch.cuda.device_count(), "
-        "'device_name': p.name, 'total_memory_gib': p.total_memory / 1024**3}))"
-    )
+def _runtime_info(python: Path, env: dict[str, str]) -> dict:
+    probe_code = """
+import json
+import os
+import platform
+import sys
+from importlib import metadata
+
+import torch
+
+assert torch.cuda.is_available() and torch.cuda.device_count() >= 1
+properties = torch.cuda.get_device_properties(0)
+packages = (
+    "ale-py",
+    "gymnasium",
+    "numpy",
+    "opencv-python",
+    "sortedcontainers",
+    "tensorboard",
+    "torch",
+    "torchaudio",
+    "torchvision",
+    "tqdm",
+)
+print(json.dumps({
+    "python": sys.version,
+    "platform": platform.platform(),
+    "machine": platform.machine(),
+    "cpu_count": os.cpu_count(),
+    "packages": {name: metadata.version(name) for name in packages},
+    "torch_cuda_build": torch.version.cuda,
+    "cudnn_version": torch.backends.cudnn.version(),
+    "cuda_device_count": torch.cuda.device_count(),
+    "cuda_device_name": properties.name,
+    "cuda_total_memory_bytes": properties.total_memory,
+}))
+"""
     probe = subprocess.run(
         [
             str(python),
@@ -402,6 +431,21 @@ def main() -> int:
         "curriculum": args.curriculum,
         "seed_id": args.seed,
         "seed": config["seed"],
+        "determinism": {
+            "python_random_seed": config["seed"],
+            "numpy_seed": config["seed"],
+            "torch_cpu_cuda_seed": config["seed"],
+            "replay_buffer_selection_rng": "python_random",
+            "replay_within_buffer_rng": "numpy",
+            "environment_reset_seeded": False,
+            "action_space_seeded": False,
+            "torch_deterministic_algorithms": False,
+            "tf32_enabled": True,
+            "known_nondeterminism": [
+                "environment construction and reset do not receive explicit seeds",
+                "CUDA kernels are not forced into deterministic-only mode",
+            ],
+        },
         "fifo_slots": 512,
         "ltdm_slots": 512,
         "sequence_length": 512,
@@ -476,10 +520,10 @@ def main() -> int:
 
     if output_dir.exists():
         raise FileExistsError(f"Refusing to overwrite existing run directory: {output_dir}")
-    cuda = _cuda_info(python, env)
+    runtime_environment = _runtime_info(python, env)
     output_dir.mkdir(parents=True)
     launch["started_at_utc"] = datetime.now(timezone.utc).isoformat()
-    launch["cuda"] = cuda
+    launch["runtime_environment"] = runtime_environment
     _write_json(output_dir / "launch.json", launch)
 
     return_code = _run_and_tee(

@@ -44,6 +44,11 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(launch["fifo_slots"], 512)
         self.assertEqual(launch["ltdm_slots"], 512)
         self.assertEqual(launch["replay_buffer_selection"], {"fifo": 0.5, "ltdm": 0.5})
+        determinism = launch["determinism"]
+        self.assertEqual(determinism["python_random_seed"], 123456789)
+        self.assertEqual(determinism["replay_buffer_selection_rng"], "python_random")
+        self.assertFalse(determinism["environment_reset_seeded"])
+        self.assertTrue(determinism["known_nondeterminism"])
         replay_storage = launch["replay_storage_budget"]
         self.assertEqual(replay_storage["dtype"], "float32")
         self.assertEqual(replay_storage["observation_bytes"], 25_769_803_776)

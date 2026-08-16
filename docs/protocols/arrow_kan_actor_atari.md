@@ -43,6 +43,12 @@ holds 512 Python priority-index entries; their interpreter overhead is not
 included in the tensor total and is identical between actor methods. The launch
 manifest records these values and a zero replay-byte difference.
 
+Python, NumPy, and PyTorch use the frozen run seed, including Python `random`
+for ARROW's FIFO/LTDM buffer choice. The upstream environment constructors and
+resets still do not receive explicit seeds, and CUDA is not restricted to
+deterministic-only kernels. Both limitations are recorded in `launch.json`;
+the T2 result is therefore a stochastic pilot rather than a bitwise-paired run.
+
 Only the actor changes:
 
 ```text
