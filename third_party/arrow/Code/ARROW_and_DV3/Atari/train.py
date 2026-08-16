@@ -5,6 +5,7 @@ import os
 import random
 import socket
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -33,6 +34,34 @@ from generate_trajectory import (
     reinterpret_nt_to_t_n,
 )
 from wm import WorldModel
+
+
+def _environment_seed_streams(
+    seed: int,
+) -> tuple[np.random.Generator, np.random.Generator]:
+    collection_seed, evaluation_seed = np.random.SeedSequence(seed).spawn(2)
+    return np.random.default_rng(collection_seed), np.random.default_rng(evaluation_seed)
+
+
+def _next_environment_seed(seed_rng: np.random.Generator) -> int:
+    return int(seed_rng.integers(0, 2**32, dtype=np.uint64))
+
+
+@contextmanager
+def _preserve_training_rng_state():
+    """Keep stochastic evaluation from changing subsequent training draws."""
+    python_state = random.getstate()
+    numpy_state = np.random.get_state()
+    torch_state = torch.random.get_rng_state()
+    cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    try:
+        yield
+    finally:
+        random.setstate(python_state)
+        np.random.set_state(numpy_state)
+        torch.random.set_rng_state(torch_state)
+        if cuda_states is not None:
+            torch.cuda.set_rng_state_all(cuda_states)
 
 
 def _bytes_to_gib(num_bytes: int) -> float:
@@ -120,20 +149,23 @@ def _evaluate_policy_tasks(
     wm: WorldModel,
     aco: Optional[ActorCriticOpt],
     eval_funcs,
+    environment_seed_rng: np.random.Generator,
 ) -> tuple[list[float], list[float]]:
     means = []
     stds = []
-    for env_fns in eval_funcs:
-        mean, std = evaluate(
-            config.n_sync,
-            wm=wm,
-            ac=aco.ac if aco is not None else None,
-            env_fns=env_fns,
-            env_repeat=config.env_repeat,
-            n_rollouts=16,
-        )
-        means.append(mean)
-        stds.append(std)
+    with _preserve_training_rng_state():
+        for env_fns in eval_funcs:
+            mean, std = evaluate(
+                config.n_sync,
+                wm=wm,
+                ac=aco.ac if aco is not None else None,
+                env_fns=env_fns,
+                env_repeat=config.env_repeat,
+                n_rollouts=16,
+                seed=_next_environment_seed(environment_seed_rng),
+            )
+            means.append(mean)
+            stds.append(std)
     return means, stds
 
 
@@ -416,6 +448,9 @@ if __name__ == "__main__":
     random.seed(config.seed)
     np.random.seed(config.seed)
     torch.random.manual_seed(config.seed)
+    collection_environment_seed_rng, evaluation_environment_seed_rng = (
+        _environment_seed_streams(config.seed)
+    )
     print("Training with seed: ", config.seed)
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
@@ -518,6 +553,7 @@ if __name__ == "__main__":
                     ac=None if random_policy else aco.ac,
                     env_fns=envs.funcs(),
                     env_repeat=config.env_repeat,
+                    seed=_next_environment_seed(collection_environment_seed_rng),
                 ),
                 config.data_t,
                 config.data_n,
@@ -545,7 +581,11 @@ if __name__ == "__main__":
         eval_started = _stage_clock(args.profile_stages)
         if epoch % 10 == 0:
             eval_results_mean, eval_results_std = _evaluate_policy_tasks(
-                config, wm, aco, envs.eval_funcs()
+                config,
+                wm,
+                aco,
+                envs.eval_funcs(),
+                evaluation_environment_seed_rng,
             )
             eval_raw_mean, eval_raw_std = _raw_return_statistics(
                 config.esc.env_configs, eval_results_mean, eval_results_std
@@ -762,7 +802,7 @@ if __name__ == "__main__":
             eval_funcs = eval_funcs[:seen_tasks]
             task_configs = task_configs[:seen_tasks]
         final_scaled_means, final_scaled_stds = _evaluate_policy_tasks(
-            config, wm, aco, eval_funcs
+            config, wm, aco, eval_funcs, evaluation_environment_seed_rng
         )
         final_raw_means, final_raw_stds = _raw_return_statistics(
             task_configs, final_scaled_means, final_scaled_stds

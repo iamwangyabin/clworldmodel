@@ -62,9 +62,11 @@ documented here, covered by focused parity tests, and followed by regenerating
     evaluation also logs both units. Omitting the pilot flags preserves
     upstream duration and training behavior.
 12. Seed Python `random` from the resolved run seed because ARROW's mixed replay
-    uses it to select FIFO versus LTDM. NumPy and PyTorch retain the same seed.
-    The launcher records the still-unseeded environment reset path and
-    nondeterministic CUDA setting rather than implying bitwise reproducibility.
+    uses it to select FIFO versus LTDM. Derive separate owned collection and
+    evaluation seed streams, seed every Atari worker reset and action space,
+    and restore parent Python, NumPy, and PyTorch CPU/CUDA RNG states after
+    evaluation so its stochastic actions cannot alter later training draws.
+    CUDA remains outside deterministic-only mode and is recorded as such.
 
 ## Known issues at import
 

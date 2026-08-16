@@ -44,10 +44,13 @@ included in the tensor total and is identical between actor methods. The launch
 manifest records these values and a zero replay-byte difference.
 
 Python, NumPy, and PyTorch use the frozen run seed, including Python `random`
-for ARROW's FIFO/LTDM buffer choice. The upstream environment constructors and
-resets still do not receive explicit seeds, and CUDA is not restricted to
-deterministic-only kernels. Both limitations are recorded in `launch.json`;
-the T2 result is therefore a stochastic pilot rather than a bitwise-paired run.
+for ARROW's FIFO/LTDM buffer choice. Dedicated collection and evaluation seed
+streams deterministically seed every Atari reset and action space without
+letting evaluation change later training seeds. Evaluation also restores the
+parent Python, NumPy, and PyTorch CPU/CUDA RNG states before training resumes.
+CUDA is not restricted to deterministic-only kernels, so the T2 result remains
+a stochastic pilot rather than a bitwise-identical paired run; this limitation
+is explicit in `launch.json`.
 
 Only the actor changes:
 
