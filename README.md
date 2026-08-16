@@ -43,11 +43,15 @@ curriculum. `50-50` means that both replay capacity and replay-buffer sampling
 are split equally between the short-term FIFO and LTDM buffers. DV3/FIFO is
 retained only as a matched control. See `docs/protocols/arrow_ar50_atari.md`.
 
-On a Linux CUDA machine with Atari ROMs installed, launch the canonical
-original-order, seed-0 ARROW-50 run from the repository root:
+On a Linux CUDA machine with Atari ROMs installed, inspect the canonical
+original-order seed-0 ARROW-50 run, then launch it into a new persistent run
+directory:
 
 ```bash
-python scripts/run_arrow_ar50_atari.py --seed 0
+python scripts/run_arrow_ar50_atari.py --seed 0 --dry-run
+python scripts/run_arrow_ar50_atari.py \
+  --seed 0 \
+  --output-dir /persistent/path/arrow_ar50_original_s0_analysis
 ```
 
 The launcher executes the maintained source under `third_party/arrow`
@@ -61,7 +65,11 @@ python scripts/run_arrow_ar50_atari.py --seed 0 --dry-run
 ```
 
 The launcher pins `--arrow-replay-ratio 50-50`, validates the official replay
-and curriculum parameters, and enables the documented optimized runtime.
+and curriculum parameters, enables the documented optimized runtime, and saves
+portable analysis snapshots at task boundaries and training end. Those
+snapshots support offline checkpoint differencing but are not resumable
+training checkpoints because replay, optimizers, RNG, and schedule state are
+not included.
 
 ## Matched control: DreamerV3/FIFO
 

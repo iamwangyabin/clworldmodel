@@ -2,8 +2,9 @@
 
 ## Status
 
-Primary baseline, with the first GPU reference run in progress. No result is a
-paper reproduction until the complete multi-seed protocol has finished.
+Primary method. A seed-0 analysis repeat preserves task-boundary snapshots;
+no single run is a paper reproduction until the complete multi-seed protocol
+has finished.
 
 ## Method definition
 
@@ -46,6 +47,29 @@ Tasks switch every 90 epochs. Preserve the upstream reward scales, full action
 space, frame repeat of 4, update budgets, evaluation schedule, and seeds.
 
 Published seed IDs map to `123456789`, `1337`, `31337`, `42`, and `987654321`.
+
+The upstream configuration contains 541 epochs so it can evaluate at epoch
+540. Because the sequential schedule advances after each epoch, epoch 540 has
+already returned to the first task for one training epoch. The analysis
+snapshot after completing the sixth task is therefore epoch 539; the launcher
+also preserves the distinct final epoch-540 weights.
+
+## Analysis snapshots
+
+The canonical launcher saves world-model and actor-critic weights after epochs
+89, 179, 269, 359, 449, and 539, plus the final weights after epoch 540. Each
+snapshot contains:
+
+- CPU-portable world-model and actor-critic state dictionaries;
+- resolved configuration;
+- seed, epoch, distinct world-model and actor-critic update counts, raw-frame
+  count, and task metadata;
+- an adjacent SHA-256 checksum.
+
+These are explicitly analysis snapshots, not resumable checkpoints. They omit
+optimizers, replay contents, RNG states, and environment-schedule state. They
+are sufficient for fixed-data checkpoint differencing but must not be used to
+claim equivalent training resume.
 
 ## Target environment
 
@@ -107,8 +131,18 @@ resource measurements from every step.
 From the repository root:
 
 ```bash
-python scripts/run_arrow_ar50_atari.py --seed 0
+python scripts/run_arrow_ar50_atari.py \
+  --seed 0 \
+  --profile-stages \
+  --cpu-threads 12 \
+  --output-dir /persistent/path/arrow_ar50_original_s0_analysis
 ```
+
+The output directory must not already exist. It receives `launch.json`, the
+resolved config and TensorBoard events, `train.log`, `run_status.json`, and the
+`analysis_snapshots/` directory. On VirtAI offline training, place the run
+under the mounted result-output directory such as `/gemini/output`; do not use
+temporary container storage.
 
 On quota-limited hosts, use `--cpu-threads N` to cap OpenMP, MKL, OpenBLAS,
 and NumExpr thread pools. This does not change the interaction or update

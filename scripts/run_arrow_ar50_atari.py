@@ -7,6 +7,7 @@ import os
 import shlex
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from git_provenance import git_state, require_synced_training_git_state
@@ -46,6 +47,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, choices=range(5), default=0)
     parser.add_argument("--curriculum", choices=CURRICULUM_DIRS, default="original")
     parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help=(
+            "Persistent run directory. Defaults to runs/arrow_ar50_<curriculum>_"
+            "s<seed>_analysis under the repository."
+        ),
+    )
+    parser.add_argument(
         "--profile-stages",
         action="store_true",
         help="Print synchronized per-stage timing",
@@ -78,6 +87,8 @@ def _verify_primary_config(config_path: Path, curriculum: str, seed: int) -> dic
         errors.append("algorithm must be arrow")
     if config.get("data_n_max") != 512 or config.get("data_t") != 512:
         errors.append("ARROW-50 requires data_n_max=512 and data_t=512")
+    if config.get("sac_dv3_data_n_max") != 1024:
+        errors.append("ARROW-50 requires a matched 1,024-trajectory total budget")
     replay_types = [item.get("rb_type") for item in config.get("replay_buffers", [])]
     if replay_types != ["FifoReplay", "LongTermReplay"]:
         errors.append("replay buffers must be FIFO followed by LTDM")
@@ -95,21 +106,54 @@ def _verify_primary_config(config_path: Path, curriculum: str, seed: int) -> dic
     return config
 
 
-def _check_cuda(python: Path, env: dict[str, str]) -> None:
+def _cuda_info(python: Path, env: dict[str, str]) -> dict:
+    probe_code = (
+        "import json, torch; "
+        "assert torch.cuda.is_available() and torch.cuda.device_count() >= 1; "
+        "p=torch.cuda.get_device_properties(0); "
+        "print(json.dumps({'device_count': torch.cuda.device_count(), "
+        "'device_name': p.name, 'total_memory_gib': p.total_memory / 1024**3}))"
+    )
     probe = subprocess.run(
         [
             str(python),
             "-c",
-            "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())",
+            probe_code,
         ],
         check=True,
         capture_output=True,
         env=env,
         text=True,
     )
-    available, count = probe.stdout.strip().split()
-    if available != "True" or int(count) < 1:
-        raise RuntimeError("ARROW reference execution requires one CUDA GPU")
+    return json.loads(probe.stdout.strip())
+
+
+def _write_json(path: Path, value: dict) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _run_and_tee(
+    command: list[str], *, cwd: Path, env: dict[str, str], log_path: Path
+) -> int:
+    with log_path.open("w", encoding="utf-8") as log:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            log.write(line)
+            log.flush()
+        return process.wait()
 
 
 def main() -> int:
@@ -120,6 +164,12 @@ def main() -> int:
     python = args.python.resolve()
     config_path = _config_path(args.curriculum, args.seed)
     config = _verify_primary_config(config_path, args.curriculum, args.seed)
+    output_dir = (
+        args.output_dir.resolve()
+        if args.output_dir is not None
+        else ROOT / "runs" / f"arrow_ar50_{args.curriculum}_s{args.seed}_analysis"
+    )
+    snapshot_dir = output_dir / "analysis_snapshots"
     env = os.environ.copy()
     thread_env = {}
     if args.cpu_threads is not None:
@@ -133,13 +183,21 @@ def main() -> int:
         str(config_path),
         "--arrow-replay-ratio",
         "50-50",
+        "--log-dir",
+        str(output_dir),
+        "--analysis-snapshot-dir",
+        str(snapshot_dir),
     ]
     if args.profile_stages:
         command.append("--profile-stages")
     command.extend(("--compile-world-model", "--fused-adam", "--tf32"))
+    swap_sched = config["esc"]["kwargs"]["swap_sched"]
+    boundary_epochs = list(range(swap_sched - 1, config["epochs"], swap_sched))
     launch = {
         "method": "ARROW-50",
+        "role": "primary-method",
         "runtime": "vendored-optimized",
+        "started_at_utc": None,
         "project_git": project_git,
         "profile_stages": args.profile_stages,
         "optimizations": [
@@ -152,12 +210,22 @@ def main() -> int:
         "upstream_commit": UPSTREAM_COMMIT,
         "source": str(ARROW_ROOT),
         "config": str(config_path),
+        "output_dir": str(output_dir),
+        "analysis_snapshot_dir": str(snapshot_dir),
+        "analysis_snapshot_semantics": {
+            "artifact_kind": "analysis_snapshot",
+            "resumable": False,
+            "task_boundary_epochs": boundary_epochs,
+            "final_epoch": config["epochs"] - 1,
+            "omitted_state": ["optimizers", "replay", "RNG", "environment schedule"],
+        },
         "curriculum": args.curriculum,
         "seed_id": args.seed,
         "seed": config["seed"],
         "fifo_slots": 512,
         "ltdm_slots": 512,
         "sequence_length": 512,
+        "replay_buffer_selection": {"fifo": 0.5, "ltdm": 0.5},
         "cpu_threads": args.cpu_threads,
         "environment": thread_env,
         "command": command,
@@ -168,8 +236,28 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    _check_cuda(python, env)
-    subprocess.run(command, cwd=ARROW_ROOT, env=env, check=True)
+    if output_dir.exists():
+        raise FileExistsError(f"Refusing to overwrite existing run directory: {output_dir}")
+    cuda = _cuda_info(python, env)
+    output_dir.mkdir(parents=True)
+    launch["started_at_utc"] = datetime.now(timezone.utc).isoformat()
+    launch["cuda"] = cuda
+    _write_json(output_dir / "launch.json", launch)
+
+    return_code = _run_and_tee(
+        command,
+        cwd=ARROW_ROOT,
+        env=env,
+        log_path=output_dir / "train.log",
+    )
+    status = {
+        "complete": return_code == 0,
+        "return_code": return_code,
+        "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_json(output_dir / "run_status.json", status)
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, command)
     return 0
 
 

@@ -18,6 +18,7 @@
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
 | DreamerV3/FIFO matched-control launcher | 已完成 | `scripts/run_dv3_fifo_atari.py` |
+| ARROW-50 analysis-snapshot launcher | 已完成 | `scripts/run_arrow_ar50_atari.py` |
 | Task-boundary analysis snapshots | 已完成 | epochs 89, 179, 269, 359, 449, 539 |
 | Final analysis snapshot | 已完成 | epoch 540，和第六任务边界分开保存 |
 | Snapshot SHA-256 与原子写盘 | 已完成 | 每个 `.pt` 有相邻 checksum |
