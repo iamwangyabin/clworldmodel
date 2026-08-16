@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import json
 import os
 import socket
 import time
@@ -139,6 +140,38 @@ def _cpu_state_dict(module: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {name: value.detach().cpu() for name, value in module.state_dict().items()}
 
 
+def _parameter_accounting(module: torch.nn.Module) -> dict[str, int]:
+    parameters = list(module.parameters())
+    return {
+        "parameters": sum(parameter.numel() for parameter in parameters),
+        "trainable_parameters": sum(
+            parameter.numel() for parameter in parameters if parameter.requires_grad
+        ),
+        "parameter_bytes": sum(
+            parameter.numel() * parameter.element_size() for parameter in parameters
+        ),
+    }
+
+
+def _world_model_parameter_accounting(wm: WorldModel) -> dict:
+    if wm.observation_objective == "reconstruction":
+        observation_head_name = "decoder"
+        observation_head = wm.decoder
+    else:
+        observation_head_name = "r2_projector"
+        observation_head = wm.r2_projector
+    return {
+        "schema_version": 1,
+        "observation_objective": wm.observation_objective,
+        "world_model": _parameter_accounting(wm),
+        "observation_head_name": observation_head_name,
+        "observation_head": _parameter_accounting(observation_head),
+        "accounting_scope": (
+            "parameters only; excludes gradients, optimizer state, and activations"
+        ),
+    }
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -219,6 +252,15 @@ if __name__ == "__main__":
         default=None,
         help="ARROW: optional FIFO/LTDM capacity split override.",
     )
+    parser.add_argument(
+        "--observation-objective",
+        choices=["reconstruction", "r2"],
+        default=None,
+        help="Optional world-model observation-objective override.",
+    )
+    parser.add_argument("--r2-barlow-loss-scale", type=float, default=None)
+    parser.add_argument("--r2-redundancy-scale", type=float, default=None)
+    parser.add_argument("--r2-normalization-eps", type=float, default=None)
     parser.add_argument("--compile-world-model", action="store_true")
     parser.add_argument("--fused-adam", action="store_true")
     parser.add_argument("--tf32", action="store_true")
@@ -255,13 +297,24 @@ if __name__ == "__main__":
     if args.config is not None:
         config = Config.from_file(Path(args.config))
     else:
-        config = None
+        raise ValueError("--config is required")
 
+    config_overrides = config.to_dict()
     if args.arrow_replay_ratio is not None:
-        config.arrow_replay_capacity_ratio = args.arrow_replay_ratio
+        config_overrides["arrow_replay_capacity_ratio"] = args.arrow_replay_ratio
+    if args.observation_objective is not None:
+        config_overrides["observation_objective"] = args.observation_objective
+    if args.r2_barlow_loss_scale is not None:
+        config_overrides["r2_barlow_loss_scale"] = args.r2_barlow_loss_scale
+    if args.r2_redundancy_scale is not None:
+        config_overrides["r2_redundancy_scale"] = args.r2_redundancy_scale
+    if args.r2_normalization_eps is not None:
+        config_overrides["r2_normalization_eps"] = args.r2_normalization_eps
+    config = Config.from_dict(config_overrides)
 
     if config.algorithm == "arrow":
         print(f"ARROW FIFO/LTDM capacity ratio: {config.arrow_replay_capacity_ratio}")
+    print(f"World-model observation objective: {config.observation_objective}")
 
     if config.algorithm == "sac":
         exit(0)
@@ -281,6 +334,10 @@ if __name__ == "__main__":
         config.mlp_features,
         config.mlp_layers,
         config.wall_time_optimisation,
+        observation_objective=config.observation_objective,
+        r2_barlow_loss_scale=config.r2_barlow_loss_scale,
+        r2_redundancy_scale=config.r2_redundancy_scale,
+        r2_normalization_eps=config.r2_normalization_eps,
     ).cuda()
     opt = Adam(wm.parameters(), lr=config.wm_lr, fused=args.fused_adam)
     compute_world_model_loss = wm.compute_loss
@@ -330,6 +387,13 @@ if __name__ == "__main__":
     writer = SummaryWriter(log_dir=log_dir)
     log_dir = Path(log_dir)
     config.save(log_dir / "config.json")
+    parameter_accounting_path = log_dir / "model_parameter_accounting.json"
+    temporary_accounting_path = parameter_accounting_path.with_suffix(".json.tmp")
+    temporary_accounting_path.write_text(
+        json.dumps(_world_model_parameter_accounting(wm), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary_accounting_path, parameter_accounting_path)
 
     
     total_env_steps = 0        # number of *real* environment interactions so far
@@ -453,7 +517,7 @@ if __name__ == "__main__":
                     for metric_key, metric_value in metrics.items():
                         writer.add_scalar(metric_key, metric_value, global_step)
 
-                    if log_images:
+                    if log_images and config.observation_objective == "reconstruction":
                         original = _obss[:16, 0:2].cuda()
                         writer.add_images(
                             "original", original.swapaxes(0, 1).flatten(0, 1), global_step

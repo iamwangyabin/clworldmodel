@@ -34,6 +34,17 @@ documented here, covered by focused parity tests, and followed by regenerating
    actor-critic weights with checksums at sequential task boundaries and at
    training end. These artifacts are labeled non-resumable and the default
    upstream execution remains unchanged when the options are omitted.
+7. Add an opt-in Atari `r2` observation objective for the named
+   `ARROW-R2Rep-50` ablation. The thin vendored integration removes the decoder,
+   reuses one encoder pass, and calls the project-owned bias-free projector and
+   stop-gradient Barlow Twins objective under `src/clworldmodel/`, based on
+   R2-Dreamer commit `546e4fab8146ea4b14e1d7726bbc1a8a1d50322f`. The
+   default remains pixel reconstruction. Fixed-formula, stop-gradient,
+   precomputed-embedding parity, head-replacement, and training-gradient tests
+   cover the change.
+8. Persist world-model and observation-head parameter counts and parameter
+   bytes in `model_parameter_accounting.json` for both objectives. The artifact
+   explicitly excludes gradients, optimizer state, and activations.
 
 ## Known issues at import
 

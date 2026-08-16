@@ -14,6 +14,7 @@ from replay import FifoReplay, LongTermReplay, MultiTypeReplay, Replay
 T = TypeVar("T", bound="Serialisable")
 
 ArrowReplayCapacityRatio = Literal["50-50", "25-75", "75-25"]
+ObservationObjective = Literal["reconstruction", "r2"]
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -181,6 +182,11 @@ class Config(Serialisable):
     mlp_layers: int = 2
     wall_time_optimisation: bool = False
 
+    observation_objective: ObservationObjective = "reconstruction"
+    r2_barlow_loss_scale: float = 0.05
+    r2_redundancy_scale: float = 5e-4
+    r2_normalization_eps: float = 1e-8
+
     action_space: int = 18
     replay_buffers: list[RbConfig] = field(default_factory=list)
     # ARROW only: split of total capacity 2 * data_n_max between FifoReplay vs LongTermReplay
@@ -197,6 +203,16 @@ class Config(Serialisable):
         assert self.n_sync * self.gen_seq_len == self.data_n * self.data_t
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
+        if self.observation_objective not in {"reconstruction", "r2"}:
+            raise ValueError(
+                f"Unknown observation objective: {self.observation_objective!r}"
+            )
+        if self.r2_barlow_loss_scale <= 0:
+            raise ValueError("r2_barlow_loss_scale must be positive")
+        if self.r2_redundancy_scale < 0:
+            raise ValueError("r2_redundancy_scale must be non-negative")
+        if self.r2_normalization_eps <= 0:
+            raise ValueError("r2_normalization_eps must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
@@ -18,6 +18,7 @@ from vae import Decoder
 
 RewardT = torch.Tensor
 RewardSymlogT = torch.Tensor
+ObservationObjective = Literal["reconstruction", "r2"]
 # RewardT (real): [ N 1 ]
 # RewardSymlogT (symlog(real)): [ N 1 ]
 
@@ -51,19 +52,47 @@ class WorldModel(nn.Module):
         mlp_features: int = 512,
         mlp_layers: int = 2,
         wto: bool = False,
+        observation_objective: ObservationObjective = "reconstruction",
+        r2_barlow_loss_scale: float = 0.05,
+        r2_redundancy_scale: float = 5e-4,
+        r2_normalization_eps: float = 1e-8,
     ) -> None:
         super().__init__()
+        if observation_objective not in {"reconstruction", "r2"}:
+            raise ValueError(f"Unknown observation objective: {observation_objective!r}")
+        if r2_barlow_loss_scale <= 0:
+            raise ValueError("R2 Barlow loss scale must be positive")
+        if r2_redundancy_scale < 0:
+            raise ValueError("R2 redundancy scale must be non-negative")
+        if r2_normalization_eps <= 0:
+            raise ValueError("R2 normalization epsilon must be positive")
+
         self.ls = ls
         self.a_dim = a_dim
         self.h_dim = h_dim
+        self.observation_objective = observation_objective
+        self.r2_barlow_loss_scale = r2_barlow_loss_scale
+        self.r2_redundancy_scale = r2_redundancy_scale
+        self.r2_normalization_eps = r2_normalization_eps
 
         self.rssm = Rssm(img_channels, ls, a_dim, h_dim, cnn_depth, mlp_features, mlp_layers, wto)
 
-        # The decoders use this for input (z, h) -> this here -> decoder
+        # Shared feature consumed by observation, reward, and continuation heads.
         self.zh_transform = ZhToModelState(ls, h_dim)
 
-        # All the decoders
-        self.decoder = Decoder(img_channels, self.zh_transform.out_features, cnn_depth)
+        if observation_objective == "reconstruction":
+            self.decoder = Decoder(img_channels, self.zh_transform.out_features, cnn_depth)
+        else:
+            from clworldmodel.models.r2 import R2BarlowObjective, R2Projector
+
+            self.r2_projector = R2Projector(
+                self.zh_transform.out_features,
+                self.rssm.image_embedder.output_size,
+            )
+            self.r2_objective = R2BarlowObjective(
+                redundancy_scale=r2_redundancy_scale,
+                normalization_eps=r2_normalization_eps,
+            )
         # NOTE: Weight init here may be 0 init
         self.reward_fc = nn.Sequential(
             *get_mlp_layers(
@@ -93,7 +122,14 @@ class WorldModel(nn.Module):
         _, n, _ = actions.shape
         init_z, init_h = self.rssm.initial_state(n)
         # Shift actions and xs, since RSSM takes (prev_action, next_obs)
-        z_posts, z_samples, hiddens = self.rssm(init_z, actions, init_h, xs, resets)
+        embeddings = None
+        if self.observation_objective == "r2":
+            embeddings = self.rssm.embed_observations(xs)
+            z_posts, z_samples, hiddens = self.rssm.observe_embeddings(
+                init_z, actions, init_h, embeddings, resets
+            )
+        else:
+            z_posts, z_samples, hiddens = self.rssm(init_z, actions, init_h, xs, resets)
         z_priors = self.rssm.transition(hiddens)
 
         # Dynamics and representation losses
@@ -113,10 +149,29 @@ class WorldModel(nn.Module):
         zhs: torch.Tensor = self.zh_transform(z_samples, hiddens)  # [ T N X ] (X is arbitrary)
         t, n, x = zhs.shape
         zhs_f12 = zhs.view(-1, x)
-        recon = self.decoder(zhs_f12).view(t, n, *xs.shape[-3:])
-        # Loss shape [ T N C 64 64 ]
-        recon_losses = (recon - xs).square().sum([2, 3, 4])
-        recon_loss = recon_losses.mean()
+        if self.observation_objective == "reconstruction":
+            recon = self.decoder(zhs_f12).view(t, n, *xs.shape[-3:])
+            # Loss shape [ T N C 64 64 ]
+            observation_losses = (recon - xs).square().sum([2, 3, 4])
+            observation_loss = observation_losses.mean()
+            observation_metrics = {
+                "Loss/recon": observation_loss,
+            }
+        else:
+            if embeddings is None:
+                raise RuntimeError("R2 observation objective requires encoder embeddings")
+            projected = self.r2_projector(zhs_f12)
+            barlow_loss, invariance_loss, redundancy_loss = self.r2_objective(
+                projected,
+                embeddings.reshape(-1, embeddings.shape[-1]),
+            )
+            observation_loss = self.r2_barlow_loss_scale * barlow_loss
+            observation_metrics = {
+                "Loss/r2_barlow": barlow_loss,
+                "Loss/r2_barlow_scaled": observation_loss,
+                "Metric/r2_invariance": invariance_loss,
+                "Metric/r2_redundancy": redundancy_loss,
+            }
 
         rews_pred = self.reward_fc(zhs)  # [ T N 1 ]
         rews_loss = (rews_pred - symlog(rews)).square().mean()
@@ -128,15 +183,18 @@ class WorldModel(nn.Module):
             low_kl = rep_losses < 1 + 1e-3
             metrics = {
                 "Loss/kl": z_repr_loss,
-                "Loss/recon": recon_loss,
+                **observation_metrics,
                 "Loss/rew": rews_loss,
                 "Loss/cont": conts_loss,
                 "Metric/neg_cont_mean": masked_mean(conts_pred, conts == 0),
                 "Metric/low_kl": low_kl.float().mean(),
-                "Metric/low_kl_recon_loss": masked_mean(recon_losses, low_kl),
             }
+            if self.observation_objective == "reconstruction":
+                metrics["Metric/low_kl_recon_loss"] = masked_mean(
+                    observation_losses, low_kl
+                )
 
-        return z_repr_loss + recon_loss + rews_loss + conts_loss, metrics
+        return z_repr_loss + observation_loss + rews_loss + conts_loss, metrics
 
 
 class ZhToModelState(nn.Module):

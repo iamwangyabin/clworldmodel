@@ -15,6 +15,10 @@ from git_provenance import git_state, require_synced_training_git_state
 ROOT = Path(__file__).resolve().parents[1]
 ARROW_ROOT = ROOT / "third_party" / "arrow"
 UPSTREAM_COMMIT = "cb05e7d97ed83c3cf6e528960db0da6868e29232"
+R2_DREAMER_COMMIT = "546e4fab8146ea4b14e1d7726bbc1a8a1d50322f"
+R2_BARLOW_LOSS_SCALE = 0.05
+R2_REDUNDANCY_SCALE = 5e-4
+R2_NORMALIZATION_EPS = 1e-8
 CONFIG_NAME = (
     "ALE_MsPacman,ALE_Boxing,ALE_CrazyClimber,ALE_Frostbite,"
     "ALE_Seaquest,ALE_Enduro-s{seed}-arrow.json"
@@ -46,6 +50,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, choices=range(5), default=0)
     parser.add_argument("--curriculum", choices=CURRICULUM_DIRS, default="original")
+    parser.add_argument(
+        "--observation-objective",
+        choices=["reconstruction", "r2"],
+        default="reconstruction",
+        help=(
+            "Use the published pixel-reconstruction objective or the decoder-free "
+            "R2-Dreamer latent Barlow Twins objective"
+        ),
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -89,6 +102,16 @@ def _verify_primary_config(config_path: Path, curriculum: str, seed: int) -> dic
         errors.append("ARROW-50 requires data_n_max=512 and data_t=512")
     if config.get("sac_dv3_data_n_max") != 1024:
         errors.append("ARROW-50 requires a matched 1,024-trajectory total budget")
+    if config.get("observation_objective", "reconstruction") != "reconstruction":
+        errors.append("published ARROW config must use reconstruction before CLI override")
+    r2_defaults = {
+        "r2_barlow_loss_scale": R2_BARLOW_LOSS_SCALE,
+        "r2_redundancy_scale": R2_REDUNDANCY_SCALE,
+        "r2_normalization_eps": R2_NORMALIZATION_EPS,
+    }
+    for key, expected in r2_defaults.items():
+        if key in config and config[key] != expected:
+            errors.append(f"published ARROW config has unexpected {key}={config[key]!r}")
     replay_types = [item.get("rb_type") for item in config.get("replay_buffers", [])]
     if replay_types != ["FifoReplay", "LongTermReplay"]:
         errors.append("replay buffers must be FIFO followed by LTDM")
@@ -164,10 +187,15 @@ def main() -> int:
     python = args.python.resolve()
     config_path = _config_path(args.curriculum, args.seed)
     config = _verify_primary_config(config_path, args.curriculum, args.seed)
+    output_prefix = (
+        "arrow_r2rep_ar50"
+        if args.observation_objective == "r2"
+        else "arrow_ar50"
+    )
     output_dir = (
         args.output_dir.resolve()
         if args.output_dir is not None
-        else ROOT / "runs" / f"arrow_ar50_{args.curriculum}_s{args.seed}_analysis"
+        else ROOT / "runs" / f"{output_prefix}_{args.curriculum}_s{args.seed}_analysis"
     )
     snapshot_dir = output_dir / "analysis_snapshots"
     env = os.environ.copy()
@@ -175,6 +203,13 @@ def main() -> int:
     if args.cpu_threads is not None:
         thread_env = {key: str(args.cpu_threads) for key in THREAD_ENV_KEYS}
         env.update(thread_env)
+    project_pythonpath = None
+    if args.observation_objective == "r2":
+        project_pythonpath = str(ROOT / "src")
+        inherited_pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = os.pathsep.join(
+            part for part in (project_pythonpath, inherited_pythonpath) if part
+        )
 
     command = [
         str(python),
@@ -188,14 +223,28 @@ def main() -> int:
         "--analysis-snapshot-dir",
         str(snapshot_dir),
     ]
+    if args.observation_objective == "r2":
+        command.extend(
+            (
+                "--observation-objective",
+                "r2",
+                "--r2-barlow-loss-scale",
+                str(R2_BARLOW_LOSS_SCALE),
+                "--r2-redundancy-scale",
+                str(R2_REDUNDANCY_SCALE),
+                "--r2-normalization-eps",
+                str(R2_NORMALIZATION_EPS),
+            )
+        )
     if args.profile_stages:
         command.append("--profile-stages")
     command.extend(("--compile-world-model", "--fused-adam", "--tf32"))
     swap_sched = config["esc"]["kwargs"]["swap_sched"]
     boundary_epochs = list(range(swap_sched - 1, config["epochs"], swap_sched))
+    is_r2 = args.observation_objective == "r2"
     launch = {
-        "method": "ARROW-50",
-        "role": "primary-method",
+        "method": "ARROW-R2Rep-50" if is_r2 else "ARROW-50",
+        "role": "representation-objective-ablation" if is_r2 else "primary-method",
         "runtime": "vendored-optimized",
         "started_at_utc": None,
         "project_git": project_git,
@@ -212,6 +261,7 @@ def main() -> int:
         "config": str(config_path),
         "output_dir": str(output_dir),
         "analysis_snapshot_dir": str(snapshot_dir),
+        "model_parameter_accounting": str(output_dir / "model_parameter_accounting.json"),
         "analysis_snapshot_semantics": {
             "artifact_kind": "analysis_snapshot",
             "resumable": False,
@@ -226,12 +276,33 @@ def main() -> int:
         "ltdm_slots": 512,
         "sequence_length": 512,
         "replay_buffer_selection": {"fifo": 0.5, "ltdm": 0.5},
+        "observation_objective": {
+            "name": args.observation_objective,
+            "decoder_enabled": not is_r2,
+            "barlow_loss_scale": R2_BARLOW_LOSS_SCALE if is_r2 else None,
+            "redundancy_scale": R2_REDUNDANCY_SCALE if is_r2 else None,
+            "normalization_eps": R2_NORMALIZATION_EPS if is_r2 else None,
+            "target_gradient": "stopped" if is_r2 else None,
+            "sample_axes": "time*batch" if is_r2 else None,
+        },
+        "r2_dreamer_reference": (
+            {
+                "paper": "https://arxiv.org/abs/2603.18202",
+                "repository": "https://github.com/NM512/r2dreamer",
+                "commit": R2_DREAMER_COMMIT,
+            }
+            if is_r2
+            else None
+        ),
         "cpu_threads": args.cpu_threads,
         "environment": thread_env,
+        "project_pythonpath_prepend": project_pythonpath,
         "command": command,
     }
     print(json.dumps(launch, indent=2))
     rendered_env = [f"{key}={value}" for key, value in thread_env.items()]
+    if project_pythonpath is not None:
+        rendered_env.append(f"PYTHONPATH={env['PYTHONPATH']}")
     print(f"command: {shlex.join([*rendered_env, *command])}")
     if args.dry_run:
         return 0

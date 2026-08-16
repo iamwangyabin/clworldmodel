@@ -43,6 +43,7 @@ from git_provenance import git_state, require_synced_training_git_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PROJECT_SRC = ROOT / "src"
 VENDORED_ATARI = ROOT / "third_party" / "arrow" / "Code" / "ARROW_and_DV3" / "Atari"
 SCHEMA_VERSION = 1
 DEFAULT_HORIZONS = (1, 2, 4, 8, 16)
@@ -124,9 +125,10 @@ def _vendor_modules() -> SimpleNamespace:
     so this explicit, local bootstrap is the narrow compatibility boundary.
     """
 
-    vendor_path = str(VENDORED_ATARI)
-    if vendor_path not in sys.path:
-        sys.path.insert(0, vendor_path)
+    for source_path in (PROJECT_SRC, VENDORED_ATARI):
+        rendered = str(source_path)
+        if rendered not in sys.path:
+            sys.path.insert(0, rendered)
 
     ac = importlib.import_module("ac")
     wm = importlib.import_module("wm")
@@ -236,6 +238,10 @@ def _model_bundle(spec: SnapshotSpec, device_name: str) -> ModelBundle:
         int(config["mlp_features"]),
         int(config["mlp_layers"]),
         bool(config["wall_time_optimisation"]),
+        observation_objective=str(config.get("observation_objective", "reconstruction")),
+        r2_barlow_loss_scale=float(config.get("r2_barlow_loss_scale", 0.05)),
+        r2_redundancy_scale=float(config.get("r2_redundancy_scale", 5e-4)),
+        r2_normalization_eps=float(config.get("r2_normalization_eps", 1e-8)),
     ).to(device)
     world_model.load_state_dict(spec.payload["world_model_state_dict"], strict=True)
     actor_critic = vendor.ActorCritic(
@@ -690,6 +696,12 @@ def _evaluate_one_checkpoint(
     reward_scale: float,
 ) -> dict[str, Any]:
     """Evaluate absolute per-chunk metrics for one snapshot on one frozen dataset."""
+    if not hasattr(model.world_model, "decoder"):
+        raise ValueError(
+            "The full component audit includes reconstruction and visual rollout metrics, "
+            "so it is not defined for decoder-free R2 snapshots. Use the fixed-input "
+            "encoder/RSSM/actor audits for ARROW-R2Rep-50."
+        )
     torch = _torch()
     import torch.nn.functional as functional
 

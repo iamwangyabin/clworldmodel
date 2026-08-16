@@ -154,24 +154,59 @@ class Rssm(nn.Module):
             return torch.stack(z_log_dists), torch.stack(z_samples), torch.stack(hs)
         elif len(prev_a.shape) == 3:
             # Special batched impl
-            t, n, _, _, _ = x.shape
-            embed = self.image_embedder(x.reshape(-1, *x.shape[-3:])).view(t, n, -1)
-            hs = []
-            z_log_dists = []
-            z_samples = []
-            z, h = prev_z, prev_h
-            for e, a, r in zip(embed, prev_a, reset):
-                h = self.recurrent(z * (1 - r).unsqueeze(-1), a, h * (1 - r))
-                z_log_dist = self.representation(e, h)
-                _, z_sample = straight_through_one_hot(
-                    z_log_dist / temperature, stochastic
-                )
-                z = z_sample
-                hs.append(h)
-                z_log_dists.append(z_log_dist)
-                z_samples.append(z_sample)
-            return torch.stack(z_log_dists), torch.stack(z_samples), torch.stack(hs)
+            embeddings = self.embed_observations(x)
+            return self.observe_embeddings(
+                prev_z,
+                prev_a,
+                prev_h,
+                embeddings,
+                reset,
+                stochastic=stochastic,
+                temperature=temperature,
+            )
         raise ValueError
+
+    def embed_observations(self, x: ImageT) -> EmbedT:
+        """Encode a [T, N, C, H, W] observation sequence exactly once."""
+        if len(x.shape) != 5:
+            raise ValueError(
+                "Observation sequences must have shape [T, N, C, H, W], "
+                f"got {tuple(x.shape)}"
+            )
+        t, n = x.shape[:2]
+        return self.image_embedder(x.reshape(-1, *x.shape[-3:])).view(t, n, -1)
+
+    def observe_embeddings(
+        self,
+        prev_z: LatentT,
+        prev_a: ActionT,
+        prev_h: HiddenT,
+        embeddings: EmbedT,
+        reset: ResetT,
+        stochastic: bool = True,
+        temperature: float = 1.0,
+    ) -> tuple[LatentLogDistT, LatentT, HiddenT]:
+        """Run the posterior recurrence from precomputed [T, N, E] embeddings."""
+        if len(prev_a.shape) != 3 or len(embeddings.shape) != 3:
+            raise ValueError("Actions and embeddings must include time and batch dimensions")
+        if prev_a.shape[:2] != embeddings.shape[:2] or reset.shape[:2] != prev_a.shape[:2]:
+            raise ValueError("Actions, embeddings, and resets must share [T, N] dimensions")
+
+        hs = []
+        z_log_dists = []
+        z_samples = []
+        z, h = prev_z, prev_h
+        for e, a, r in zip(embeddings, prev_a, reset):
+            h = self.recurrent(z * (1 - r).unsqueeze(-1), a, h * (1 - r))
+            z_log_dist = self.representation(e, h)
+            _, z_sample = straight_through_one_hot(
+                z_log_dist / temperature, stochastic
+            )
+            z = z_sample
+            hs.append(h)
+            z_log_dists.append(z_log_dist)
+            z_samples.append(z_sample)
+        return torch.stack(z_log_dists), torch.stack(z_samples), torch.stack(hs)
 
     def initial_state(self, n: int = 1) -> tuple[LatentT, HiddenT]:
         device = next(self.parameters()).device

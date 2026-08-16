@@ -7,17 +7,20 @@ distribution-matching (LTDM) replay budget.
 
 ## Current status
 
-The repository is intentionally at the baseline stage. It currently contains:
+The repository contains the maintained baseline stack plus one implementation-
+ready, unrun representation-objective ablation:
 
 - the maintained ARROW source based on a pinned upstream commit;
 - the canonical ARROW-50 Atari launcher;
 - the matched DreamerV3/FIFO Atari control launcher;
+- an opt-in decoder-free R2 representation-objective ablation with ARROW-50
+  replay;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
-There is no project-owned method under `src/` yet. That package will be created
-only when implementation of the new method begins; placeholder toy models are
-deliberately not kept in the repository.
+The reusable R2 projector and loss are project-owned components under
+`src/clworldmodel/`. The trainer remains the documented vendored ARROW runtime;
+this is not yet a clean project-owned Dreamer implementation.
 
 ## Setup
 
@@ -28,6 +31,7 @@ Install the vendored requirements in an isolated environment:
 conda create -n arrow python=3.10 -y
 conda activate arrow
 python -m pip install -r third_party/arrow/requirements.txt
+python -m pip install -e . --no-deps
 python scripts/verify_arrow_environment.py
 ```
 
@@ -91,5 +95,24 @@ not included. See `docs/protocols/dv3_fifo_atari.md` for the frozen protocol
 and artifact semantics. The component-level research questions, diagnostic-set
 rules, interpretation matrix, and planned result tables are defined in
 `docs/protocols/component_forgetting_audit.md`.
+
+## Representation-objective ablation: ARROW-R2Rep-50
+
+`ARROW-R2Rep-50` keeps ARROW-50 replay, budgets, curriculum, RSSM, reward and
+continue heads, and actor-critic fixed. It removes the pixel decoder and trains
+a bias-free latent projector with the R2-Dreamer Barlow Twins objective. Inspect
+the seed-0 command without starting training:
+
+```bash
+python scripts/run_arrow_ar50_atari.py \
+  --observation-objective r2 \
+  --seed 0 \
+  --dry-run
+```
+
+This is an unrun representation-objective ablation, not a reproduced R2-Dreamer
+baseline and not evidence of improved retention. See
+`docs/protocols/arrow_r2rep_atari.md` for the exact objective, frozen comparison,
+accounting, and experiment ladder.
 
 Project-wide research and engineering constraints are defined in `AGENTS.md`.
