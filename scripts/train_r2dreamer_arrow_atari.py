@@ -30,6 +30,8 @@ for path in (PROJECT_SRC, ROOT, VENDORED_ATARI):
         sys.path.insert(0, str(path))
 
 import torch
+import ale_py
+import gymnasium as gym
 from gymnasium.vector import AsyncVectorEnv, AutoresetMode
 from gymnasium.wrappers import AtariPreprocessing
 from torch.utils.tensorboard import SummaryWriter
@@ -102,12 +104,17 @@ def _make_vector_environment(
     env_fns: list[Any], *, action_repeat: int
 ) -> AsyncVectorEnv:
     def wrap(factory: Any) -> Any:
-        return lambda: AtariPreprocessing(
-            factory(),
-            frame_skip=action_repeat,
-            screen_size=64,
-            grayscale_obs=False,
-        )
+        def build() -> Any:
+            # Each async worker needs the ALE namespace before `gym.make`.
+            gym.register_envs(ale_py)
+            return AtariPreprocessing(
+                factory(),
+                frame_skip=action_repeat,
+                screen_size=64,
+                grayscale_obs=False,
+            )
+
+        return build
 
     return AsyncVectorEnv(
         [wrap(factory) for factory in env_fns],
