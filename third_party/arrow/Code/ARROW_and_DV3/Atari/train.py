@@ -364,9 +364,15 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--actor-network",
-        choices=["mlp", "relu_kan", "relu_kan_bounded"],
+        choices=["mlp", "relu_kan", "relu_kan_bounded", "relu_kan_adaptive"],
         default=None,
         help="Optional actor architecture override; the critic remains unchanged.",
+    )
+    parser.add_argument(
+        "--actor-kan-trainable-grid",
+        action="store_true",
+        default=None,
+        help="Enable learned ReLU-KAN basis anchors for relu_kan_adaptive only.",
     )
     parser.add_argument("--r2-barlow-loss-scale", type=float, default=None)
     parser.add_argument("--r2-redundancy-scale", type=float, default=None)
@@ -427,6 +433,8 @@ if __name__ == "__main__":
         config_overrides["observation_objective"] = args.observation_objective
     if args.actor_network is not None:
         config_overrides["actor_network"] = args.actor_network
+    if args.actor_kan_trainable_grid is not None:
+        config_overrides["actor_kan_trainable_grid"] = args.actor_kan_trainable_grid
     if args.r2_barlow_loss_scale is not None:
         config_overrides["r2_barlow_loss_scale"] = args.r2_barlow_loss_scale
     if args.r2_redundancy_scale is not None:

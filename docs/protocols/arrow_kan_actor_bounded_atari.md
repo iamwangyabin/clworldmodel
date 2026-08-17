@@ -2,12 +2,12 @@
 
 ## Status
 
-Completed T1 pilot followed by a user-directed T1 duration extension. This is a
-corrected successor to `ARROW-KANActor-50`, not a continuation of that method
-name. It changes only the interface between the two fixed-grid KAN layers in
-the actor; ARROW
-replay, the world model, critic, curriculum, environment interaction, and
-per-epoch update budgets remain unchanged.
+Completed T1 pilot. A user-directed T1 duration extension was started fresh,
+then deliberately stopped before its final evaluation. This is a corrected
+successor to `ARROW-KANActor-50`, not a continuation of that method name. It
+changes only the interface between the two fixed-grid KAN layers in the actor;
+ARROW replay, the world model, critic, curriculum, environment interaction,
+and per-epoch update budgets remain unchanged.
 
 ## Why a new variant is necessary
 
@@ -27,8 +27,9 @@ hypothesis from a broken fixed-grid interface.
 
 More training steps cannot reliably repair a compact-support layer receiving
 out-of-support values: its basis coefficients receive no gradient on those
-examples. The next experiment fixes that trainability issue before changing
-the interaction or update budget.
+examples. This bounded actor fixes that interface failure. The next requested
+experiment instead makes the support anchors trainable; it has its own named
+protocol in [`arrow_kan_actor_adaptive_atari.md`](arrow_kan_actor_adaptive_atari.md).
 
 ## Method definition
 
@@ -81,12 +82,11 @@ no forgetting claim. The historical MLP value of `2109.375` remains a screening
 reference only because it predates the current seed-isolation fixes; it is not
 a publication-grade paired control.
 
-## T1 180-epoch trainability extension
+## T1 180-epoch trainability extension (stopped)
 
 The user requested exactly double the T1 duration before making a continual
 learning claim. The named `ARROW-KANActorBounded-50-T1-180EpochTrainabilityPilot`
-therefore starts fresh on MsPacman and changes only the following schedule
-budget:
+started fresh on MsPacman and changed only the following schedule budget:
 
 | Item | T1 | T1 180-epoch extension |
 | --- | ---: | ---: |
@@ -96,16 +96,20 @@ budget:
 | Per-epoch interaction and update budgets | unchanged | unchanged |
 | Replay capacities and sampling | unchanged | unchanged |
 
-The launcher writes a resolved run-local config with both `epochs=180` and
+The launcher wrote a resolved run-local config with both `epochs=180` and
 `esc.kwargs.swap_sched=180`. Changing both values is required: changing only
-the total epochs would silently switch to Boxing after epoch 90. This is an
-explicit 2x training-budget trainability extension, not a matched ARROW-50
-comparison and not a retention experiment.
+the total epochs would silently switch to Boxing after epoch 90. The run was
+deliberately stopped by the user after it reached epoch 128, before final
+evaluation. Its last observed regular MsPacman value was `1753.125` raw at
+epoch 120; this is a partial training observation, not a final experiment
+result. The new adaptive-anchor run starts from scratch and does not resume it.
+
+This was an explicit 2x training-budget trainability extension, not a matched
+ARROW-50 comparison and not a retention experiment.
 
 ## Launch
 
-After the implementation commit is clean, pushed, and synchronized on the GPU
-host, launch the duration extension into a fresh persistent directory:
+This historical command describes the stopped fixed-grid extension:
 
 ```bash
 python scripts/run_arrow_ar50_atari.py \
@@ -118,8 +122,9 @@ python scripts/run_arrow_ar50_atari.py \
   --output-dir /persistent/path/arrow_kan_actor_bounded_ar50_t1_e180_s0
 ```
 
-The run manifest records `kan_hidden_adapter=layer_norm_sigmoid`, the 795,858
-actor parameter count, the frozen replay accounting, environment seed streams,
-the resolved 180-epoch task boundary, and final evaluation semantics. This
-result is a trainability extension, not a reproduction or a KAN
-continual-learning conclusion.
+The manifest records `kan_hidden_adapter=layer_norm_sigmoid`, the 795,858 actor
+parameter count, frozen replay accounting, environment seed streams, and the
+resolved 180-epoch task boundary. Its missing final evaluation confirms that
+the stopped process is not a completed result. The active follow-up protocol is
+the trainable-anchor variant in
+[`arrow_kan_actor_adaptive_atari.md`](arrow_kan_actor_adaptive_atari.md).

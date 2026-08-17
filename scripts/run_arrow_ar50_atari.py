@@ -35,13 +35,18 @@ THREAD_ENV_KEYS = (
     "OPENBLAS_NUM_THREADS",
     "NUMEXPR_NUM_THREADS",
 )
-KAN_ACTOR_NETWORKS = frozenset({"relu_kan", "relu_kan_bounded"})
+KAN_ACTOR_NETWORKS = frozenset(
+    {"relu_kan", "relu_kan_bounded", "relu_kan_adaptive"}
+)
 KAN_ACTOR_METADATA = {
     "relu_kan": {
         "method": "ARROW-KANActor-50",
         "output_prefix": "arrow_kan_actor_ar50",
         "hidden_adapter": "none",
         "hidden_adapter_layer_norm_epsilon": None,
+        "grid_trainable": False,
+        "anchor_parameterization": None,
+        "anchor_parameters": 0,
         "trainable_parameters": 795_730,
     },
     "relu_kan_bounded": {
@@ -49,7 +54,20 @@ KAN_ACTOR_METADATA = {
         "output_prefix": "arrow_kan_actor_bounded_ar50",
         "hidden_adapter": "layer_norm_sigmoid",
         "hidden_adapter_layer_norm_epsilon": 1e-3,
+        "grid_trainable": False,
+        "anchor_parameterization": None,
+        "anchor_parameters": 0,
         "trainable_parameters": 795_858,
+    },
+    "relu_kan_adaptive": {
+        "method": "ARROW-KANActorAdaptive-50",
+        "output_prefix": "arrow_kan_actor_adaptive_ar50",
+        "hidden_adapter": "layer_norm_sigmoid",
+        "hidden_adapter_layer_norm_epsilon": 1e-3,
+        "grid_trainable": True,
+        "anchor_parameterization": "per_input_start_softplus_width",
+        "anchor_parameters": 25_600,
+        "trainable_parameters": 821_458,
     },
 }
 
@@ -78,7 +96,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--actor-network",
-        choices=["mlp", "relu_kan", "relu_kan_bounded"],
+        choices=["mlp", "relu_kan", "relu_kan_bounded", "relu_kan_adaptive"],
         default="mlp",
         help="Keep the MLP actor or select one of the named KAN actor variants",
     )
@@ -95,8 +113,8 @@ def _parser() -> argparse.ArgumentParser:
         "--task-duration-epochs",
         type=_positive_int,
         help=(
-            "Extend the one-task bounded-KAN trainability pilot to this many "
-            "epochs. Requires --actor-network relu_kan_bounded and "
+            "Extend a one-task bounded-interface KAN trainability pilot to this many "
+            "epochs. Requires --actor-network relu_kan_bounded or relu_kan_adaptive and "
             "--task-prefix-length 1; the sequential task boundary moves with "
             "the total duration."
         ),
@@ -321,10 +339,10 @@ def main() -> int:
     if args.task_duration_epochs is not None:
         if args.task_prefix_length != 1:
             parser.error("--task-duration-epochs requires --task-prefix-length 1")
-        if args.actor_network != "relu_kan_bounded":
+        if args.actor_network not in {"relu_kan_bounded", "relu_kan_adaptive"}:
             parser.error(
-                "--task-duration-epochs is currently reserved for the "
-                "relu_kan_bounded trainability extension"
+                "--task-duration-epochs requires a bounded-interface KAN actor "
+                "(relu_kan_bounded or relu_kan_adaptive)"
             )
     project_git = (
         git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
@@ -372,14 +390,32 @@ def main() -> int:
         if args.task_prefix_length is None
         else task_duration_epochs * args.task_prefix_length
     )
+    adaptive_kan = args.actor_network == "relu_kan_adaptive"
     resolved_training_config = None
     launch_config_path = config_path
-    if args.task_duration_epochs is not None:
+    config_overrides = {}
+    if adaptive_kan or args.task_duration_epochs is not None:
         resolved_training_config = json.loads(json.dumps(config))
-        resolved_training_config["epochs"] = training_epochs
-        resolved_training_config["esc"]["kwargs"]["swap_sched"] = (
-            task_duration_epochs
-        )
+        if adaptive_kan:
+            resolved_training_config["actor_network"] = args.actor_network
+            resolved_training_config["actor_kan_trainable_grid"] = True
+            config_overrides.update(
+                {
+                    "actor_network": args.actor_network,
+                    "actor_kan_trainable_grid": True,
+                }
+            )
+        if args.task_duration_epochs is not None:
+            resolved_training_config["epochs"] = training_epochs
+            resolved_training_config["esc"]["kwargs"]["swap_sched"] = (
+                task_duration_epochs
+            )
+            config_overrides.update(
+                {
+                    "epochs": training_epochs,
+                    "esc.kwargs.swap_sched": task_duration_epochs,
+                }
+            )
         launch_config_path = output_dir / "resolved_training_config.json"
 
     command = [
@@ -409,6 +445,8 @@ def main() -> int:
         )
     if args.actor_network in KAN_ACTOR_NETWORKS:
         command.extend(("--actor-network", args.actor_network))
+    if adaptive_kan:
+        command.append("--actor-kan-trainable-grid")
     if args.task_prefix_length is not None:
         command.extend(("--epochs", str(training_epochs), "--evaluate-final"))
     if args.profile_stages:
@@ -464,14 +502,7 @@ def main() -> int:
         "resolved_training_config": (
             str(launch_config_path) if resolved_training_config is not None else None
         ),
-        "config_overrides": (
-            {
-                "epochs": training_epochs,
-                "esc.kwargs.swap_sched": task_duration_epochs,
-            }
-            if resolved_training_config is not None
-            else {}
-        ),
+        "config_overrides": config_overrides,
         "output_dir": str(output_dir),
         "analysis_snapshot_dir": str(snapshot_dir),
         "model_parameter_accounting": str(output_dir / "model_parameter_accounting.json"),
@@ -544,7 +575,21 @@ def main() -> int:
             "kan_spline_order": 3 if is_kan_actor else None,
             "kan_basis_count": 8 if is_kan_actor else None,
             "kan_input_range": [0.0, 1.0] if is_kan_actor else None,
-            "kan_grid_trainable": False if is_kan_actor else None,
+            "kan_grid_trainable": (
+                KAN_ACTOR_METADATA[args.actor_network]["grid_trainable"]
+                if is_kan_actor
+                else None
+            ),
+            "kan_anchor_parameterization": (
+                KAN_ACTOR_METADATA[args.actor_network]["anchor_parameterization"]
+                if is_kan_actor
+                else None
+            ),
+            "kan_anchor_parameters": (
+                KAN_ACTOR_METADATA[args.actor_network]["anchor_parameters"]
+                if is_kan_actor
+                else None
+            ),
             "kan_normalize_recurrent_state": True if is_kan_actor else None,
             "kan_hidden_adapter": (
                 KAN_ACTOR_METADATA[args.actor_network]["hidden_adapter"]

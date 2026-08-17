@@ -7,16 +7,17 @@ distribution-matching (LTDM) replay budget.
 
 ## Current status
 
-The repository contains the maintained baseline stack plus two implementation-
-ready, unrun method ablations:
+The repository contains the maintained baseline stack plus named method
+ablations at different stages of evidence:
 
 - the maintained ARROW source based on a pinned upstream commit;
 - the canonical ARROW-50 Atari launcher;
 - the matched DreamerV3/FIFO Atari control launcher;
 - an opt-in decoder-free R2 representation-objective ablation with ARROW-50
   replay;
-- an opt-in, parameter-matched fixed-grid ReLU-KAN actor with a bounded hidden
-  interface and a named trainability pilot;
+- fixed-grid ReLU-KAN actor pilots, including a completed bounded-interface T1
+  trainability result;
+- an opt-in trainable-anchor ReLU-KAN actor for the next fresh T1 screen;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -125,12 +126,17 @@ and is retained only for reproducibility. `ARROW-KANActorBounded-50` keeps the
 ARROW-50 FIFO/LTDM replay strategy, world model, critic, budgets, and
 curriculum unchanged, but inserts a LayerNorm--sigmoid adapter between the two
 fixed-grid KAN layers. Its completed 90-epoch MsPacman trainability pilot
-reached raw return `1597.5`; the next user-directed screen is a fresh,
-explicitly budget-expanded 180-epoch one-task run:
+reached raw return `1597.5`. Its fresh 180-epoch extension was deliberately
+stopped before final evaluation.
+
+The current trainability screen is `ARROW-KANActorAdaptive-50`: it retains the
+bounded interface but makes every per-input ReLU-KAN support start and width
+trainable. It has 821,458 actor parameters, so it is not parameter matched to
+the MLP. The new one-task 180-epoch protocol is:
 
 ```bash
 python scripts/run_arrow_ar50_atari.py \
-  --actor-network relu_kan_bounded \
+  --actor-network relu_kan_adaptive \
   --task-prefix-length 1 \
   --task-duration-epochs 180 \
   --seed 0 \
@@ -138,8 +144,9 @@ python scripts/run_arrow_ar50_atari.py \
 ```
 
 This is a 2x training-budget actor trainability extension, not evidence that
-KAN prevents forgetting. See `docs/protocols/arrow_kan_actor_bounded_atari.md`
-for the fixed-grid diagnosis, exact architecture, parameter accounting, and
-budget semantics.
+KAN prevents forgetting. See
+`docs/protocols/arrow_kan_actor_adaptive_atari.md` for the trainable-anchor
+definition and `docs/protocols/arrow_kan_actor_bounded_atari.md` for the
+fixed-grid history and interface diagnosis.
 
 Project-wide research and engineering constraints are defined in `AGENTS.md`.

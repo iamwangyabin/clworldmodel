@@ -1,4 +1,4 @@
-"""Fixed-grid ReLU-KAN layers for continual world-model experiments.
+"""ReLU-KAN actor layers for continual world-model experiments.
 
 The basis follows Equation 6 of ReLU-KAN (Qiu et al., 2024), implemented
 independently with PyTorch tensor operations. Inputs and outputs use the last
@@ -127,6 +127,143 @@ class FixedGridReLUKAN(nn.Module):
         return inputs
 
 
+class TrainableAnchorReLUKANLayer(nn.Module):
+    """ReLU-KAN layer with a learned support interval per input feature.
+
+    ReLU-KAN defines each compact basis by its start and end points.  This
+    implementation stores an unconstrained start and a softplus-parameterized
+    width, so the support remains ordered while both its position and width can
+    receive gradients.  The initialized basis exactly matches
+    :class:`FixedGridReLUKANLayer` for the same grid settings.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        grid_size: int = 5,
+        spline_order: int = 3,
+        input_min: float = 0.0,
+        input_max: float = 1.0,
+    ) -> None:
+        super().__init__()
+        if in_features < 1 or out_features < 1:
+            raise ValueError("ReLU-KAN feature dimensions must be positive")
+        if grid_size < 1:
+            raise ValueError("ReLU-KAN grid_size must be positive")
+        if spline_order < 0:
+            raise ValueError("ReLU-KAN spline_order must be non-negative")
+        if input_max <= input_min:
+            raise ValueError("ReLU-KAN input_max must be greater than input_min")
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.grid_size = grid_size
+        self.spline_order = spline_order
+        self.basis_count = grid_size + spline_order
+
+        step = (input_max - input_min) / grid_size
+        phase_low = input_min + step * torch.arange(
+            -spline_order, grid_size, dtype=torch.float32
+        )
+        support_width = step * (spline_order + 1)
+        initial_start = phase_low.expand(in_features, -1).clone()
+        initial_width = torch.full_like(initial_start, support_width)
+        self.register_buffer("initial_anchor_start", initial_start)
+        self.register_buffer("initial_anchor_width", initial_width)
+        self.anchor_start = nn.Parameter(initial_start.clone())
+        self.anchor_raw_width = nn.Parameter(self._inverse_softplus(initial_width))
+
+        self.weight = nn.Parameter(
+            torch.empty(out_features, in_features, self.basis_count)
+        )
+        self.bias = nn.Parameter(torch.empty(out_features))
+        self.reset_parameters()
+
+    @staticmethod
+    def _inverse_softplus(values: torch.Tensor) -> torch.Tensor:
+        if torch.any(values <= 0):
+            raise ValueError("ReLU-KAN support widths must be positive")
+        return values + torch.log(-torch.expm1(-values))
+
+    def anchor_widths(self) -> torch.Tensor:
+        """Return the positive learned support widths for every input and basis."""
+        widths = F.softplus(self.anchor_raw_width)
+        return widths.clamp_min(torch.finfo(widths.dtype).eps)
+
+    def anchor_ends(self) -> torch.Tensor:
+        """Return the learned right endpoints of every compact support."""
+        return self.anchor_start + self.anchor_widths()
+
+    def reset_parameters(self) -> None:
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        fan_in = self.in_features * self.basis_count
+        bound = 1 / math.sqrt(fan_in)
+        nn.init.uniform_(self.bias, -bound, bound)
+
+    def basis_activations(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Return learned-support basis values with shape ``[..., in_features, B]``."""
+        if not inputs.is_floating_point():
+            raise TypeError("ReLU-KAN inputs must use a floating-point dtype")
+        if inputs.ndim < 1 or inputs.shape[-1] != self.in_features:
+            raise ValueError(
+                "ReLU-KAN expected the final input dimension to be "
+                f"{self.in_features}, got {tuple(inputs.shape)}"
+            )
+
+        expanded = inputs.unsqueeze(-1)
+        starts = self.anchor_start
+        widths = self.anchor_widths()
+        rising = torch.relu(expanded - starts)
+        falling = torch.relu(starts + widths - expanded)
+        basis_scale = 4.0 / widths.square()
+        return (rising * falling * basis_scale).square()
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        basis = self.basis_activations(inputs)
+        flattened_basis = basis.flatten(-2)
+        flattened_weight = self.weight.flatten(1)
+        return F.linear(flattened_basis, flattened_weight, self.bias)
+
+
+class TrainableAnchorReLUKAN(nn.Module):
+    """Compose trainable-anchor ReLU-KAN layers over feature widths."""
+
+    def __init__(
+        self,
+        widths: Sequence[int],
+        *,
+        grid_size: int = 5,
+        spline_order: int = 3,
+        input_min: float = 0.0,
+        input_max: float = 1.0,
+    ) -> None:
+        super().__init__()
+        if len(widths) < 2:
+            raise ValueError("ReLU-KAN requires at least input and output widths")
+        if any(width < 1 for width in widths):
+            raise ValueError("All ReLU-KAN widths must be positive")
+
+        self.widths = tuple(widths)
+        self.layers = nn.ModuleList(
+            TrainableAnchorReLUKANLayer(
+                in_features,
+                out_features,
+                grid_size=grid_size,
+                spline_order=spline_order,
+                input_min=input_min,
+                input_max=input_max,
+            )
+            for in_features, out_features in zip(widths[:-1], widths[1:])
+        )
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        for layer in self.layers:
+            inputs = layer(inputs)
+        return inputs
+
+
 class ReLUKANActor(nn.Module):
     """Original fixed-grid ReLU-KAN actor for discrete DreamerV3 states.
 
@@ -135,6 +272,8 @@ class ReLUKANActor(nn.Module):
     compatibility and for documenting the failed-grid pilot. New experiments
     should use :class:`BoundedReLUKANActor` instead.
     """
+
+    network_class = FixedGridReLUKAN
 
     def __init__(
         self,
@@ -165,7 +304,7 @@ class ReLUKANActor(nn.Module):
         self.input_min = input_min
         self.input_max = input_max
         self.normalize_recurrent_state = normalize_recurrent_state
-        self.network = FixedGridReLUKAN(
+        self.network = self.network_class(
             (in_features, hidden_features, action_features),
             grid_size=grid_size,
             spline_order=spline_order,
@@ -241,3 +380,14 @@ class BoundedReLUKANActor(ReLUKANActor):
         hidden = self.hidden_adapter(hidden)
         logits = self.network.layers[1](hidden)
         return F.log_softmax(logits, dim=-1)
+
+
+class AdaptiveReLUKANActor(BoundedReLUKANActor):
+    """Bounded ReLU-KAN actor with trainable per-input support anchors.
+
+    The bounded interface is retained so the second KAN layer starts with active
+    bases.  Unlike :class:`BoundedReLUKANActor`, each ReLU-KAN basis learns its
+    start and positive width independently for every input feature.
+    """
+
+    network_class = TrainableAnchorReLUKAN

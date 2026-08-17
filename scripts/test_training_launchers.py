@@ -249,7 +249,63 @@ class TrainingLauncherTests(unittest.TestCase):
             )
         )
 
-    def test_task_duration_extension_requires_bounded_kan_t1(self) -> None:
+    def test_adaptive_kan_t1_extension_records_trainable_anchor_protocol(self) -> None:
+        launch = self._arrow_dry_run(
+            "--actor-network",
+            "relu_kan_adaptive",
+            "--task-prefix-length",
+            "1",
+            "--task-duration-epochs",
+            "180",
+        )
+
+        self.assertEqual(
+            launch["method"], "ARROW-KANActorAdaptive-50-T1-180EpochTrainabilityPilot"
+        )
+        self.assertEqual(launch["role"], "actor-trainability-budget-extension")
+        self.assertEqual(launch["training_scope"]["epochs"], 180)
+        self.assertEqual(launch["training_scope"]["task_duration_epochs"], 180)
+        self.assertEqual(
+            launch["training_scope"]["tasks"], ["ALE/MsPacman-v5"]
+        )
+        self.assertEqual(
+            launch["config_overrides"],
+            {
+                "actor_network": "relu_kan_adaptive",
+                "actor_kan_trainable_grid": True,
+                "epochs": 180,
+                "esc.kwargs.swap_sched": 180,
+            },
+        )
+        self.assertTrue(
+            launch["resolved_training_config"].endswith("resolved_training_config.json")
+        )
+        self.assertEqual(
+            launch["analysis_snapshot_semantics"]["task_boundary_epochs"], [179]
+        )
+
+        actor = launch["actor"]
+        self.assertEqual(actor["network"], "relu_kan_adaptive")
+        self.assertTrue(actor["kan_grid_trainable"])
+        self.assertEqual(
+            actor["kan_anchor_parameterization"], "per_input_start_softplus_width"
+        )
+        self.assertEqual(actor["kan_anchor_parameters"], 25_600)
+        self.assertEqual(actor["trainable_parameters"], 821_458)
+
+        command = launch["command"]
+        self.assertEqual(
+            command[command.index("--actor-network") + 1], "relu_kan_adaptive"
+        )
+        self.assertIn("--actor-kan-trainable-grid", command)
+        self.assertEqual(command[command.index("--epochs") + 1], "180")
+        self.assertTrue(
+            command[command.index("--config") + 1].endswith(
+                "resolved_training_config.json"
+            )
+        )
+
+    def test_task_duration_extension_requires_bounded_interface_kan_t1(self) -> None:
         result = subprocess.run(
             [
                 sys.executable,

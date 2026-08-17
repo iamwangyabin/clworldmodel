@@ -74,6 +74,15 @@ documented here, covered by focused parity tests, and followed by regenerating
     exposed an out-of-support, inactive-basis failure. The default MLP remains
     unchanged; fixed-grid support and gradient-reachability tests cover the new
     bridge.
+14. Add opt-in `relu_kan_adaptive` for the separately named trainable-anchor
+    ReLU-KAN actor protocol. The thin vendored bridge accepts the new validated
+    config and CLI flag while the project-owned actor keeps the bounded
+    LayerNorm--sigmoid interface and learns every per-input, per-basis support
+    start and positive width. Widths use `softplus(raw_width)` rather than
+    unconstrained endpoints so the basis normalization cannot become singular.
+    Fixed-grid initialization, support ordering, anchor gradients, actor
+    interface, parameter accounting, config validation, and launcher contracts
+    cover the intentional deviation. The default MLP remains unchanged.
 
 ## Known issues at import
 
