@@ -59,6 +59,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--profile-stages", action="store_true")
     parser.add_argument("--analysis-snapshot-dir", type=Path)
+    parser.add_argument(
+        "--launcher-created-log-dir",
+        action="store_true",
+        help="Allow the fresh directory pre-created by the provenance launcher only.",
+    )
     return parser
 
 
@@ -314,8 +319,19 @@ def main() -> int:
 
     log_dir = args.log_dir.resolve()
     if log_dir.exists():
-        raise FileExistsError(f"Refusing to overwrite existing run directory: {log_dir}")
-    log_dir.mkdir(parents=True)
+        if not args.launcher_created_log_dir:
+            raise FileExistsError(f"Refusing to overwrite existing run directory: {log_dir}")
+        allowed_entries = {"launch.json", "train.log"}
+        unexpected = sorted(
+            path.name for path in log_dir.iterdir() if path.name not in allowed_entries
+        )
+        if unexpected:
+            raise FileExistsError(
+                "Refusing a launcher-created directory with existing run artifacts: "
+                f"{log_dir} contains {unexpected}"
+            )
+    else:
+        log_dir.mkdir(parents=True)
     _write_json(log_dir / "config.json", arrow_config.to_dict())
     _write_json(log_dir / "r2dreamer_config.json", r2_config.to_dict())
 

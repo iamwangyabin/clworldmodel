@@ -146,6 +146,7 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(budget["r2_samples_per_epoch"], 2_097_152)
 
         command = launch["command"]
+        self.assertIn("--launcher-created-log-dir", command)
         self.assertEqual(command[command.index("--task-count") + 1], "1")
         self.assertEqual(command[command.index("--epochs") + 1], "7")
         self.assertEqual(command[command.index("--native-train-ratio") + 1], "128")

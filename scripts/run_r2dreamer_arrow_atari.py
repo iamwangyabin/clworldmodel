@@ -241,6 +241,7 @@ def main() -> int:
         str(config_path),
         "--log-dir",
         str(output_dir),
+        "--launcher-created-log-dir",
         "--task-count",
         str(budget["task_count"]),
         "--epochs",
