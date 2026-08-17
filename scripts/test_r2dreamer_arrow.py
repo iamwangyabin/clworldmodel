@@ -68,8 +68,6 @@ class R2DreamerConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown R2-Dreamer"):
             R2DreamerConfig.from_dict({"batch_length": 64, "unknown": 1})
 
-
-
 @unittest.skipIf(torch is None, "requires the pinned PyTorch experiment environment")
 class AtariEnvironmentRegistrationTests(unittest.TestCase):
     def test_vector_worker_registers_ale_before_making_environment(self) -> None:
