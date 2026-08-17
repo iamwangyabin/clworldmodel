@@ -148,6 +148,29 @@ class CollectedTrajectories:
     environment_decisions: int
 
 
+def _pack_worker_streams_for_arrow(
+    value: torch.Tensor,
+    *,
+    sequence_length: int,
+    sequence_count: int,
+) -> torch.Tensor:
+    """Split each worker stream into ARROW's fixed `[T, N, ...]` trajectories."""
+    source_steps, worker_count = value.shape[:2]
+    if source_steps % sequence_length:
+        raise ValueError(
+            "worker trajectory length must be divisible by the ARROW replay sequence length"
+        )
+    chunks_per_worker = source_steps // sequence_length
+    if worker_count * chunks_per_worker != sequence_count:
+        raise ValueError(
+            "collected worker streams do not match the configured ARROW replay sequence count"
+        )
+    packed = value.swapaxes(0, 1).reshape(
+        worker_count, chunks_per_worker, sequence_length, *value.shape[2:]
+    )
+    return packed.reshape(sequence_count, sequence_length, *value.shape[2:]).swapaxes(0, 1)
+
+
 @torch.no_grad()
 def _collect_trajectories(
     agent: R2DreamerAgent,
@@ -155,6 +178,8 @@ def _collect_trajectories(
     *,
     action_repeat: int,
     trajectory_steps: int,
+    replay_sequence_length: int,
+    replay_sequence_count: int,
     seed: int,
 ) -> CollectedTrajectories:
     """Collect ARROW-format transition blocks with R2's action alignment.
@@ -168,6 +193,8 @@ def _collect_trajectories(
     n_sync = len(env_fns)
     if trajectory_steps % n_sync:
         raise ValueError("trajectory_steps must be divisible by the environment count")
+    if trajectory_steps != replay_sequence_length * replay_sequence_count:
+        raise ValueError("trajectory budget does not match the ARROW replay shape")
     steps_per_env = trajectory_steps // n_sync
     rng = np.random.default_rng(seed)
     with _vector_environment(env_fns, action_repeat=action_repeat) as environment:
@@ -216,14 +243,46 @@ def _collect_trajectories(
             is_first = next_is_first
             previous_rewards = rewards.astype(np.float32)
     return CollectedTrajectories(
-        actions=torch.stack(actions_history),
-        observations=torch.stack(observations_history),
-        rewards=torch.stack(rewards_history),
-        continues=torch.stack(continues_history),
-        resets=torch.stack(resets_history),
-        is_last=torch.stack(last_history),
-        stoch_states=torch.stack(stoch_history),
-        deter_states=torch.stack(deter_history),
+        actions=_pack_worker_streams_for_arrow(
+            torch.stack(actions_history),
+            sequence_length=replay_sequence_length,
+            sequence_count=replay_sequence_count,
+        ),
+        observations=_pack_worker_streams_for_arrow(
+            torch.stack(observations_history),
+            sequence_length=replay_sequence_length,
+            sequence_count=replay_sequence_count,
+        ),
+        rewards=_pack_worker_streams_for_arrow(
+            torch.stack(rewards_history),
+            sequence_length=replay_sequence_length,
+            sequence_count=replay_sequence_count,
+        ),
+        continues=_pack_worker_streams_for_arrow(
+            torch.stack(continues_history),
+            sequence_length=replay_sequence_length,
+            sequence_count=replay_sequence_count,
+        ),
+        resets=_pack_worker_streams_for_arrow(
+            torch.stack(resets_history),
+            sequence_length=replay_sequence_length,
+            sequence_count=replay_sequence_count,
+        ),
+        is_last=_pack_worker_streams_for_arrow(
+            torch.stack(last_history),
+            sequence_length=replay_sequence_length,
+            sequence_count=replay_sequence_count,
+        ),
+        stoch_states=_pack_worker_streams_for_arrow(
+            torch.stack(stoch_history),
+            sequence_length=replay_sequence_length,
+            sequence_count=replay_sequence_count,
+        ),
+        deter_states=_pack_worker_streams_for_arrow(
+            torch.stack(deter_history),
+            sequence_length=replay_sequence_length,
+            sequence_count=replay_sequence_count,
+        ),
         environment_decisions=environment_decisions,
     )
 
@@ -369,6 +428,8 @@ def main() -> int:
                 current_env_fns,
                 action_repeat=arrow_config.env_repeat,
                 trajectory_steps=arrow_config.n_sync * arrow_config.gen_seq_len,
+                replay_sequence_length=arrow_config.data_t,
+                replay_sequence_count=arrow_config.data_n,
                 seed=arrow_config.seed + epoch,
             )
             replay_adapter.add(

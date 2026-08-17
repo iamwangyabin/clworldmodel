@@ -93,6 +93,25 @@ class AtariEnvironmentRegistrationTests(unittest.TestCase):
 
 
 @unittest.skipIf(torch is None, "requires the pinned PyTorch experiment environment")
+class AtariReplayPackingTests(unittest.TestCase):
+    def test_worker_streams_preserve_temporal_order_in_arrow_slots(self) -> None:
+        from scripts import train_r2dreamer_arrow_atari as trainer
+
+        streams = torch.arange(8).reshape(4, 2, 1)
+        packed = trainer._pack_worker_streams_for_arrow(
+            streams,
+            sequence_length=2,
+            sequence_count=4,
+        )
+
+        self.assertEqual(tuple(packed.shape), (2, 4, 1))
+        torch.testing.assert_close(
+            packed.squeeze(-1),
+            torch.tensor([[0, 4, 1, 5], [2, 6, 3, 7]]),
+        )
+
+
+@unittest.skipIf(torch is None, "requires the pinned PyTorch experiment environment")
 class R2DreamerArrowIntegrationTests(unittest.TestCase):
     def test_arrow_adapter_shifts_action_once_and_refreshes_latent_sidecar(self) -> None:
         config = _tiny_config()
