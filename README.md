@@ -124,20 +124,22 @@ The direct `ARROW-KANActor-50` pilot exposed an out-of-support second KAN layer
 and is retained only for reproducibility. `ARROW-KANActorBounded-50` keeps the
 ARROW-50 FIFO/LTDM replay strategy, world model, critic, budgets, and
 curriculum unchanged, but inserts a LayerNorm--sigmoid adapter between the two
-fixed-grid KAN layers. Its first screen is a 90-epoch MsPacman trainability
-pilot:
+fixed-grid KAN layers. Its completed 90-epoch MsPacman trainability pilot
+reached raw return `1597.5`; the next user-directed screen is a fresh,
+explicitly budget-expanded 180-epoch one-task run:
 
 ```bash
 python scripts/run_arrow_ar50_atari.py \
   --actor-network relu_kan_bounded \
   --task-prefix-length 1 \
+  --task-duration-epochs 180 \
   --seed 0 \
   --dry-run
 ```
 
-This is an unrun actor trainability pilot, not evidence that KAN prevents
-forgetting. See `docs/protocols/arrow_kan_actor_bounded_atari.md` for the
-fixed-grid diagnosis, exact architecture, parameter accounting, and decision
-rule.
+This is a 2x training-budget actor trainability extension, not evidence that
+KAN prevents forgetting. See `docs/protocols/arrow_kan_actor_bounded_atari.md`
+for the fixed-grid diagnosis, exact architecture, parameter accounting, and
+budget semantics.
 
 Project-wide research and engineering constraints are defined in `AGENTS.md`.

@@ -2,9 +2,10 @@
 
 ## Status
 
-Implementation-ready, unrun trainability pilot. This is a corrected successor
-to `ARROW-KANActor-50`, not a continuation of that method name. It changes
-only the interface between the two fixed-grid KAN layers in the actor; ARROW
+Completed T1 pilot followed by a user-directed T1 duration extension. This is a
+corrected successor to `ARROW-KANActor-50`, not a continuation of that method
+name. It changes only the interface between the two fixed-grid KAN layers in
+the actor; ARROW
 replay, the world model, critic, curriculum, environment interaction, and
 per-epoch update budgets remain unchanged.
 
@@ -73,30 +74,52 @@ LTDM trajectories, sampled with probability 0.5 each. It retains the original
 updates, optimizer, reward scaling, and 16-rollout stochastic final evaluation.
 It does not claim that a single-task run tests forgetting.
 
-At the end of T1, inspect the raw MsPacman curve and final return before
-changing a training budget. The historical MLP value of `2109.375` is useful as
-a screening reference only because it predates the current seed-isolation
-fixes; it is not a publication-grade paired control. If the corrected actor
-has a healthy acquisition curve, the next run is the named two-task T2 pilot.
-If it remains weak despite active bases, tune actor optimization in a separate
-named pilot rather than silently lengthening all budgets.
+The completed seed-0 T1 pilot reached a final MsPacman raw return of `1597.5`
+with a raw standard deviation of `397.327` over 16 stochastic evaluation
+rollouts. This is a trainability result only: it has no Boxing result and makes
+no forgetting claim. The historical MLP value of `2109.375` remains a screening
+reference only because it predates the current seed-isolation fixes; it is not
+a publication-grade paired control.
+
+## T1 180-epoch trainability extension
+
+The user requested exactly double the T1 duration before making a continual
+learning claim. The named `ARROW-KANActorBounded-50-T1-180EpochTrainabilityPilot`
+therefore starts fresh on MsPacman and changes only the following schedule
+budget:
+
+| Item | T1 | T1 180-epoch extension |
+| --- | ---: | ---: |
+| MsPacman epochs | 90 | 180 |
+| Sequential task boundary | 90 | 180 |
+| Tasks trained | 1 | 1 |
+| Per-epoch interaction and update budgets | unchanged | unchanged |
+| Replay capacities and sampling | unchanged | unchanged |
+
+The launcher writes a resolved run-local config with both `epochs=180` and
+`esc.kwargs.swap_sched=180`. Changing both values is required: changing only
+the total epochs would silently switch to Boxing after epoch 90. This is an
+explicit 2x training-budget trainability extension, not a matched ARROW-50
+comparison and not a retention experiment.
 
 ## Launch
 
 After the implementation commit is clean, pushed, and synchronized on the GPU
-host, launch the one-task pilot into a fresh persistent directory:
+host, launch the duration extension into a fresh persistent directory:
 
 ```bash
 python scripts/run_arrow_ar50_atari.py \
   --actor-network relu_kan_bounded \
   --task-prefix-length 1 \
+  --task-duration-epochs 180 \
   --seed 0 \
   --profile-stages \
   --cpu-threads 12 \
-  --output-dir /persistent/path/arrow_kan_actor_bounded_ar50_t1_s0
+  --output-dir /persistent/path/arrow_kan_actor_bounded_ar50_t1_e180_s0
 ```
 
 The run manifest records `kan_hidden_adapter=layer_norm_sigmoid`, the 795,858
 actor parameter count, the frozen replay accounting, environment seed streams,
-and final evaluation semantics. This result is a trainability pilot, not a
-reproduction or a KAN continual-learning conclusion.
+the resolved 180-epoch task boundary, and final evaluation semantics. This
+result is a trainability extension, not a reproduction or a KAN
+continual-learning conclusion.

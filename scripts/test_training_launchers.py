@@ -208,6 +208,68 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(command[command.index("--epochs") + 1], "90")
         self.assertIn("--evaluate-final", command)
 
+    def test_bounded_kan_t1_extension_moves_the_only_task_boundary(self) -> None:
+        launch = self._arrow_dry_run(
+            "--actor-network",
+            "relu_kan_bounded",
+            "--task-prefix-length",
+            "1",
+            "--task-duration-epochs",
+            "180",
+        )
+
+        self.assertEqual(
+            launch["method"], "ARROW-KANActorBounded-50-T1-180EpochTrainabilityPilot"
+        )
+        self.assertEqual(launch["role"], "actor-trainability-budget-extension")
+        scope = launch["training_scope"]
+        self.assertEqual(scope["task_prefix_length"], 1)
+        self.assertEqual(scope["epochs"], 180)
+        self.assertEqual(scope["task_duration_epochs"], 180)
+        self.assertEqual(scope["baseline_task_duration_epochs"], 90)
+        self.assertEqual(scope["task_duration_epoch_override"], 180)
+        self.assertEqual(scope["tasks"], ["ALE/MsPacman-v5"])
+        self.assertEqual(
+            launch["config_overrides"],
+            {"epochs": 180, "esc.kwargs.swap_sched": 180},
+        )
+        self.assertTrue(
+            launch["resolved_training_config"].endswith("resolved_training_config.json")
+        )
+        self.assertEqual(
+            launch["analysis_snapshot_semantics"]["task_boundary_epochs"], [179]
+        )
+        self.assertEqual(launch["analysis_snapshot_semantics"]["final_epoch"], 179)
+
+        command = launch["command"]
+        self.assertEqual(command[command.index("--epochs") + 1], "180")
+        self.assertTrue(
+            command[command.index("--config") + 1].endswith(
+                "resolved_training_config.json"
+            )
+        )
+
+    def test_task_duration_extension_requires_bounded_kan_t1(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/run_arrow_ar50_atari.py",
+                "--actor-network",
+                "relu_kan_bounded",
+                "--task-prefix-length",
+                "2",
+                "--task-duration-epochs",
+                "180",
+                "--dry-run",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires --task-prefix-length 1", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

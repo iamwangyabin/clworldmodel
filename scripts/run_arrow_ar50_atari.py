@@ -92,6 +92,16 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--task-duration-epochs",
+        type=_positive_int,
+        help=(
+            "Extend the one-task bounded-KAN trainability pilot to this many "
+            "epochs. Requires --actor-network relu_kan_bounded and "
+            "--task-prefix-length 1; the sequential task boundary moves with "
+            "the total duration."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         help=(
@@ -308,6 +318,14 @@ def main() -> int:
         and args.observation_objective != "reconstruction"
     ):
         parser.error("Task-prefix pilots must be tested independently from the R2 ablation")
+    if args.task_duration_epochs is not None:
+        if args.task_prefix_length != 1:
+            parser.error("--task-duration-epochs requires --task-prefix-length 1")
+        if args.actor_network != "relu_kan_bounded":
+            parser.error(
+                "--task-duration-epochs is currently reserved for the "
+                "relu_kan_bounded trainability extension"
+            )
     project_git = (
         git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
     )
@@ -322,6 +340,8 @@ def main() -> int:
         output_prefix = "arrow_ar50"
     if args.task_prefix_length is not None:
         output_prefix += f"_t{args.task_prefix_length}_pilot"
+    if args.task_duration_epochs is not None:
+        output_prefix += f"_e{args.task_duration_epochs}"
     output_dir = (
         args.output_dir.resolve()
         if args.output_dir is not None
@@ -341,11 +361,32 @@ def main() -> int:
             part for part in (project_pythonpath, inherited_pythonpath) if part
         )
 
+    swap_sched = config["esc"]["kwargs"]["swap_sched"]
+    task_duration_epochs = args.task_duration_epochs or swap_sched
+    if args.task_duration_epochs is not None and task_duration_epochs <= swap_sched:
+        parser.error(
+            "--task-duration-epochs must exceed the frozen 90-epoch task duration"
+        )
+    training_epochs = (
+        config["epochs"]
+        if args.task_prefix_length is None
+        else task_duration_epochs * args.task_prefix_length
+    )
+    resolved_training_config = None
+    launch_config_path = config_path
+    if args.task_duration_epochs is not None:
+        resolved_training_config = json.loads(json.dumps(config))
+        resolved_training_config["epochs"] = training_epochs
+        resolved_training_config["esc"]["kwargs"]["swap_sched"] = (
+            task_duration_epochs
+        )
+        launch_config_path = output_dir / "resolved_training_config.json"
+
     command = [
         str(python),
         "Code/ARROW_and_DV3/Atari/train.py",
         "--config",
-        str(config_path),
+        str(launch_config_path),
         "--arrow-replay-ratio",
         "50-50",
         "--log-dir",
@@ -368,18 +409,14 @@ def main() -> int:
         )
     if args.actor_network in KAN_ACTOR_NETWORKS:
         command.extend(("--actor-network", args.actor_network))
-    swap_sched = config["esc"]["kwargs"]["swap_sched"]
-    training_epochs = (
-        config["epochs"]
-        if args.task_prefix_length is None
-        else swap_sched * args.task_prefix_length
-    )
     if args.task_prefix_length is not None:
         command.extend(("--epochs", str(training_epochs), "--evaluate-final"))
     if args.profile_stages:
         command.append("--profile-stages")
     command.extend(("--compile-world-model", "--fused-adam", "--tf32"))
-    boundary_epochs = list(range(swap_sched - 1, training_epochs, swap_sched))
+    boundary_epochs = list(
+        range(task_duration_epochs - 1, training_epochs, task_duration_epochs)
+    )
     is_r2 = args.observation_objective == "r2"
     is_kan_actor = args.actor_network in KAN_ACTOR_NETWORKS
     if is_kan_actor:
@@ -393,8 +430,12 @@ def main() -> int:
         role = "primary-method"
     if args.task_prefix_length is not None:
         if args.task_prefix_length == 1 and is_kan_actor:
-            method += "-T1TrainabilityPilot"
-            role = "actor-trainability-pilot"
+            if args.task_duration_epochs is None:
+                method += "-T1TrainabilityPilot"
+                role = "actor-trainability-pilot"
+            else:
+                method += f"-T1-{task_duration_epochs}EpochTrainabilityPilot"
+                role = "actor-trainability-budget-extension"
         else:
             method += f"-T{args.task_prefix_length}Pilot"
             role = (
@@ -418,7 +459,19 @@ def main() -> int:
         ],
         "upstream_commit": UPSTREAM_COMMIT,
         "source": str(ARROW_ROOT),
-        "config": str(config_path),
+        "config": str(launch_config_path),
+        "source_config": str(config_path),
+        "resolved_training_config": (
+            str(launch_config_path) if resolved_training_config is not None else None
+        ),
+        "config_overrides": (
+            {
+                "epochs": training_epochs,
+                "esc.kwargs.swap_sched": task_duration_epochs,
+            }
+            if resolved_training_config is not None
+            else {}
+        ),
         "output_dir": str(output_dir),
         "analysis_snapshot_dir": str(snapshot_dir),
         "model_parameter_accounting": str(output_dir / "model_parameter_accounting.json"),
@@ -438,7 +491,9 @@ def main() -> int:
         "training_scope": {
             "task_prefix_length": args.task_prefix_length,
             "epochs": training_epochs,
-            "task_duration_epochs": swap_sched,
+            "task_duration_epochs": task_duration_epochs,
+            "baseline_task_duration_epochs": swap_sched,
+            "task_duration_epoch_override": args.task_duration_epochs,
             "full_curriculum": args.task_prefix_length is None,
             "tasks": [
                 task["name"]
@@ -565,6 +620,8 @@ def main() -> int:
         raise FileExistsError(f"Refusing to overwrite existing run directory: {output_dir}")
     runtime_environment = _runtime_info(python, env)
     output_dir.mkdir(parents=True)
+    if resolved_training_config is not None:
+        _write_json(launch_config_path, resolved_training_config)
     launch["started_at_utc"] = datetime.now(timezone.utc).isoformat()
     launch["runtime_environment"] = runtime_environment
     _write_json(output_dir / "launch.json", launch)
