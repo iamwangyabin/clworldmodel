@@ -74,6 +74,22 @@ check is finite training, a non-trivial R2 objective, and rising deterministic
 return. It is not comparable to ARROW's original 90-epoch task duration or its
 model update budget.
 
+## Full first-task acquisition pilot
+
+`--scope single-task-full` keeps only `ALE/MsPacman-v5` and runs it for the
+source curriculum's complete first-task duration: 90 ARROW collection epochs,
+or a nominal 5,898,240 raw frames. This is the appropriate follow-up when the
+seven-block sanity check is numerically healthy but too short to assess
+acquisition. It uses the same task, seed, action handling, replay allocation,
+and environment interaction duration as the first ARROW-50 task.
+
+The run deliberately retains R2-Dreamer's native ratio of 128 sampled model
+transitions per agent decision. It therefore consumes 4.096 times the model
+sample transitions per epoch as the source ARROW route. Compare raw-return
+curves at equal environment interaction only, label the result as a
+native-R2-compute single-task pilot, and do not present it as a compute-matched
+method comparison.
+
 ## Continual exploratory scope
 
 `--scope continual` retains the original six-task order and 90-epoch switch

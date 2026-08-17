@@ -167,6 +167,25 @@ class TrainingLauncherTests(unittest.TestCase):
             launch["smoke_checks"]["required_successful_optimizer_steps"], 1
         )
 
+    def test_native_r2_full_single_task_matches_arrow_task_duration(self) -> None:
+        launch = self._native_r2_dry_run("--scope", "single-task-full")
+
+        self.assertEqual(launch["scope"], "single-task-full")
+        self.assertEqual(launch["status_label"], "full-single-task-pilot")
+        budget = launch["budget"]
+        self.assertEqual(budget["task_count"], 1)
+        self.assertEqual(budget["epochs"], 90)
+        self.assertEqual(budget["source_task_switch_epochs"], 90)
+        self.assertEqual(budget["single_task_target_raw_frames"], 5_898_240)
+        self.assertEqual(budget["total_nominal_raw_frames"], 5_898_240)
+        self.assertEqual(
+            budget["total_nominal_r2_model_sample_transitions"], 188_743_680
+        )
+
+        command = launch["command"]
+        self.assertEqual(command[command.index("--task-count") + 1], "1")
+        self.assertEqual(command[command.index("--epochs") + 1], "90")
+
 
 if __name__ == "__main__":
     unittest.main()

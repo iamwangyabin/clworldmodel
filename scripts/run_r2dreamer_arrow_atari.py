@@ -60,9 +60,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--curriculum", choices=CURRICULUM_DIRS, default="original")
     parser.add_argument(
         "--scope",
-        choices=["single-task", "continual"],
+        choices=["single-task", "single-task-full", "continual"],
         default="single-task",
-        help="Run the required single-task R2 sanity check or the six-task hybrid protocol",
+        help=(
+            "Run the R2 Atari-100k sanity check, a full first-ARROW-task "
+            "acquisition pilot, or the six-task hybrid protocol"
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -132,8 +135,14 @@ def _resolved_budget(config: dict[str, Any], *, scope: str, smoke: bool) -> dict
     if updates_numerator % r2_config.sample_count:
         raise RuntimeError("R2 native train ratio cannot be represented by full R2 batches")
     updates = updates_numerator // r2_config.sample_count
+    task_switch_epochs = int(config["esc"]["kwargs"]["swap_sched"])
     if scope == "single-task":
         epochs = math.ceil(R2_ATARI_100K_RAW_FRAMES / raw_frames_per_epoch)
+        task_count = 1
+    elif scope == "single-task-full":
+        # Match the original ARROW first-task interaction duration without
+        # changing R2-Dreamer's native model-sample-per-decision ratio.
+        epochs = task_switch_epochs
         task_count = 1
     else:
         epochs = int(config["epochs"])
@@ -150,8 +159,13 @@ def _resolved_budget(config: dict[str, Any], *, scope: str, smoke: bool) -> dict
         "nominal_raw_frames_per_epoch": raw_frames_per_epoch,
         "native_train_ratio": r2_config.native_train_ratio,
         "single_task_target_raw_frames": (
-            R2_ATARI_100K_RAW_FRAMES if scope == "single-task" else 0
+            R2_ATARI_100K_RAW_FRAMES
+            if scope == "single-task"
+            else epochs * raw_frames_per_epoch
+            if scope == "single-task-full"
+            else 0
         ),
+        "source_task_switch_epochs": task_switch_epochs,
         "total_nominal_trajectory_positions": epochs * decisions_per_epoch,
         "total_nominal_raw_frames": epochs * raw_frames_per_epoch,
         "total_nominal_r2_model_sample_transitions": epochs * updates * r2_config.sample_count,
@@ -265,10 +279,17 @@ def main() -> int:
     if args.profile_stages:
         command.append("--profile-stages")
 
+    status_label = (
+        "smoke"
+        if args.smoke
+        else "full-single-task-pilot"
+        if args.scope == "single-task-full"
+        else "pilot"
+    )
     launch = {
         "method": "R2Dreamer-ARROW-50",
         "role": "native-r2dreamer-with-arrow-replay",
-        "status_label": "smoke" if args.smoke else "pilot",
+        "status_label": status_label,
         "started_at_utc": None,
         "project_git": project_git,
         "upstream": {
