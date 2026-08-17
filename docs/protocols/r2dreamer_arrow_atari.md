@@ -17,7 +17,8 @@ actor-critic update with ARROW-50 trajectory replay:
   2,560-dimensional feature;
 - R2 Barlow objective with `B=16`, `T=64`, 1,024 flattened samples,
   loss scale `0.05`, and redundancy scale `5e-4`;
-- LaProp at `4e-5`, AGC `0.3`, and 1,000-update linear warm-up;
+- LaProp at `4e-5`, AGC `0.3`, a 1,000-update linear warm-up, and the
+  upstream PyTorch AMP `GradScaler` initial scale of `65,536`;
 - FIFO: 512 trajectories x 512 steps;
 - LTDM: 512 trajectories x 512 steps;
 - whole-minibatch buffer selection: 0.5 FIFO and 0.5 LTDM.
@@ -92,7 +93,11 @@ python scripts/run_r2dreamer_arrow_atari.py --seed 0 --dry-run
 ```
 
 After the exact committed branch is pushed and the target CUDA environment is
-verified, run a smoke job before the seven-block acquisition run:
+verified, run a smoke job before the seven-block acquisition run. It performs
+four updates: the initial mixed-precision scale can intentionally skip early
+updates while it calibrates, so a valid smoke requires a later finite gradient
+and a completed optimizer step rather than treating that expected calibration
+as representation collapse.
 
 ```bash
 python scripts/run_r2dreamer_arrow_atari.py \

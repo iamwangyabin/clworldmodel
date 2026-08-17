@@ -79,6 +79,9 @@ class R2DreamerConfig:
 
     device: str = "cuda"
     amp: bool = True
+    # Matches upstream GradScaler() and is persisted because it affects early
+    # mixed-precision calibration, even though it does not change the objective.
+    amp_initial_scale: float = 65_536.0
 
     def __post_init__(self) -> None:
         positive_names = (
@@ -149,6 +152,7 @@ class R2DreamerConfig:
             "optimizer_eps",
             "normalization_eps",
             "slow_target_fraction",
+            "amp_initial_scale",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")

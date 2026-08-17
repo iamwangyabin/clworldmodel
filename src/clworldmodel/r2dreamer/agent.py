@@ -222,7 +222,10 @@ class R2DreamerAgent(nn.Module):
                 1.0, (update + 1) / config.warmup_updates
             ),
         )
-        self.grad_scaler = torch.cuda.amp.GradScaler(enabled=self._amp_enabled)
+        self.grad_scaler = torch.cuda.amp.GradScaler(
+            enabled=self._amp_enabled,
+            init_scale=config.amp_initial_scale,
+        )
         self.to(self.device)
 
     def train(self, mode: bool = True) -> "R2DreamerAgent":
@@ -508,6 +511,14 @@ class R2DreamerAgent(nn.Module):
                     slow_value.copy_(mix * value + (1 - mix) * slow_value)
         self._slow_value_updates += 1
 
+    @staticmethod
+    def _gradients_are_finite(parameters: tuple[nn.Parameter, ...]) -> bool:
+        """Check before AGC so an AMP overflow remains recoverable by GradScaler."""
+        return all(
+            parameter.grad is None or bool(torch.isfinite(parameter.grad).all())
+            for parameter in parameters
+        )
+
     def update_batch(self, batch: R2ReplayBatch) -> R2UpdateResult:
         """Apply one full R2-Dreamer world-model and controller update."""
         batch = batch.to(self.device)
@@ -530,15 +541,18 @@ class R2DreamerAgent(nn.Module):
                 ]
             )
         )
-        clip_grad_agc_(
-            self._trainable_parameters,
-            self.config.agc,
-            self.config.agc_pmin,
-            foreach=True,
-        )
+        optimizer_step = self._gradients_are_finite(self._trainable_parameters)
+        if optimizer_step:
+            clip_grad_agc_(
+                self._trainable_parameters,
+                self.config.agc,
+                self.config.agc_pmin,
+                foreach=True,
+            )
         self.grad_scaler.step(self.optimizer)
         self.grad_scaler.update()
-        self.scheduler.step()
+        if optimizer_step:
+            self.scheduler.step()
         metrics = {
             "loss/total": total_loss.detach(),
             "loss/dynamics": terms["dynamics"].detach(),
@@ -554,6 +568,12 @@ class R2DreamerAgent(nn.Module):
             "metric/grad_norm": gradient_norm.detach(),
             "metric/return_scale": terms["return_scale"].detach(),
             "opt/lr": torch.tensor(self.scheduler.get_last_lr()[0], device=self.device),
+            "opt/grad_scale": torch.tensor(
+                self.grad_scaler.get_scale(), device=self.device
+            ),
+            "opt/optimizer_step": torch.tensor(
+                float(optimizer_step), device=self.device
+            ),
         }
         return R2UpdateResult(
             metrics={name: float(value.cpu()) for name, value in metrics.items()},

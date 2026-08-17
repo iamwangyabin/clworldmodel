@@ -151,6 +151,22 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(command[command.index("--epochs") + 1], "7")
         self.assertEqual(command[command.index("--native-train-ratio") + 1], "128")
 
+    def test_native_r2_smoke_allows_native_amp_scale_calibration(self) -> None:
+        launch = self._native_r2_dry_run("--smoke")
+
+        self.assertEqual(launch["status_label"], "smoke")
+        self.assertEqual(launch["budget"]["epochs"], 1)
+        self.assertEqual(launch["budget"]["nominal_world_model_updates_per_epoch"], 4)
+        self.assertEqual(launch["r2dreamer"]["amp_initial_scale"], 65_536.0)
+        command = launch["command"]
+        self.assertEqual(
+            command[command.index("--world-model-updates-per-epoch") + 1], "4"
+        )
+        self.assertIn("--require-optimizer-step", command)
+        self.assertEqual(
+            launch["smoke_checks"]["required_successful_optimizer_steps"], 1
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

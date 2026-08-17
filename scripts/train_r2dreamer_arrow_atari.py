@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
 import sys
@@ -58,6 +59,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=_positive_int, required=True)
     parser.add_argument("--world-model-updates-per-epoch", type=_positive_int)
     parser.add_argument("--native-train-ratio", type=_positive_int)
+    parser.add_argument(
+        "--require-optimizer-step",
+        action="store_true",
+        help="Fail unless the final update is finite and at least one optimizer step succeeds.",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--profile-stages", action="store_true")
     parser.add_argument("--analysis-snapshot-dir", type=Path)
@@ -414,9 +420,11 @@ def main() -> int:
     )
     schedule = arrow_config.get_env_schedule()
     update_count = 0
+    successful_optimizer_steps = 0
     model_sample_remainder = 0
     total_env_decisions = 0
     task_boundary = arrow_config.esc.kwargs.get("swap_sched")
+    latest_metrics: dict[str, float] = {}
 
     try:
         for epoch in range(arrow_config.epochs):
@@ -463,7 +471,9 @@ def main() -> int:
                 update = agent.update_batch(sample.batch)
                 replay_adapter.update_latent_states(sample.reference, update)
                 metrics = update.metrics
+                successful_optimizer_steps += int(metrics["opt/optimizer_step"])
                 update_count += 1
+            latest_metrics = metrics
             _synchronize(args.device)
             update_seconds = time.perf_counter() - update_started
             for name, value in metrics.items():
@@ -519,6 +529,7 @@ def main() -> int:
                     "schema_version": 1,
                     "epoch": epoch,
                     "world_model_updates": update_count,
+                    "successful_optimizer_steps": successful_optimizer_steps,
                     "world_model_updates_this_epoch": updates_this_epoch,
                     "environment_decisions": total_env_decisions,
                     "raw_environment_frames": total_env_decisions * arrow_config.env_repeat,
@@ -549,6 +560,17 @@ def main() -> int:
                 )
     finally:
         writer.close()
+
+    if args.require_optimizer_step:
+        if successful_optimizer_steps < 1:
+            raise RuntimeError("R2 smoke finished without a successful optimizer step")
+        nonfinite_metrics = sorted(
+            name for name, value in latest_metrics.items() if not math.isfinite(value)
+        )
+        if nonfinite_metrics:
+            raise FloatingPointError(
+                "R2 smoke ended with non-finite metrics: " + ", ".join(nonfinite_metrics)
+            )
 
     print(
         "training_end "

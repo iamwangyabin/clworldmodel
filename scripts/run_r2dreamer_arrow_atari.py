@@ -42,6 +42,7 @@ THREAD_ENV_KEYS = (
     "NUMEXPR_NUM_THREADS",
 )
 R2_ATARI_100K_RAW_FRAMES = 410_000
+R2_AMP_CALIBRATION_SMOKE_UPDATES = 4
 
 
 def _positive_int(value: str) -> int:
@@ -74,7 +75,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--smoke",
         action="store_true",
-        help="One epoch and one update; establishes execution only.",
+        help="One epoch and four updates; includes native AMP loss-scale calibration.",
     )
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -140,7 +141,7 @@ def _resolved_budget(config: dict[str, Any], *, scope: str, smoke: bool) -> dict
     if smoke:
         epochs = 1
         task_count = 1
-        updates = 1
+        updates = R2_AMP_CALIBRATION_SMOKE_UPDATES
     return {
         "task_count": task_count,
         "epochs": epochs,
@@ -252,7 +253,13 @@ def main() -> int:
         str(snapshot_dir),
     ]
     if args.smoke:
-        command.extend(["--world-model-updates-per-epoch", "1"])
+        command.extend(
+            [
+                "--world-model-updates-per-epoch",
+                str(R2_AMP_CALIBRATION_SMOKE_UPDATES),
+                "--require-optimizer-step",
+            ]
+        )
     else:
         command.extend(["--native-train-ratio", str(r2_config.native_train_ratio)])
     if args.profile_stages:
@@ -301,6 +308,9 @@ def main() -> int:
             "agc": r2_config.agc,
             "warmup_updates": r2_config.warmup_updates,
             "native_train_ratio": r2_config.native_train_ratio,
+            "amp": r2_config.amp,
+            "amp_dtype": "float16" if r2_config.amp else None,
+            "amp_initial_scale": r2_config.amp_initial_scale,
             "float32_matmul_precision": "high",
             "torch_compile_update": False,
             "rmsnorm_compatibility": "native-or-project-equivalent-fallback",
@@ -324,6 +334,12 @@ def main() -> int:
             "Disables upstream torch.compile for the pinned runtime; model geometry and update equations are unchanged.",
         ],
         "profile_stages": args.profile_stages,
+        "smoke_checks": {
+            "required_successful_optimizer_steps": 1,
+            "require_finite_final_metrics": True,
+        }
+        if args.smoke
+        else None,
         "cpu_threads": args.cpu_threads,
         "environment": thread_environment,
         "project_pythonpath": environment["PYTHONPATH"],

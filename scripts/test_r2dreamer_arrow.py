@@ -59,6 +59,7 @@ class R2DreamerConfigTests(unittest.TestCase):
         self.assertEqual(config.batch_length, 64)
         self.assertEqual(config.deter, 2048)
         self.assertEqual(config.discrete, 16)
+        self.assertEqual(config.amp_initial_scale, 65_536.0)
 
     def test_rank_mismatched_objective_configuration_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "S=512 < E=1024"):
@@ -257,6 +258,15 @@ class R2DreamerArrowIntegrationTests(unittest.TestCase):
         self.assertTrue(all(torch.isfinite(torch.tensor(value)) for value in metrics.values()))
         self.assertFalse(torch.equal(before, agent.projector.w.weight.detach()))
         self.assertGreater(metrics["metric/grad_norm"], 0)
+        self.assertEqual(metrics["opt/optimizer_step"], 1.0)
+
+    def test_nonfinite_gradient_detection_precedes_agc(self) -> None:
+        parameter = torch.nn.Parameter(torch.ones(1))
+        parameter.grad = torch.tensor([float("inf")])
+        self.assertFalse(R2DreamerAgent._gradients_are_finite((parameter,)))
+
+        parameter.grad = torch.ones(1)
+        self.assertTrue(R2DreamerAgent._gradients_are_finite((parameter,)))
 
 
 if __name__ == "__main__":
