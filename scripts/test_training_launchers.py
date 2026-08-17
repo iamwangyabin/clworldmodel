@@ -326,6 +326,56 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires --task-prefix-length 1", result.stderr)
 
+    def test_fastkan_ac_pilot_records_architecture_optimizer_and_step_mapping(self) -> None:
+        launch = self._arrow_dry_run(
+            "--actor-network",
+            "fast_kan_ac",
+            "--task-prefix-length",
+            "1",
+            "--task-duration-epochs",
+            "68",
+        )
+
+        self.assertEqual(
+            launch["method"],
+            "ARROW-FastKANAC-KDAligned-50-T1-68EpochTrainabilityPilot",
+        )
+        self.assertEqual(launch["role"], "actor-critic-kan-dreamer-aligned-pilot")
+        self.assertEqual(launch["training_scope"]["epochs"], 68)
+        self.assertEqual(launch["training_scope"]["agent_decisions"], 1_114_112)
+        self.assertEqual(
+            launch["training_scope"]["kan_dreamer_target_environment_steps"],
+            1_100_000,
+        )
+        self.assertEqual((launch["fifo_slots"], launch["ltdm_slots"]), (512, 512))
+
+        actor = launch["actor"]
+        self.assertEqual(actor["network"], "fast_kan_ac")
+        self.assertEqual(actor["critic_network"], "fast_kan")
+        self.assertEqual(actor["kan_hidden_features"], 34)
+        self.assertEqual(actor["kan_hidden_layers"], 3)
+        self.assertEqual(actor["kan_grid_size"], 8)
+        self.assertEqual(actor["kan_input_range"], [-2.0, 2.0])
+        self.assertFalse(actor["kan_grid_trainable"])
+        self.assertEqual(actor["combined_trainable_parameters"], 1_068_939)
+
+        training = launch["actor_critic_training"]
+        self.assertEqual(training["optimizer"], "laprop")
+        self.assertEqual(training["learning_rate"], 4e-5)
+        self.assertEqual(training["gradient_clipping"]["coefficient"], 0.3)
+        self.assertEqual(training["imagination_horizon"], 15)
+        self.assertEqual(training["critic_ema_decay"], 0.98)
+        self.assertEqual(training["critic_replay_loss_scale"], 0.0)
+        self.assertIsNotNone(training["critic_replay_loss_deviation"])
+
+        overrides = launch["config_overrides"]
+        self.assertEqual(overrides["actor_network"], "fast_kan_ac")
+        self.assertEqual(overrides["ac_optimizer"], "laprop")
+        self.assertEqual(overrides["epochs"], 68)
+        self.assertEqual(overrides["esc.kwargs.swap_sched"], 68)
+        command = launch["command"]
+        self.assertEqual(command[command.index("--actor-network") + 1], "fast_kan_ac")
+
 
 if __name__ == "__main__":
     unittest.main()

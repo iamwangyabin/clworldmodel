@@ -36,8 +36,38 @@ THREAD_ENV_KEYS = (
     "NUMEXPR_NUM_THREADS",
 )
 KAN_ACTOR_NETWORKS = frozenset(
-    {"relu_kan", "relu_kan_bounded", "relu_kan_adaptive"}
+    {"relu_kan", "relu_kan_bounded", "relu_kan_adaptive", "fast_kan_ac"}
 )
+FASTKAN_AC_EPOCHS = 68
+FASTKAN_AC_PAPER_ENVIRONMENT_STEPS = 1_100_000
+FASTKAN_AC_CONFIG_OVERRIDES = {
+    "actor_network": "fast_kan_ac",
+    "fastkan_hidden_features": 34,
+    "fastkan_hidden_layers": 3,
+    "fastkan_grid_size": 8,
+    "fastkan_input_min": -2.0,
+    "fastkan_input_max": 2.0,
+    "fastkan_rms_norm_epsilon": 1e-4,
+    "fastkan_actor_output_scale": 0.01,
+    "fastkan_actor_unimix": 0.01,
+    "ac_optimizer": "laprop",
+    "ac_lr": 4e-5,
+    "ac_fresh_lr": 4e-5,
+    "ac_optimizer_eps": 1e-20,
+    "ac_optimizer_beta1": 0.9,
+    "ac_optimizer_beta2": 0.999,
+    "ac_optimizer_warmup_steps": 1000,
+    "ac_agc_clip": 0.3,
+    "ac_grad_clip": 0.0,
+    "ac_dream_steps": 15,
+    "ac_discount": 1.0 - 1.0 / 333.0,
+    "ac_lambda": 0.95,
+    "ac_entropy_scale": 3e-4,
+    "ac_return_norm_decay": 0.99,
+    "ac_persistent_return_norm": True,
+    "ac_slow_critic_regularizer": 1.0,
+    "ac_slow_critic_decay": 0.98,
+}
 KAN_ACTOR_METADATA = {
     "relu_kan": {
         "method": "ARROW-KANActor-50",
@@ -48,6 +78,8 @@ KAN_ACTOR_METADATA = {
         "anchor_parameterization": None,
         "anchor_parameters": 0,
         "trainable_parameters": 795_730,
+        "critic_network": "mlp",
+        "critic_trainable_parameters": 917_759,
     },
     "relu_kan_bounded": {
         "method": "ARROW-KANActorBounded-50",
@@ -58,6 +90,8 @@ KAN_ACTOR_METADATA = {
         "anchor_parameterization": None,
         "anchor_parameters": 0,
         "trainable_parameters": 795_858,
+        "critic_network": "mlp",
+        "critic_trainable_parameters": 917_759,
     },
     "relu_kan_adaptive": {
         "method": "ARROW-KANActorAdaptive-50",
@@ -68,6 +102,20 @@ KAN_ACTOR_METADATA = {
         "anchor_parameterization": "per_input_start_softplus_width",
         "anchor_parameters": 25_600,
         "trainable_parameters": 821_458,
+        "critic_network": "mlp",
+        "critic_trainable_parameters": 917_759,
+    },
+    "fast_kan_ac": {
+        "method": "ARROW-FastKANAC-KDAligned-50",
+        "output_prefix": "arrow_fastkan_ac_kd_aligned_ar50",
+        "hidden_adapter": "rms_norm_per_fastkan_layer",
+        "hidden_adapter_layer_norm_epsilon": 1e-4,
+        "grid_trainable": False,
+        "anchor_parameterization": "fixed_uniform_gaussian_centers",
+        "anchor_parameters": 0,
+        "trainable_parameters": 498_090,
+        "critic_network": "fast_kan",
+        "critic_trainable_parameters": 570_849,
     },
 }
 
@@ -96,9 +144,18 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--actor-network",
-        choices=["mlp", "relu_kan", "relu_kan_bounded", "relu_kan_adaptive"],
+        choices=[
+            "mlp",
+            "relu_kan",
+            "relu_kan_bounded",
+            "relu_kan_adaptive",
+            "fast_kan_ac",
+        ],
         default="mlp",
-        help="Keep the MLP actor or select one of the named KAN actor variants",
+        help=(
+            "Keep the MLP actor, select an actor-only ReLU-KAN variant, or replace "
+            "both behavior heads with the KAN-Dreamer-aligned FastKAN network"
+        ),
     )
     parser.add_argument(
         "--task-prefix-length",
@@ -113,10 +170,8 @@ def _parser() -> argparse.ArgumentParser:
         "--task-duration-epochs",
         type=_positive_int,
         help=(
-            "Extend a one-task bounded-interface KAN trainability pilot to this many "
-            "epochs. Requires --actor-network relu_kan_bounded or relu_kan_adaptive and "
-            "--task-prefix-length 1; the sequential task boundary moves with "
-            "the total duration."
+            "Set the duration of a named one-task KAN trainability pilot. The "
+            "sequential task boundary moves with the total duration."
         ),
     )
     parser.add_argument(
@@ -339,11 +394,22 @@ def main() -> int:
     if args.task_duration_epochs is not None:
         if args.task_prefix_length != 1:
             parser.error("--task-duration-epochs requires --task-prefix-length 1")
-        if args.actor_network not in {"relu_kan_bounded", "relu_kan_adaptive"}:
+        if args.actor_network not in {
+            "relu_kan_bounded",
+            "relu_kan_adaptive",
+            "fast_kan_ac",
+        }:
             parser.error(
-                "--task-duration-epochs requires a bounded-interface KAN actor "
-                "(relu_kan_bounded or relu_kan_adaptive)"
+                "--task-duration-epochs requires a named trainable KAN protocol"
             )
+    if args.actor_network == "fast_kan_ac" and (
+        args.task_prefix_length != 1
+        or args.task_duration_epochs != FASTKAN_AC_EPOCHS
+    ):
+        parser.error(
+            "fast_kan_ac currently requires --task-prefix-length 1 and "
+            f"--task-duration-epochs {FASTKAN_AC_EPOCHS}"
+        )
     project_git = (
         git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
     )
@@ -381,7 +447,11 @@ def main() -> int:
 
     swap_sched = config["esc"]["kwargs"]["swap_sched"]
     task_duration_epochs = args.task_duration_epochs or swap_sched
-    if args.task_duration_epochs is not None and task_duration_epochs <= swap_sched:
+    if (
+        args.task_duration_epochs is not None
+        and task_duration_epochs <= swap_sched
+        and args.actor_network != "fast_kan_ac"
+    ):
         parser.error(
             "--task-duration-epochs must exceed the frozen 90-epoch task duration"
         )
@@ -391,10 +461,11 @@ def main() -> int:
         else task_duration_epochs * args.task_prefix_length
     )
     adaptive_kan = args.actor_network == "relu_kan_adaptive"
+    fastkan_ac = args.actor_network == "fast_kan_ac"
     resolved_training_config = None
     launch_config_path = config_path
     config_overrides = {}
-    if adaptive_kan or args.task_duration_epochs is not None:
+    if adaptive_kan or fastkan_ac or args.task_duration_epochs is not None:
         resolved_training_config = json.loads(json.dumps(config))
         if adaptive_kan:
             resolved_training_config["actor_network"] = args.actor_network
@@ -405,6 +476,9 @@ def main() -> int:
                     "actor_kan_trainable_grid": True,
                 }
             )
+        if fastkan_ac:
+            resolved_training_config.update(FASTKAN_AC_CONFIG_OVERRIDES)
+            config_overrides.update(FASTKAN_AC_CONFIG_OVERRIDES)
         if args.task_duration_epochs is not None:
             resolved_training_config["epochs"] = training_epochs
             resolved_training_config["esc"]["kwargs"]["swap_sched"] = (
@@ -481,6 +555,15 @@ def main() -> int:
                 if is_kan_actor
                 else "matched-short-pilot-control"
             )
+    if fastkan_ac:
+        role = "actor-critic-kan-dreamer-aligned-pilot"
+
+    decisions_per_regular_epoch = config["n_sync"] * config["gen_seq_len"]
+    collection_epoch_equivalents = training_epochs
+    if config.get("pretrain_enabled", True):
+        collection_epoch_equivalents += config.get("pretrain_data_multiplier", 4) - 1
+    agent_decisions = decisions_per_regular_epoch * collection_epoch_equivalents
+    raw_environment_frames = agent_decisions * config["env_repeat"]
     launch = {
         "method": method,
         "role": role,
@@ -517,7 +600,17 @@ def main() -> int:
             "final_coincides_with_task_boundary": (
                 (training_epochs - 1) in boundary_epochs
             ),
-            "omitted_state": ["optimizers", "replay", "RNG", "environment schedule"],
+            "omitted_state": [
+                "optimizers",
+                "replay",
+                "RNG",
+                "environment schedule",
+                *(
+                    ["slow critic target", "return-normalizer EMA"]
+                    if fastkan_ac
+                    else []
+                ),
+            ],
         },
         "training_scope": {
             "task_prefix_length": args.task_prefix_length,
@@ -534,6 +627,30 @@ def main() -> int:
                     else None
                 ]
             ],
+            "agent_decisions": agent_decisions,
+            "raw_environment_frames": raw_environment_frames,
+            "agent_decisions_per_regular_epoch": decisions_per_regular_epoch,
+            "epoch_zero_collection_multiplier": (
+                config.get("pretrain_data_multiplier", 4)
+                if config.get("pretrain_enabled", True)
+                else 1
+            ),
+            "kan_dreamer_target_environment_steps": (
+                FASTKAN_AC_PAPER_ENVIRONMENT_STEPS if fastkan_ac else None
+            ),
+            "kan_dreamer_step_mapping": (
+                {
+                    "mapped_counter": "ARROW agent decisions",
+                    "target": FASTKAN_AC_PAPER_ENVIRONMENT_STEPS,
+                    "actual": agent_decisions,
+                    "relative_difference": (
+                        agent_decisions / FASTKAN_AC_PAPER_ENVIRONMENT_STEPS - 1.0
+                    ),
+                    "raw_atari_frames_are_not_equated_to_dmc_steps": True,
+                }
+                if fastkan_ac
+                else None
+            ),
         },
         "curriculum": args.curriculum,
         "seed_id": args.seed,
@@ -566,15 +683,35 @@ def main() -> int:
         "replay_storage_budget": _arrow_replay_storage_budget(config),
         "actor": {
             "network": args.actor_network,
-            "critic_network": "mlp",
+            "critic_network": (
+                KAN_ACTOR_METADATA[args.actor_network]["critic_network"]
+                if is_kan_actor
+                else "mlp"
+            ),
             "input_features": 1536,
             "action_features": config["action_space"],
             "recurrent_features": config["gru_units"],
-            "kan_hidden_features": 64 if is_kan_actor else None,
-            "kan_grid_size": 5 if is_kan_actor else None,
-            "kan_spline_order": 3 if is_kan_actor else None,
+            "kan_hidden_features": (
+                34 if fastkan_ac else 64 if is_kan_actor else None
+            ),
+            "kan_hidden_layers": 3 if fastkan_ac else None,
+            "kan_grid_size": 8 if fastkan_ac else 5 if is_kan_actor else None,
+            "kan_spline_order": None if fastkan_ac else 3 if is_kan_actor else None,
             "kan_basis_count": 8 if is_kan_actor else None,
-            "kan_input_range": [0.0, 1.0] if is_kan_actor else None,
+            "kan_basis": (
+                "gaussian_rbf"
+                if fastkan_ac
+                else "relu_spline"
+                if is_kan_actor
+                else None
+            ),
+            "kan_input_range": (
+                [-2.0, 2.0]
+                if fastkan_ac
+                else [0.0, 1.0]
+                if is_kan_actor
+                else None
+            ),
             "kan_grid_trainable": (
                 KAN_ACTOR_METADATA[args.actor_network]["grid_trainable"]
                 if is_kan_actor
@@ -590,7 +727,9 @@ def main() -> int:
                 if is_kan_actor
                 else None
             ),
-            "kan_normalize_recurrent_state": True if is_kan_actor else None,
+            "kan_normalize_recurrent_state": (
+                None if fastkan_ac else True if is_kan_actor else None
+            ),
             "kan_hidden_adapter": (
                 KAN_ACTOR_METADATA[args.actor_network]["hidden_adapter"]
                 if is_kan_actor
@@ -603,16 +742,73 @@ def main() -> int:
                 if is_kan_actor
                 else None
             ),
+            "kan_rms_norm_epsilon": 1e-4 if fastkan_ac else None,
             "trainable_parameters": (
                 KAN_ACTOR_METADATA[args.actor_network]["trainable_parameters"]
                 if is_kan_actor
                 else 797_202
             ),
+            "critic_trainable_parameters": (
+                KAN_ACTOR_METADATA[args.actor_network][
+                    "critic_trainable_parameters"
+                ]
+                if is_kan_actor
+                else 917_759
+            ),
+            "combined_trainable_parameters": (
+                KAN_ACTOR_METADATA[args.actor_network]["trainable_parameters"]
+                + KAN_ACTOR_METADATA[args.actor_network][
+                    "critic_trainable_parameters"
+                ]
+                if is_kan_actor
+                else 1_714_961
+            ),
+            "actor_output_scale": 0.01 if fastkan_ac else None,
+            "actor_unimix": 0.01 if fastkan_ac else None,
+            "critic_output_scale": 0.0 if fastkan_ac else None,
+            "base_branch": "silu_linear" if fastkan_ac else None,
+            "rbf_bandwidth": 4.0 / 7.0 if fastkan_ac else None,
             "implementation": (
                 "project-owned-independent-pytorch" if is_kan_actor else "vendored-mlp"
             ),
             "reference": (
-                "https://arxiv.org/abs/2406.02075" if is_kan_actor else None
+                "https://arxiv.org/abs/2512.07437"
+                if fastkan_ac
+                else "https://arxiv.org/abs/2406.02075"
+                if is_kan_actor
+                else None
+            ),
+        },
+        "actor_critic_training": {
+            "optimizer": "laprop" if fastkan_ac else "adam",
+            "learning_rate": 4e-5 if fastkan_ac else None,
+            "optimizer_epsilon": 1e-20 if fastkan_ac else None,
+            "optimizer_betas": [0.9, 0.999] if fastkan_ac else None,
+            "optimizer_warmup_updates": 1000 if fastkan_ac else None,
+            "gradient_clipping": (
+                {"type": "per_tensor_agc", "coefficient": 0.3}
+                if fastkan_ac
+                else {"type": "global_norm", "coefficient": 100.0}
+            ),
+            "imagination_horizon": 15 if fastkan_ac else 16,
+            "discount_horizon": 333 if fastkan_ac else None,
+            "return_lambda": 0.95,
+            "entropy_regularizer": 3e-4,
+            "return_normalization": {
+                "percentiles": [5, 95],
+                "minimum_scale": 1.0,
+                "decay": 0.99,
+                "persists_across_epochs": fastkan_ac,
+            },
+            "critic_ema_regularizer": 1.0 if fastkan_ac else 0.0,
+            "critic_ema_decay": 0.98 if fastkan_ac else None,
+            "critic_replay_loss_scale": 0.0,
+            "paper_critic_replay_loss_scale": 0.3 if fastkan_ac else None,
+            "critic_replay_loss_deviation": (
+                "not ported because ARROW trains behavior separately from its world-model "
+                "replay batches"
+                if fastkan_ac
+                else None
             ),
         },
         "final_evaluation": {

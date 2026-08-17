@@ -1,4 +1,6 @@
-from typing import Callable, NamedTuple, Optional
+import copy
+from dataclasses import dataclass
+from typing import Callable, Optional
 
 import numpy as np
 import torch
@@ -56,6 +58,14 @@ def build_actor(
     kan_input_min: float,
     kan_input_max: float,
     kan_normalize_recurrent_state: bool,
+    fastkan_hidden_features: int,
+    fastkan_hidden_layers: int,
+    fastkan_grid_size: int,
+    fastkan_input_min: float,
+    fastkan_input_max: float,
+    fastkan_rms_norm_epsilon: float,
+    fastkan_actor_output_scale: float,
+    fastkan_actor_unimix: float,
 ) -> nn.Module:
     if actor_network == "mlp":
         return nn.Sequential(
@@ -85,7 +95,54 @@ def build_actor(
             input_max=kan_input_max,
             normalize_recurrent_state=kan_normalize_recurrent_state,
         )
+    if actor_network == "fast_kan_ac":
+        from clworldmodel.models.fast_kan import FastKANActor
+
+        return FastKANActor(
+            in_dim,
+            act_space,
+            hidden_features=fastkan_hidden_features,
+            hidden_layers=fastkan_hidden_layers,
+            grid_min=fastkan_input_min,
+            grid_max=fastkan_input_max,
+            num_grids=fastkan_grid_size,
+            rms_norm_epsilon=fastkan_rms_norm_epsilon,
+            output_scale=fastkan_actor_output_scale,
+            unimix=fastkan_actor_unimix,
+        )
     raise ValueError(f"Unknown actor network: {actor_network!r}")
+
+
+def build_critic(
+    in_dim: int,
+    *,
+    actor_network: str,
+    fastkan_hidden_features: int,
+    fastkan_hidden_layers: int,
+    fastkan_grid_size: int,
+    fastkan_input_min: float,
+    fastkan_input_max: float,
+    fastkan_rms_norm_epsilon: float,
+) -> nn.Module:
+    if actor_network == "fast_kan_ac":
+        from clworldmodel.models.fast_kan import FastKANCritic
+
+        return FastKANCritic(
+            in_dim,
+            N_CRITIC_BINS,
+            hidden_features=fastkan_hidden_features,
+            hidden_layers=fastkan_hidden_layers,
+            grid_min=fastkan_input_min,
+            grid_max=fastkan_input_max,
+            num_grids=fastkan_grid_size,
+            rms_norm_epsilon=fastkan_rms_norm_epsilon,
+        )
+
+    critic_fcs = get_mlp_layers(in_dim, N_CRITIC_BINS, final_activation=None)
+    # DreamerV3 initializes the categorical value output to a uniform distribution.
+    torch.nn.init.constant_(critic_fcs[-1].weight, 0)
+    torch.nn.init.constant_(critic_fcs[-1].bias, 0)
+    return nn.Sequential(*critic_fcs, nn.LogSoftmax(-1))
 
 
 class ActorCritic(nn.Module):
@@ -102,6 +159,14 @@ class ActorCritic(nn.Module):
         kan_input_min: float = 0.0,
         kan_input_max: float = 1.0,
         kan_normalize_recurrent_state: bool = True,
+        fastkan_hidden_features: int = 34,
+        fastkan_hidden_layers: int = 3,
+        fastkan_grid_size: int = 8,
+        fastkan_input_min: float = -2.0,
+        fastkan_input_max: float = 2.0,
+        fastkan_rms_norm_epsilon: float = 1e-4,
+        fastkan_actor_output_scale: float = 0.01,
+        fastkan_actor_unimix: float = 0.01,
     ) -> None:
         super().__init__()
         self.actor: Callable[[AcStateT], ActionLogT] = build_actor(
@@ -115,19 +180,29 @@ class ActorCritic(nn.Module):
             kan_input_min=kan_input_min,
             kan_input_max=kan_input_max,
             kan_normalize_recurrent_state=kan_normalize_recurrent_state,
+            fastkan_hidden_features=fastkan_hidden_features,
+            fastkan_hidden_layers=fastkan_hidden_layers,
+            fastkan_grid_size=fastkan_grid_size,
+            fastkan_input_min=fastkan_input_min,
+            fastkan_input_max=fastkan_input_max,
+            fastkan_rms_norm_epsilon=fastkan_rms_norm_epsilon,
+            fastkan_actor_output_scale=fastkan_actor_output_scale,
+            fastkan_actor_unimix=fastkan_actor_unimix,
         )
         self.symlog_bins: torch.Tensor
         self.register_buffer(
             "symlog_bins", torch.linspace(-20, 20, N_CRITIC_BINS).float().unsqueeze(1)
         )
 
-        critic_fcs = get_mlp_layers(in_dim, N_CRITIC_BINS, final_activation=None)
-        # DreamerV3 0 init weights of output layer to 0s
-        torch.nn.init.constant_(critic_fcs[-1].weight, 0)
-        torch.nn.init.constant_(critic_fcs[-1].bias, 0)
-        self.critic: Callable[[AcStateT], RewardSymlogCatT] = nn.Sequential(
-            *critic_fcs,
-            nn.LogSoftmax(-1),
+        self.critic: Callable[[AcStateT], RewardSymlogCatT] = build_critic(
+            in_dim,
+            actor_network=actor_network,
+            fastkan_hidden_features=fastkan_hidden_features,
+            fastkan_hidden_layers=fastkan_hidden_layers,
+            fastkan_grid_size=fastkan_grid_size,
+            fastkan_input_min=fastkan_input_min,
+            fastkan_input_max=fastkan_input_max,
+            fastkan_rms_norm_epsilon=fastkan_rms_norm_epsilon,
         )
 
     def __call__(self, state: AcStateT) -> tuple[ActionLogT, RewardT]:
@@ -144,6 +219,8 @@ class ActorCritic(nn.Module):
         actions: ActionT,
         lam_returns: ReturnT,
         scale: float,
+        slow_critic_preds_log: Optional[RewardSymlogCatT] = None,
+        slow_critic_regularizer: float = 0.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         action_logs = self.actor(states)
         critic_preds_log = self.critic(states)
@@ -164,13 +241,26 @@ class ActorCritic(nn.Module):
         # Critic gradients
         critic_targets = rew_symlog_to_2hot(symlog(lam_returns))
         critic_loss = -(critic_preds_log * critic_targets).sum(-1).mean()
+        if slow_critic_regularizer:
+            if slow_critic_preds_log is None:
+                raise ValueError("slow critic predictions are required by its regularizer")
+            slow_values = symexp(
+                slow_critic_preds_log.detach().exp() @ self.symlog_bins
+            )
+            slow_targets = rew_symlog_to_2hot(symlog(slow_values))
+            slow_loss = -(critic_preds_log * slow_targets).sum(-1).mean()
+            critic_loss = critic_loss + slow_critic_regularizer * slow_loss
 
         return reinforce, entropy, critic_loss
 
 
-class ActorCriticOpt(NamedTuple):
+@dataclass
+class ActorCriticOpt:
     ac: ActorCritic
     opt: Optimizer
+    slow_critic: Optional[nn.Module] = None
+    return_scale_ema: Optional[torch.Tensor] = None
+    return_mean_ema: Optional[torch.Tensor] = None
 
 
 @torch.no_grad()
@@ -261,6 +351,28 @@ def train_ac_from_wm(
     actor_kan_input_min: float = 0.0,
     actor_kan_input_max: float = 1.0,
     actor_kan_normalize_recurrent_state: bool = True,
+    fastkan_hidden_features: int = 34,
+    fastkan_hidden_layers: int = 3,
+    fastkan_grid_size: int = 8,
+    fastkan_input_min: float = -2.0,
+    fastkan_input_max: float = 2.0,
+    fastkan_rms_norm_epsilon: float = 1e-4,
+    fastkan_actor_output_scale: float = 0.01,
+    fastkan_actor_unimix: float = 0.01,
+    optimizer_name: str = "adam",
+    optimizer_eps: float = 1e-8,
+    optimizer_beta1: float = 0.9,
+    optimizer_beta2: float = 0.999,
+    optimizer_warmup_steps: int = 0,
+    agc_clip: float = 0.0,
+    grad_clip: float = 100.0,
+    discount: float = 0.997,
+    lam: float = 0.95,
+    entropy_scale: float = 3e-4,
+    return_norm_decay: float = 0.99,
+    persistent_return_norm: bool = False,
+    slow_critic_regularizer: float = 0.0,
+    slow_critic_decay: float = 0.98,
 ) -> tuple[ActorCriticOpt, torch.Tensor]:
     if aco is None:
         ac = ActorCritic(
@@ -274,18 +386,56 @@ def train_ac_from_wm(
             kan_input_min=actor_kan_input_min,
             kan_input_max=actor_kan_input_max,
             kan_normalize_recurrent_state=actor_kan_normalize_recurrent_state,
+            fastkan_hidden_features=fastkan_hidden_features,
+            fastkan_hidden_layers=fastkan_hidden_layers,
+            fastkan_grid_size=fastkan_grid_size,
+            fastkan_input_min=fastkan_input_min,
+            fastkan_input_max=fastkan_input_max,
+            fastkan_rms_norm_epsilon=fastkan_rms_norm_epsilon,
+            fastkan_actor_output_scale=fastkan_actor_output_scale,
+            fastkan_actor_unimix=fastkan_actor_unimix,
         ).cuda()
-        aco = ActorCriticOpt(ac, Adam(ac.parameters(), lr=lr))
-    ac, opt = aco
+        if optimizer_name == "adam":
+            opt = Adam(
+                ac.parameters(),
+                lr=lr,
+                betas=(optimizer_beta1, optimizer_beta2),
+                eps=optimizer_eps,
+            )
+        elif optimizer_name == "laprop":
+            from clworldmodel.optim import LaProp
+
+            opt = LaProp(
+                ac.parameters(),
+                lr=lr,
+                betas=(optimizer_beta1, optimizer_beta2),
+                eps=optimizer_eps,
+                agc_clip=agc_clip,
+                warmup_steps=optimizer_warmup_steps,
+            )
+        else:
+            raise ValueError(f"Unknown actor-critic optimizer: {optimizer_name!r}")
+        slow_critic = None
+        if slow_critic_regularizer:
+            slow_critic = copy.deepcopy(ac.critic).eval()
+            slow_critic.requires_grad_(False)
+        aco = ActorCriticOpt(ac, opt, slow_critic=slow_critic)
+    ac, opt = aco.ac, aco.opt
     for g in opt.param_groups:
         g["lr"] = lr
-    scale_ema = None
-    lam_returns_mean_ema = None
+    scale_ema = aco.return_scale_ema if persistent_return_norm else None
+    lam_returns_mean_ema = aco.return_mean_ema if persistent_return_norm else None
 
     progbar = trange(steps, desc="Train AC from WM",disable=True)
     for step in progbar:
         states, actions, _, lam_returns = dream_rollout(
-            wm, ac, data, n_sync=n_sync, n_steps=dream_steps
+            wm,
+            ac,
+            data,
+            n_sync=n_sync,
+            n_steps=dream_steps,
+            discount=discount,
+            lam=lam,
         )
 
         scale = torch.quantile(lam_returns, 0.95) - torch.quantile(lam_returns, 0.05)
@@ -294,19 +444,40 @@ def train_ac_from_wm(
             scale_ema = scale
             lam_returns_mean_ema = lam_returns_mean
         else:
-            scale_ema = 0.99 * scale_ema + 0.01 * scale
-            lam_returns_mean_ema = 0.99 * lam_returns_mean_ema + 0.01 * lam_returns_mean
+            scale_ema = return_norm_decay * scale_ema + (1 - return_norm_decay) * scale
+            lam_returns_mean_ema = (
+                return_norm_decay * lam_returns_mean_ema
+                + (1 - return_norm_decay) * lam_returns_mean
+            )
 
         one = torch.tensor(1, device=scale.device)
+        slow_critic_preds_log = None
+        if aco.slow_critic is not None:
+            with torch.no_grad():
+                slow_critic_preds_log = aco.slow_critic(states)
         reinforce, entropy, critic_loss = ac.compute_loss(
-            states, actions, lam_returns, torch.max(one, scale_ema)
+            states,
+            actions,
+            lam_returns,
+            torch.max(one, scale_ema),
+            slow_critic_preds_log=slow_critic_preds_log,
+            slow_critic_regularizer=slow_critic_regularizer,
         )
-        loss = reinforce - 3e-4 * entropy + critic_loss
+        loss = reinforce - entropy_scale * entropy + critic_loss
 
         opt.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(ac.parameters(), 100)
+        if grad_clip:
+            torch.nn.utils.clip_grad_norm_(ac.parameters(), grad_clip)
         opt.step()
+        if aco.slow_critic is not None:
+            with torch.no_grad():
+                for target, source in zip(
+                    aco.slow_critic.parameters(), ac.critic.parameters()
+                ):
+                    target.mul_(slow_critic_decay).add_(
+                        source, alpha=1.0 - slow_critic_decay
+                    )
 
         if step % 50 == 0:
             progbar.set_postfix(
@@ -316,4 +487,7 @@ def train_ac_from_wm(
                 }
             )
 
+    if persistent_return_norm:
+        aco.return_scale_ema = scale_ema.detach()
+        aco.return_mean_ema = lam_returns_mean_ema.detach()
     return aco, lam_returns_mean_ema

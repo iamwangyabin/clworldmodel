@@ -83,6 +83,16 @@ documented here, covered by focused parity tests, and followed by regenerating
     Fixed-grid initialization, support ordering, anchor gradients, actor
     interface, parameter accounting, config validation, and launcher contracts
     cover the intentional deviation. The default MLP remains unchanged.
+15. Add opt-in `fast_kan_ac` for the separately named
+    `ARROW-FastKANAC-KDAligned-50` behavior pilot. The vendored bridge replaces
+    both actor and critic with project-owned, fixed-grid Gaussian FastKAN heads
+    and exposes the protocol's actor-critic optimizer, imagination, return
+    normalization, and slow-critic settings without changing default MLP runs.
+    LaProp and FastKAN live under `src/clworldmodel/`; fixed-center, branch,
+    initialization, tensor-shape, actor/critic replacement, parameter,
+    optimizer, config, and launcher contracts cover the bridge. ARROW replay
+    and world-model training remain unchanged, and the omitted DreamerV3
+    replay-value loss is explicitly recorded as a protocol deviation.
 
 ## Known issues at import
 

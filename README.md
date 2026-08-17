@@ -149,4 +149,26 @@ KAN prevents forgetting. See
 definition and `docs/protocols/arrow_kan_actor_bounded_atari.md` for the
 fixed-grid history and interface diagnosis.
 
+The separate `ARROW-FastKANAC-KDAligned-50` pilot replaces both actor and
+critic with the fixed-Gaussian FastKAN behavior architecture reported by
+KAN-Dreamer. It uses width 34, eight centers over `[-2, 2]`, and the directly
+portable behavior-training settings (LaProp, AGC, `4e-5`, horizon 15, actor
+unimix, persistent return normalization, and critic EMA) while preserving the
+ARROW-50 replay strategy and world-model training. Its 68 epochs map to
+1,114,112 agent decisions, the first whole-epoch boundary at or above the
+paper's 1.1M-step endpoint:
+
+```bash
+python scripts/run_arrow_ar50_atari.py \
+  --actor-network fast_kan_ac \
+  --task-prefix-length 1 \
+  --task-duration-epochs 68 \
+  --seed 0 \
+  --dry-run
+```
+
+This is an independently reconstructed Atari pilot, not a reproduction of
+KAN-Dreamer's DMC experiment. Exact alignments and unavoidable deviations are
+listed in `docs/protocols/arrow_fastkan_ac_kd_aligned_atari.md`.
+
 Project-wide research and engineering constraints are defined in `AGENTS.md`.

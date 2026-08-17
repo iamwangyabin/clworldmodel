@@ -243,7 +243,7 @@ def _actor_critic_parameter_accounting(aco: ActorCriticOpt) -> dict:
     critic = aco.ac.critic
     if not isinstance(actor, torch.nn.Module) or not isinstance(critic, torch.nn.Module):
         raise TypeError("Actor and critic must be torch modules for resource accounting")
-    return {
+    accounting = {
         "schema_version": 1,
         "actor_class": type(actor).__name__,
         "actor": _module_state_accounting(actor),
@@ -255,6 +255,11 @@ def _actor_critic_parameter_accounting(aco: ActorCriticOpt) -> dict:
             "and activations"
         ),
     }
+    if aco.slow_critic is not None:
+        accounting["slow_critic_class"] = type(aco.slow_critic).__name__
+        accounting["slow_critic"] = _module_state_accounting(aco.slow_critic)
+        accounting["accounting_scope"] += "; slow critic is training state only"
+    return accounting
 
 
 def _world_model_parameter_accounting(wm: WorldModel) -> dict:
@@ -364,9 +369,18 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--actor-network",
-        choices=["mlp", "relu_kan", "relu_kan_bounded", "relu_kan_adaptive"],
+        choices=[
+            "mlp",
+            "relu_kan",
+            "relu_kan_bounded",
+            "relu_kan_adaptive",
+            "fast_kan_ac",
+        ],
         default=None,
-        help="Optional actor architecture override; the critic remains unchanged.",
+        help=(
+            "Optional behavior architecture override; fast_kan_ac replaces both "
+            "actor and critic, while the ReLU-KAN variants replace only the actor."
+        ),
     )
     parser.add_argument(
         "--actor-kan-trainable-grid",
@@ -449,6 +463,12 @@ if __name__ == "__main__":
         print(f"ARROW FIFO/LTDM capacity ratio: {config.arrow_replay_capacity_ratio}")
     print(f"World-model observation objective: {config.observation_objective}")
     print(f"Actor network: {config.actor_network}")
+    print(
+        "Actor-critic training: "
+        f"optimizer={config.ac_optimizer} lr={config.ac_lr} "
+        f"dream_steps={config.ac_dream_steps} agc={config.ac_agc_clip} "
+        f"grad_clip={config.ac_grad_clip}"
+    )
 
     if config.algorithm == "sac":
         exit(0)
@@ -699,23 +719,49 @@ if __name__ == "__main__":
         world_model_seconds = _stage_elapsed(world_model_started, args.profile_stages)
         actor_started = _stage_clock(args.profile_stages)
 
+        actor_critic_kwargs = {
+            "dream_steps": config.ac_dream_steps,
+            "actor_network": config.actor_network,
+            "actor_kan_hidden_features": config.actor_kan_hidden_features,
+            "actor_kan_grid_size": config.actor_kan_grid_size,
+            "actor_kan_spline_order": config.actor_kan_spline_order,
+            "actor_kan_input_min": config.actor_kan_input_min,
+            "actor_kan_input_max": config.actor_kan_input_max,
+            "actor_kan_normalize_recurrent_state": (
+                config.actor_kan_normalize_recurrent_state
+            ),
+            "fastkan_hidden_features": config.fastkan_hidden_features,
+            "fastkan_hidden_layers": config.fastkan_hidden_layers,
+            "fastkan_grid_size": config.fastkan_grid_size,
+            "fastkan_input_min": config.fastkan_input_min,
+            "fastkan_input_max": config.fastkan_input_max,
+            "fastkan_rms_norm_epsilon": config.fastkan_rms_norm_epsilon,
+            "fastkan_actor_output_scale": config.fastkan_actor_output_scale,
+            "fastkan_actor_unimix": config.fastkan_actor_unimix,
+            "optimizer_name": config.ac_optimizer,
+            "optimizer_eps": config.ac_optimizer_eps,
+            "optimizer_beta1": config.ac_optimizer_beta1,
+            "optimizer_beta2": config.ac_optimizer_beta2,
+            "optimizer_warmup_steps": config.ac_optimizer_warmup_steps,
+            "agc_clip": config.ac_agc_clip,
+            "grad_clip": config.ac_grad_clip,
+            "discount": config.ac_discount,
+            "lam": config.ac_lambda,
+            "entropy_scale": config.ac_entropy_scale,
+            "return_norm_decay": config.ac_return_norm_decay,
+            "persistent_return_norm": config.ac_persistent_return_norm,
+            "slow_critic_regularizer": config.ac_slow_critic_regularizer,
+            "slow_critic_decay": config.ac_slow_critic_decay,
+        }
+
         if config.fresh_ac and epoch % config.fresh_ac == 0:
             aco, approx_perf = train_ac_from_wm(
                 wm,
                 replay,
                 config.ac_train_steps,
                 config.ac_train_sync,
-                dream_steps=16,
-                lr=4e-4,
-                actor_network=config.actor_network,
-                actor_kan_hidden_features=config.actor_kan_hidden_features,
-                actor_kan_grid_size=config.actor_kan_grid_size,
-                actor_kan_spline_order=config.actor_kan_spline_order,
-                actor_kan_input_min=config.actor_kan_input_min,
-                actor_kan_input_max=config.actor_kan_input_max,
-                actor_kan_normalize_recurrent_state=(
-                    config.actor_kan_normalize_recurrent_state
-                ),
+                lr=config.ac_fresh_lr,
+                **actor_critic_kwargs,
             )
         else:
             aco, approx_perf = train_ac_from_wm(
@@ -723,18 +769,9 @@ if __name__ == "__main__":
                 replay,
                 config.ac_train_steps,
                 config.ac_train_sync,
-                dream_steps=16,
                 aco=aco,
-                lr=1e-4,
-                actor_network=config.actor_network,
-                actor_kan_hidden_features=config.actor_kan_hidden_features,
-                actor_kan_grid_size=config.actor_kan_grid_size,
-                actor_kan_spline_order=config.actor_kan_spline_order,
-                actor_kan_input_min=config.actor_kan_input_min,
-                actor_kan_input_max=config.actor_kan_input_max,
-                actor_kan_normalize_recurrent_state=(
-                    config.actor_kan_normalize_recurrent_state
-                ),
+                lr=config.ac_lr,
+                **actor_critic_kwargs,
             )
 
         actor_seconds = _stage_elapsed(actor_started, args.profile_stages)
