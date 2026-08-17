@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +67,30 @@ class R2DreamerConfigTests(unittest.TestCase):
     def test_unknown_config_key_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown R2-Dreamer"):
             R2DreamerConfig.from_dict({"batch_length": 64, "unknown": 1})
+
+
+
+@unittest.skipIf(torch is None, "requires the pinned PyTorch experiment environment")
+class AtariEnvironmentRegistrationTests(unittest.TestCase):
+    def test_vector_worker_registers_ale_before_making_environment(self) -> None:
+        from scripts import train_r2dreamer_arrow_atari as trainer
+
+        sentinel = object()
+
+        class CapturingVectorEnvironment:
+            def __init__(self, env_fns, *, autoreset_mode) -> None:
+                self.env_fns = env_fns
+                self.autoreset_mode = autoreset_mode
+
+        with (
+            patch.object(trainer, "AsyncVectorEnv", CapturingVectorEnvironment),
+            patch.object(trainer, "AtariPreprocessing", side_effect=lambda env, **_: env),
+            patch.object(trainer.gym, "register_envs") as register_envs,
+        ):
+            environment = trainer._make_vector_environment([lambda: sentinel], action_repeat=4)
+            self.assertIs(environment.env_fns[0](), sentinel)
+
+        register_envs.assert_called_once_with(trainer.ale_py)
 
 
 @unittest.skipIf(torch is None, "requires the pinned PyTorch experiment environment")
