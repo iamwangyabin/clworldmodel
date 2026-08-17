@@ -2,9 +2,13 @@
 
 ## Status
 
-Implementation-ready, unrun method pilot. The first experiment is deliberately
-limited to two tasks. A successful one-seed pilot is a reason to repeat the
-comparison, not evidence that KAN solves continual learning.
+Completed but not advanced. The seed-0 `relu_kan` T2 pilot exposed a fixed-grid
+interface failure: the unbounded first KAN output could leave the second
+layer's compact support, so its poor returns cannot be interpreted as a fair
+test of KAN trainability or continual learning. The implementation remains
+available for checkpoint compatibility under its original name. The corrected
+successor is documented in
+[`arrow_kan_actor_bounded_atari.md`](arrow_kan_actor_bounded_atari.md).
 
 The method is named `ARROW-KANActor-50`: ARROW-50 replay remains the continual
 learning strategy, while only the Dreamer actor function approximator changes.

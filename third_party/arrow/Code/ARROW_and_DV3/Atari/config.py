@@ -15,7 +15,7 @@ T = TypeVar("T", bound="Serialisable")
 
 ArrowReplayCapacityRatio = Literal["50-50", "25-75", "75-25"]
 ObservationObjective = Literal["reconstruction", "r2"]
-ActorNetwork = Literal["mlp", "relu_kan"]
+ActorNetwork = Literal["mlp", "relu_kan", "relu_kan_bounded"]
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -225,7 +225,7 @@ class Config(Serialisable):
             raise ValueError("r2_redundancy_scale must be non-negative")
         if self.r2_normalization_eps <= 0:
             raise ValueError("r2_normalization_eps must be positive")
-        if self.actor_network not in {"mlp", "relu_kan"}:
+        if self.actor_network not in {"mlp", "relu_kan", "relu_kan_bounded"}:
             raise ValueError(f"Unknown actor network: {self.actor_network!r}")
         if self.actor_kan_hidden_features < 1:
             raise ValueError("actor_kan_hidden_features must be positive")
@@ -244,7 +244,7 @@ class Config(Serialisable):
             raise ValueError(
                 "The fixed [0, 1] KAN-Actor grid requires recurrent-state normalization"
             )
-        if self.actor_network == "relu_kan":
+        if self.actor_network in {"relu_kan", "relu_kan_bounded"}:
             basis_count = self.actor_kan_grid_size + self.actor_kan_spline_order
             if self.actor_kan_hidden_features * basis_count != self.mlp_features:
                 raise ValueError(

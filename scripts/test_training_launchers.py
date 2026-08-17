@@ -186,6 +186,28 @@ class TrainingLauncherTests(unittest.TestCase):
             launch["final_evaluation"]["reports_raw_and_scaled_returns"]
         )
 
+    def test_bounded_kan_t1_pilot_preserves_the_single_task_budget(self) -> None:
+        launch = self._arrow_dry_run(
+            "--actor-network", "relu_kan_bounded", "--task-prefix-length", "1"
+        )
+
+        self.assertEqual(launch["method"], "ARROW-KANActorBounded-50-T1TrainabilityPilot")
+        self.assertEqual(launch["role"], "actor-trainability-pilot")
+        self.assertEqual(launch["training_scope"]["task_prefix_length"], 1)
+        self.assertEqual(launch["training_scope"]["epochs"], 90)
+        self.assertEqual(launch["training_scope"]["tasks"], ["ALE/MsPacman-v5"])
+        self.assertEqual(launch["analysis_snapshot_semantics"]["task_boundary_epochs"], [89])
+        actor = launch["actor"]
+        self.assertEqual(actor["network"], "relu_kan_bounded")
+        self.assertEqual(actor["kan_hidden_adapter"], "layer_norm_sigmoid")
+        self.assertEqual(actor["kan_hidden_adapter_layer_norm_epsilon"], 1e-3)
+        self.assertEqual(actor["trainable_parameters"], 795_858)
+
+        command = launch["command"]
+        self.assertEqual(command[command.index("--actor-network") + 1], "relu_kan_bounded")
+        self.assertEqual(command[command.index("--epochs") + 1], "90")
+        self.assertIn("--evaluate-final", command)
+
 
 if __name__ == "__main__":
     unittest.main()

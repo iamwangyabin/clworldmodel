@@ -35,6 +35,23 @@ THREAD_ENV_KEYS = (
     "OPENBLAS_NUM_THREADS",
     "NUMEXPR_NUM_THREADS",
 )
+KAN_ACTOR_NETWORKS = frozenset({"relu_kan", "relu_kan_bounded"})
+KAN_ACTOR_METADATA = {
+    "relu_kan": {
+        "method": "ARROW-KANActor-50",
+        "output_prefix": "arrow_kan_actor_ar50",
+        "hidden_adapter": "none",
+        "hidden_adapter_layer_norm_epsilon": None,
+        "trainable_parameters": 795_730,
+    },
+    "relu_kan_bounded": {
+        "method": "ARROW-KANActorBounded-50",
+        "output_prefix": "arrow_kan_actor_bounded_ar50",
+        "hidden_adapter": "layer_norm_sigmoid",
+        "hidden_adapter_layer_norm_epsilon": 1e-3,
+        "trainable_parameters": 795_858,
+    },
+}
 
 
 def _positive_int(value: str) -> int:
@@ -61,17 +78,17 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--actor-network",
-        choices=["mlp", "relu_kan"],
+        choices=["mlp", "relu_kan", "relu_kan_bounded"],
         default="mlp",
-        help="Keep the published MLP actor or use the parameter-matched KAN actor",
+        help="Keep the MLP actor or select one of the named KAN actor variants",
     )
     parser.add_argument(
         "--task-prefix-length",
         type=int,
-        choices=[2, 3],
+        choices=[1, 2, 3],
         help=(
-            "Run only the first two or three tasks as a named one- or two-switch "
-            "pilot; task order and per-task duration remain unchanged"
+            "Run only the first one, two, or three tasks as a named trainability or "
+            "continual pilot; task order and per-task duration remain unchanged"
         ),
     )
     parser.add_argument(
@@ -282,7 +299,7 @@ def main() -> int:
     parser = _parser()
     args = parser.parse_args()
     if (
-        args.actor_network == "relu_kan"
+        args.actor_network in KAN_ACTOR_NETWORKS
         and args.observation_objective != "reconstruction"
     ):
         parser.error("KAN-Actor must be tested independently from the R2 ablation")
@@ -297,8 +314,8 @@ def main() -> int:
     python = args.python.resolve()
     config_path = _config_path(args.curriculum, args.seed)
     config = _verify_primary_config(config_path, args.curriculum, args.seed)
-    if args.actor_network == "relu_kan":
-        output_prefix = "arrow_kan_actor_ar50"
+    if args.actor_network in KAN_ACTOR_NETWORKS:
+        output_prefix = KAN_ACTOR_METADATA[args.actor_network]["output_prefix"]
     elif args.observation_objective == "r2":
         output_prefix = "arrow_r2rep_ar50"
     else:
@@ -317,7 +334,7 @@ def main() -> int:
         thread_env = {key: str(args.cpu_threads) for key in THREAD_ENV_KEYS}
         env.update(thread_env)
     project_pythonpath = None
-    if args.observation_objective == "r2" or args.actor_network == "relu_kan":
+    if args.observation_objective == "r2" or args.actor_network in KAN_ACTOR_NETWORKS:
         project_pythonpath = str(ROOT / "src")
         inherited_pythonpath = env.get("PYTHONPATH")
         env["PYTHONPATH"] = os.pathsep.join(
@@ -349,8 +366,8 @@ def main() -> int:
                 str(R2_NORMALIZATION_EPS),
             )
         )
-    if args.actor_network == "relu_kan":
-        command.extend(("--actor-network", "relu_kan"))
+    if args.actor_network in KAN_ACTOR_NETWORKS:
+        command.extend(("--actor-network", args.actor_network))
     swap_sched = config["esc"]["kwargs"]["swap_sched"]
     training_epochs = (
         config["epochs"]
@@ -364,9 +381,9 @@ def main() -> int:
     command.extend(("--compile-world-model", "--fused-adam", "--tf32"))
     boundary_epochs = list(range(swap_sched - 1, training_epochs, swap_sched))
     is_r2 = args.observation_objective == "r2"
-    is_kan_actor = args.actor_network == "relu_kan"
+    is_kan_actor = args.actor_network in KAN_ACTOR_NETWORKS
     if is_kan_actor:
-        method = "ARROW-KANActor-50"
+        method = KAN_ACTOR_METADATA[args.actor_network]["method"]
         role = "actor-architecture-ablation"
     elif is_r2:
         method = "ARROW-R2Rep-50"
@@ -375,12 +392,16 @@ def main() -> int:
         method = "ARROW-50"
         role = "primary-method"
     if args.task_prefix_length is not None:
-        method += f"-T{args.task_prefix_length}Pilot"
-        role = (
-            "actor-architecture-pilot"
-            if is_kan_actor
-            else "matched-short-pilot-control"
-        )
+        if args.task_prefix_length == 1 and is_kan_actor:
+            method += "-T1TrainabilityPilot"
+            role = "actor-trainability-pilot"
+        else:
+            method += f"-T{args.task_prefix_length}Pilot"
+            role = (
+                "actor-architecture-pilot"
+                if is_kan_actor
+                else "matched-short-pilot-control"
+            )
     launch = {
         "method": method,
         "role": role,
@@ -470,7 +491,23 @@ def main() -> int:
             "kan_input_range": [0.0, 1.0] if is_kan_actor else None,
             "kan_grid_trainable": False if is_kan_actor else None,
             "kan_normalize_recurrent_state": True if is_kan_actor else None,
-            "trainable_parameters": 795730 if is_kan_actor else 797202,
+            "kan_hidden_adapter": (
+                KAN_ACTOR_METADATA[args.actor_network]["hidden_adapter"]
+                if is_kan_actor
+                else None
+            ),
+            "kan_hidden_adapter_layer_norm_epsilon": (
+                KAN_ACTOR_METADATA[args.actor_network][
+                    "hidden_adapter_layer_norm_epsilon"
+                ]
+                if is_kan_actor
+                else None
+            ),
+            "trainable_parameters": (
+                KAN_ACTOR_METADATA[args.actor_network]["trainable_parameters"]
+                if is_kan_actor
+                else 797_202
+            ),
             "implementation": (
                 "project-owned-independent-pytorch" if is_kan_actor else "vendored-mlp"
             ),

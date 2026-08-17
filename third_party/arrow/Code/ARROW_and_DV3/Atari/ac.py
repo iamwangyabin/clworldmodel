@@ -62,10 +62,13 @@ def build_actor(
             *get_mlp_layers(in_dim, act_space, final_activation=None),
             nn.LogSoftmax(-1),
         )
-    if actor_network == "relu_kan":
-        from clworldmodel.models.relu_kan import ReLUKANActor
+    if actor_network in {"relu_kan", "relu_kan_bounded"}:
+        from clworldmodel.models.relu_kan import BoundedReLUKANActor, ReLUKANActor
 
-        return ReLUKANActor(
+        actor_class = (
+            BoundedReLUKANActor if actor_network == "relu_kan_bounded" else ReLUKANActor
+        )
+        return actor_class(
             in_dim,
             act_space,
             recurrent_features=h_dim,

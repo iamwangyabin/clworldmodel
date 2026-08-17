@@ -15,8 +15,8 @@ ready, unrun method ablations:
 - the matched DreamerV3/FIFO Atari control launcher;
 - an opt-in decoder-free R2 representation-objective ablation with ARROW-50
   replay;
-- an opt-in, parameter-matched fixed-grid ReLU-KAN actor with ARROW-50 replay
-  and a named two-task screening protocol;
+- an opt-in, parameter-matched fixed-grid ReLU-KAN actor with a bounded hidden
+  interface and a named trainability pilot;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -120,22 +120,24 @@ accounting, and experiment ladder.
 
 ## Actor ablation: ARROW-KANActor-50
 
-`ARROW-KANActor-50` keeps the ARROW-50 FIFO/LTDM replay strategy, world model,
-critic, budgets, and curriculum unchanged. It replaces only the
-`1536 -> 512 -> 18` MLP actor with a parameter-matched
-`1536 -> 64 -> 18` fixed-grid ReLU-KAN actor. The first screen covers just
-`MsPacman -> Boxing` and ends after epoch 179:
+The direct `ARROW-KANActor-50` pilot exposed an out-of-support second KAN layer
+and is retained only for reproducibility. `ARROW-KANActorBounded-50` keeps the
+ARROW-50 FIFO/LTDM replay strategy, world model, critic, budgets, and
+curriculum unchanged, but inserts a LayerNorm--sigmoid adapter between the two
+fixed-grid KAN layers. Its first screen is a 90-epoch MsPacman trainability
+pilot:
 
 ```bash
 python scripts/run_arrow_ar50_atari.py \
-  --actor-network relu_kan \
-  --task-prefix-length 2 \
+  --actor-network relu_kan_bounded \
+  --task-prefix-length 1 \
   --seed 0 \
   --dry-run
 ```
 
-This is an unrun actor-architecture pilot, not evidence that KAN prevents
-forgetting. See `docs/protocols/arrow_kan_actor_atari.md` for the exact basis,
-parameter accounting, matched MLP control, two-task metrics, and decision rule.
+This is an unrun actor trainability pilot, not evidence that KAN prevents
+forgetting. See `docs/protocols/arrow_kan_actor_bounded_atari.md` for the
+fixed-grid diagnosis, exact architecture, parameter accounting, and decision
+rule.
 
 Project-wide research and engineering constraints are defined in `AGENTS.md`.

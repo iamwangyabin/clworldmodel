@@ -22,7 +22,11 @@ if torch is not None:
     sys.path.insert(0, str(PROJECT_SRC))
     sys.path.insert(0, str(VENDORED_ATARI))
     from ac import ActorCritic
-    from clworldmodel.models.relu_kan import FixedGridReLUKANLayer, ReLUKANActor
+    from clworldmodel.models.relu_kan import (
+        BoundedReLUKANActor,
+        FixedGridReLUKANLayer,
+        ReLUKANActor,
+    )
     from config import Config
 
 
@@ -115,6 +119,61 @@ class KANActorTests(unittest.TestCase):
         self.assertEqual(mlp_parameters, 797_202)
         self.assertLess(abs(kan_parameters - mlp_parameters) / mlp_parameters, 0.002)
 
+    def test_bounded_actor_keeps_every_second_layer_input_on_the_fixed_grid(self) -> None:
+        torch.manual_seed(23)
+        actor = BoundedReLUKANActor(
+            10,
+            3,
+            recurrent_features=4,
+            hidden_features=2,
+            grid_size=3,
+            spline_order=1,
+        )
+        discrete = torch.nn.functional.one_hot(
+            torch.randint(0, 6, (4, 2)), num_classes=6
+        ).float()
+        recurrent = 2 * torch.rand(4, 2, 4) - 1
+        state = torch.cat((discrete, recurrent), dim=-1)
+
+        second_layer_inputs = []
+        hook = actor.network.layers[1].register_forward_pre_hook(
+            lambda _module, args: second_layer_inputs.append(args[0].detach())
+        )
+        action_logs = actor(state)
+        hook.remove()
+
+        hidden = second_layer_inputs[0]
+        self.assertTrue(torch.all(hidden > 0.0))
+        self.assertTrue(torch.all(hidden < 1.0))
+        active_basis = actor.network.layers[1].basis_activations(hidden).ne(0).any(-1)
+        self.assertTrue(torch.all(active_basis))
+        self.assertEqual(action_logs.shape, (4, 2, 3))
+
+        (-action_logs[..., 0].mean()).backward()
+        for name in (
+            "network.layers.0.weight",
+            "network.layers.1.weight",
+            "hidden_adapter.0.weight",
+        ):
+            gradient = dict(actor.named_parameters())[name].grad
+            self.assertIsNotNone(gradient, name)
+            self.assertGreater(gradient.abs().sum().item(), 0.0, name)
+
+    def test_bounded_actor_remains_parameter_matched_to_the_mlp(self) -> None:
+        bounded_actor = BoundedReLUKANActor(
+            1536,
+            18,
+            recurrent_features=512,
+            hidden_features=64,
+            grid_size=5,
+            spline_order=3,
+        )
+        bounded_parameters = sum(
+            parameter.numel() for parameter in bounded_actor.parameters()
+        )
+        self.assertEqual(bounded_parameters, 795_858)
+        self.assertLess(abs(bounded_parameters - 797_202) / 797_202, 0.002)
+
     def test_explicit_mlp_option_preserves_default_actor_initialization(self) -> None:
         torch.manual_seed(17)
         default = ActorCritic(16, 4)
@@ -138,6 +197,10 @@ class KANActorTests(unittest.TestCase):
         self.assertEqual(
             (kan.actor_kan_input_min, kan.actor_kan_input_max), (0.0, 1.0)
         )
+
+        kan_data["actor_network"] = "relu_kan_bounded"
+        bounded = Config.from_dict(kan_data)
+        self.assertEqual(bounded.actor_network, "relu_kan_bounded")
 
         kan_data["actor_kan_hidden_features"] = 63
         with self.assertRaisesRegex(ValueError, "coefficient matching"):
@@ -167,6 +230,18 @@ class KANActorTests(unittest.TestCase):
         self.assertIsInstance(actor_critic.critic, nn.Sequential)
         self.assertIsInstance(actor_critic.critic[-1], nn.LogSoftmax)
         self.assertEqual(actor_critic.critic[-2].out_features, 255)
+
+        bounded_actor_critic = ActorCritic(
+            16,
+            4,
+            actor_network="relu_kan_bounded",
+            h_dim=6,
+            kan_hidden_features=2,
+            kan_grid_size=3,
+            kan_spline_order=1,
+        )
+        self.assertIsInstance(bounded_actor_critic.actor, BoundedReLUKANActor)
+        self.assertIsInstance(bounded_actor_critic.critic, nn.Sequential)
 
 
 if __name__ == "__main__":

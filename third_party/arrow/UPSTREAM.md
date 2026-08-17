@@ -67,6 +67,13 @@ documented here, covered by focused parity tests, and followed by regenerating
     and restore parent Python, NumPy, and PyTorch CPU/CUDA RNG states after
     evaluation so its stochastic actions cannot alter later training draws.
     CUDA remains outside deterministic-only mode and is recorded as such.
+13. Add opt-in `relu_kan_bounded`, a separate named KAN actor variant that
+    preserves the historical direct `relu_kan` bridge and inserts a project-owned
+    LayerNorm--sigmoid adapter between its two fixed-grid KAN layers. This keeps
+    second-layer inputs inside the declared grid support after the direct pilot
+    exposed an out-of-support, inactive-basis failure. The default MLP remains
+    unchanged; fixed-grid support and gradient-reachability tests cover the new
+    bridge.
 
 ## Known issues at import
 

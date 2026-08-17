@@ -128,7 +128,13 @@ class FixedGridReLUKAN(nn.Module):
 
 
 class ReLUKANActor(nn.Module):
-    """Parameter-matched ReLU-KAN actor for discrete DreamerV3 states."""
+    """Original fixed-grid ReLU-KAN actor for discrete DreamerV3 states.
+
+    This class preserves the first ``relu_kan`` pilot exactly. Its two KAN
+    layers are directly composed, so it is retained for checkpoint
+    compatibility and for documenting the failed-grid pilot. New experiments
+    should use :class:`BoundedReLUKANActor` instead.
+    """
 
     def __init__(
         self,
@@ -167,7 +173,8 @@ class ReLUKANActor(nn.Module):
             input_max=input_max,
         )
 
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
+    def grid_inputs(self, state: torch.Tensor) -> torch.Tensor:
+        """Convert a Dreamer state into the fixed ``[0, 1]`` KAN domain."""
         if state.ndim < 1 or state.shape[-1] != self.in_features:
             raise ValueError(
                 f"KAN actor expected state shape [..., {self.in_features}], "
@@ -178,5 +185,59 @@ class ReLUKANActor(nn.Module):
         recurrent = self.input_min + 0.5 * (recurrent + 1.0) * (
             self.input_max - self.input_min
         )
-        logits = self.network(torch.cat((discrete, recurrent), dim=-1))
+        return torch.cat((discrete, recurrent), dim=-1)
+
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        logits = self.network(self.grid_inputs(state))
+        return F.log_softmax(logits, dim=-1)
+
+
+class BoundedReLUKANActor(ReLUKANActor):
+    """Fixed-grid ReLU-KAN actor with a bounded hidden KAN interface.
+
+    A fixed local grid is meaningful only when every KAN layer receives values
+    inside its support. The original pilot normalized the external Dreamer
+    state but sent the unbounded first KAN output directly into the second
+    fixed grid. This variant keeps the same local basis and coefficient budget
+    while inserting a LayerNorm--sigmoid adapter between the two KAN layers.
+    The adapter guarantees that the second KAN layer receives values in
+    ``(0, 1)`` for every batch and time shape.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        action_features: int,
+        *,
+        recurrent_features: int,
+        hidden_features: int = 64,
+        grid_size: int = 5,
+        spline_order: int = 3,
+        input_min: float = 0.0,
+        input_max: float = 1.0,
+        normalize_recurrent_state: bool = True,
+        layer_norm_epsilon: float = 1e-3,
+    ) -> None:
+        if layer_norm_epsilon <= 0:
+            raise ValueError("layer_norm_epsilon must be positive")
+        super().__init__(
+            in_features,
+            action_features,
+            recurrent_features=recurrent_features,
+            hidden_features=hidden_features,
+            grid_size=grid_size,
+            spline_order=spline_order,
+            input_min=input_min,
+            input_max=input_max,
+            normalize_recurrent_state=normalize_recurrent_state,
+        )
+        self.hidden_adapter = nn.Sequential(
+            nn.LayerNorm(hidden_features, eps=layer_norm_epsilon),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        hidden = self.network.layers[0](self.grid_inputs(state))
+        hidden = self.hidden_adapter(hidden)
+        logits = self.network.layers[1](hidden)
         return F.log_softmax(logits, dim=-1)

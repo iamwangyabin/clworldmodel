@@ -364,7 +364,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--actor-network",
-        choices=["mlp", "relu_kan"],
+        choices=["mlp", "relu_kan", "relu_kan_bounded"],
         default=None,
         help="Optional actor architecture override; the critic remains unchanged.",
     )
