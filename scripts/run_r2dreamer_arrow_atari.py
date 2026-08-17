@@ -42,7 +42,7 @@ THREAD_ENV_KEYS = (
     "NUMEXPR_NUM_THREADS",
 )
 R2_ATARI_100K_RAW_FRAMES = 410_000
-R2_AMP_CALIBRATION_SMOKE_UPDATES = 4
+R2_AMP_CALIBRATION_SMOKE_UPDATES = 12
 
 
 def _positive_int(value: str) -> int:
@@ -75,7 +75,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--smoke",
         action="store_true",
-        help="One epoch and four updates; includes native AMP loss-scale calibration.",
+        help="One epoch and twelve updates; includes native AMP loss-scale calibration.",
     )
     parser.add_argument("--dry-run", action="store_true")
     return parser
