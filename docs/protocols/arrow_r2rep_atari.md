@@ -2,9 +2,15 @@
 
 ## Status
 
-Implementation-ready, unrun ablation. A smoke run establishes execution only;
-one seed is a pilot, and no retention or performance conclusion is valid until
-the frozen multi-seed comparison is complete.
+Completed seed-0 pilot with a negative acquisition result. The run reached the
+frozen epoch-540 endpoint without a numerical failure, but several individual
+tasks did not learn competitively before any continual-retention conclusion
+could be made. It remains a preserved failed pilot, not evidence about
+forgetting or a reproduced R2-Dreamer baseline.
+
+The follow-up native route is `R2Dreamer-ARROW-50`; see
+`r2dreamer_arrow_atari.md`. It is intentionally a different method rather
+than a retry under the same label.
 
 This protocol tests whether replacing pixel reconstruction with the
 decoder-free self-supervised representation objective from R2-Dreamer reduces

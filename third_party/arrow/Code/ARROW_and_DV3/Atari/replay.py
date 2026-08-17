@@ -14,12 +14,24 @@ class Replay:
 
     def add(
         self, acts: ActionT, obss: ImageT, rews: RewardT, conts: ContT, resets: ResetT
-    ) -> None:
+    ) -> list[int]:
         raise NotImplementedError
 
     def minibatch(
         self, mb_t: int, mb_n: int, mb_device: str = "cuda"
     ) -> tuple[ActionT, ImageT, RewardT, ContT, ResetT]:
+        return self.minibatch_with_metadata(mb_t, mb_n, mb_device)[:5]
+
+    def minibatch_with_metadata(
+        self, mb_t: int, mb_n: int, mb_device: str = "cuda"
+    ) -> tuple[ActionT, ImageT, RewardT, ContT, ResetT, np.ndarray, np.ndarray]:
+        """Sample a minibatch plus source time and sequence indices.
+
+        The public ``minibatch`` behavior is unchanged. The metadata-only
+        variant is used by the R2-Dreamer adapter to read and refresh its
+        sidecar posterior-state cache without altering ARROW retention or
+        buffer-selection semantics.
+        """
         # Data [ T N ... ]
         # Sample minibatches in [ t_size n_size ... ]
         t_size = min(mb_t, self.t)
@@ -57,6 +69,8 @@ class Replay:
             mb_rews.to(mb_device),
             mb_conts.to(mb_device),
             mb_resets.to(mb_device),
+            t_starts,
+            ns,
         )
 
 
@@ -76,10 +90,11 @@ class FifoReplay(Replay):
 
     def add(
         self, acts: ActionT, obss: ImageT, rews: RewardT, conts: ContT, resets: ResetT
-    ) -> None:
+    ) -> list[int]:
         # Incoming shapes [ T N ... ]
         assert acts.shape[0] == self.t
         data_n = acts.shape[1]
+        slots = [int((self.n_idx + offset) % self.n) for offset in range(data_n)]
 
         if self.n_idx + data_n <= self.n:
             self.acts[:, self.n_idx : self.n_idx + data_n] = acts
@@ -104,6 +119,7 @@ class FifoReplay(Replay):
 
         self.n_idx = (self.n_idx + data_n) % self.n
         self.n_valid = min(self.n_valid + data_n, self.n)
+        return slots
 
 
 class LongTermReplay(Replay):
@@ -124,9 +140,12 @@ class LongTermReplay(Replay):
         self.collection = SortedList([(float("-inf"), _n) for _n in range(n)])
         self.n_valid = 0
 
-    def add(self, acts: ActionT, obss: ImageT, rews: RewardT, conts: ContT, resets: ResetT) -> None:
+    def add(
+        self, acts: ActionT, obss: ImageT, rews: RewardT, conts: ContT, resets: ResetT
+    ) -> list[int]:
         assert acts.shape[0] == self.t
         data_n = acts.shape[1]
+        slots = [-1 for _ in range(data_n)]
 
         for n in range(data_n):
             least_prio, least_index = self.collection[0]
@@ -141,6 +160,8 @@ class LongTermReplay(Replay):
                 self.rews[:, least_index] = rews[:, n]
                 self.conts[:, least_index] = conts[:, n]
                 self.resets[:, least_index] = resets[:, n]
+                slots[n] = least_index
+        return slots
 
 
 class MultiTypeReplay(Replay):
@@ -165,11 +186,21 @@ class MultiTypeReplay(Replay):
     def n_valid(self, _: int) -> None:
         return
 
-    def add(self, acts: ActionT, obss: ImageT, rews: RewardT, conts: ContT, resets: ResetT) -> None:
-        for replay in self.replays:
-            replay.add(acts, obss, rews, conts, resets)
+    def add(
+        self, acts: ActionT, obss: ImageT, rews: RewardT, conts: ContT, resets: ResetT
+    ) -> tuple[list[int], ...]:
+        return tuple(replay.add(acts, obss, rews, conts, resets) for replay in self.replays)
 
     def minibatch(self, mb_t: int, mb_n: int, mb_device: str = "cuda") -> tuple[ActionT, ImageT, RewardT, ContT, ResetT]:
-        replay = random.choices(self.replays, weights=self.sampling_weights, k=1)[0]
-        return replay.minibatch(mb_t, mb_n, mb_device)
+        return self.minibatch_with_metadata(mb_t, mb_n, mb_device)[:5]
 
+    def minibatch_with_metadata(
+        self, mb_t: int, mb_n: int, mb_device: str = "cuda"
+    ) -> tuple[ActionT, ImageT, RewardT, ContT, ResetT, int, np.ndarray, np.ndarray]:
+        """Sample with the selected sub-buffer and its source indices."""
+        replay = random.choices(self.replays, weights=self.sampling_weights, k=1)[0]
+        replay_index = self.replays.index(replay)
+        acts, obss, rews, conts, resets, t_starts, ns = replay.minibatch_with_metadata(
+            mb_t, mb_n, mb_device
+        )
+        return acts, obss, rews, conts, resets, replay_index, t_starts, ns

@@ -1,7 +1,10 @@
 clworldmodel
 Copyright 2026 Wang Yabin
 
-This product includes an unmodified snapshot of ARROW, copyright Cerenaut,
+This product includes a project-maintained snapshot of ARROW, copyright Cerenaut,
 licensed under the MIT License. See third_party/arrow/LICENSE and
 third_party/arrow/UPSTREAM.md.
 
+This product includes selected R2-Dreamer source files, copyright Naoki
+Morihira, licensed under the MIT License. See third_party/r2dreamer/LICENSE
+and third_party/r2dreamer/UPSTREAM.md.

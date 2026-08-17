@@ -45,6 +45,13 @@ documented here, covered by focused parity tests, and followed by regenerating
 8. Persist world-model and observation-head parameter counts and parameter
    bytes in `model_parameter_accounting.json` for both objectives. The artifact
    explicitly excludes gradients, optimizer state, and activations.
+9. Add metadata-only replay methods and return values for the project-owned
+   native R2-Dreamer adapter. The original `add` writes, FIFO overwrite order,
+   LTDM random-key decisions, and `minibatch` tensor outputs remain unchanged;
+   the optional metadata exposes accepted slots plus sampled time and sequence
+   indices so an external R2 posterior-state sidecar can stay aligned. A
+   deterministic FIFO parity test checks the unchanged minibatch values and
+   wraparound slot map.
 
 ## Known issues at import
 

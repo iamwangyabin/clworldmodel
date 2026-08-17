@@ -7,20 +7,23 @@ distribution-matching (LTDM) replay budget.
 
 ## Current status
 
-The repository contains the maintained baseline stack plus one implementation-
-ready, unrun representation-objective ablation:
+The repository contains the maintained baseline stack plus two named
+decoder-free research routes:
 
 - the maintained ARROW source based on a pinned upstream commit;
 - the canonical ARROW-50 Atari launcher;
 - the matched DreamerV3/FIFO Atari control launcher;
-- an opt-in decoder-free R2 representation-objective ablation with ARROW-50
-  replay;
+- the completed `ARROW-R2Rep-50` partial-port pilot, preserved as a failed
+  single-task acquisition check rather than a retention result;
+- the implementation-ready native `R2Dreamer-ARROW-50` route, which uses the
+  upstream R2-Dreamer size12M model and optimizer with ARROW-50 replay;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
 The reusable R2 projector and loss are project-owned components under
-`src/clworldmodel/`. The trainer remains the documented vendored ARROW runtime;
-this is not yet a clean project-owned Dreamer implementation.
+`src/clworldmodel/`. The native R2 route owns its integration trainer and
+replay adapter while vendoring the checked R2-Dreamer model primitives. This is
+not yet a general clean-room Dreamer implementation.
 
 ## Setup
 
@@ -110,9 +113,30 @@ python scripts/run_arrow_ar50_atari.py \
   --dry-run
 ```
 
-This is an unrun representation-objective ablation, not a reproduced R2-Dreamer
-baseline and not evidence of improved retention. See
-`docs/protocols/arrow_r2rep_atari.md` for the exact objective, frozen comparison,
-accounting, and experiment ladder.
+The completed seed-0 pilot is a negative acquisition result, not a reproduced
+R2-Dreamer baseline and not evidence about retention. It is retained because
+the failed port constrains interpretation. See
+`docs/protocols/arrow_r2rep_atari.md` for the exact objective and protocol.
+
+## Native R2-Dreamer with ARROW replay
+
+`R2Dreamer-ARROW-50` replaces the partial port with the pinned R2-Dreamer
+size12M architecture, `16 x 64` batches, native LaProp/AGC optimization, and
+R2 latent-state replay context. ARROW remains responsible for FIFO/LTDM
+trajectory retention and 50/50 sub-buffer selection. The default command is a
+single-task, native-R2 Atari-100k-style acquisition check; it is deliberately
+not compute-matched to ARROW:
+
+```bash
+python scripts/run_r2dreamer_arrow_atari.py --seed 0 --dry-run
+python scripts/run_r2dreamer_arrow_atari.py \
+  --seed 0 \
+  --output-dir /persistent/path/r2dreamer_arrow50_single-task_original_s0
+```
+
+Run `--smoke` first on a target GPU. The adapter adds a byte-accounted CPU
+posterior-state sidecar, so future comparisons must report both trajectory
+capacity and actual storage bytes. See `docs/protocols/r2dreamer_arrow_atari.md`
+for the frozen native-R2 configuration and scope labels.
 
 Project-wide research and engineering constraints are defined in `AGENTS.md`.

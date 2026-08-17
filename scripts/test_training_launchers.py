@@ -36,6 +36,27 @@ class TrainingLauncherTests(unittest.TestCase):
             launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
             return launch
 
+    def _native_r2_dry_run(self, *extra_args: str) -> dict:
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary) / "r2dreamer_arrow_run"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_r2dreamer_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                    *extra_args,
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
     def test_arrow_dry_run_records_complete_analysis_snapshot_contract(self) -> None:
         launch = self._arrow_dry_run()
         output_dir = Path(launch["output_dir"])
@@ -90,6 +111,44 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(command[command.index("--r2-barlow-loss-scale") + 1], "0.05")
         self.assertEqual(command[command.index("--r2-redundancy-scale") + 1], "0.0005")
         self.assertEqual(command[command.index("--r2-normalization-eps") + 1], "1e-08")
+
+    def test_native_r2_dry_run_uses_size12m_geometry_and_arrow_replay(self) -> None:
+        launch = self._native_r2_dry_run()
+
+        self.assertEqual(launch["method"], "R2Dreamer-ARROW-50")
+        self.assertEqual(launch["role"], "native-r2dreamer-with-arrow-replay")
+        self.assertEqual(launch["scope"], "single-task")
+        self.assertEqual(launch["status_label"], "pilot")
+        self.assertEqual(
+            launch["upstream"]["r2dreamer"]["commit"],
+            "546e4fab8146ea4b14e1d7726bbc1a8a1d50322f",
+        )
+        r2 = launch["r2dreamer"]
+        self.assertFalse(r2["decoder_enabled"])
+        self.assertEqual((r2["embedding_dim"], r2["rssm_feature_dim"]), (1024, 2560))
+        self.assertEqual((r2["batch_size"], r2["batch_length"]), (16, 64))
+        self.assertEqual(r2["flattened_barlow_samples"], 1024)
+        self.assertEqual(r2["optimizer"], "LaProp")
+
+        replay = launch["arrow_replay"]
+        self.assertEqual((replay["fifo_slots"], replay["ltdm_slots"]), (512, 512))
+        self.assertEqual(replay["buffer_selection"], {"fifo": 0.5, "ltdm": 0.5})
+        self.assertEqual(replay["sample_context_steps"], 1)
+
+        budget = launch["budget"]
+        self.assertEqual(budget["task_count"], 1)
+        self.assertEqual(budget["epochs"], 7)
+        self.assertEqual(budget["nominal_world_model_updates_per_epoch"], 2_048)
+        self.assertEqual(budget["native_train_ratio"], 128)
+        self.assertEqual(budget["nominal_raw_frames_per_epoch"], 65_536)
+        self.assertEqual(budget["single_task_target_raw_frames"], 410_000)
+        self.assertEqual(budget["source_samples_per_epoch"], 512_000)
+        self.assertEqual(budget["r2_samples_per_epoch"], 2_097_152)
+
+        command = launch["command"]
+        self.assertEqual(command[command.index("--task-count") + 1], "1")
+        self.assertEqual(command[command.index("--epochs") + 1], "7")
+        self.assertEqual(command[command.index("--native-train-ratio") + 1], "128")
 
 
 if __name__ == "__main__":
