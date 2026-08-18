@@ -90,3 +90,11 @@ python scripts/run_arrow_ar50_atari.py \
 - KAN-Dreamer: <https://arxiv.org/abs/2512.07437>
 - Official DreamerV3: <https://github.com/danijar/dreamerv3>
 - FastKAN: <https://github.com/ZiyaoLi/fast-kan>
+
+## Continual follow-up
+
+The completed seed-0 screen reached raw MsPacman return `2410.625 +/- 713.700`
+after 90 epochs. The next registered experiment keeps this exact behavior
+package and restores the full six-task, 541-epoch ARROW curriculum. Its
+retention definitions, attribution limits, and launch command are in
+`arrow_fastkan_ac_stable_targets_continual_atari.md`.

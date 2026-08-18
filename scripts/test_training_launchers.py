@@ -491,6 +491,65 @@ class TrainingLauncherTests(unittest.TestCase):
         )
         self.assertNotIn("--milestone-completed-epoch", command)
 
+    def test_stable_fastkan_full_curriculum_records_retention_protocol(self) -> None:
+        launch = self._arrow_dry_run(
+            "--actor-network",
+            "fast_kan_ac_stable",
+        )
+
+        self.assertEqual(launch["method"], "ARROW-FastKANAC-StableTargets-50")
+        self.assertEqual(
+            launch["role"],
+            "actor-critic-continual-retention-pilot",
+        )
+        scope = launch["training_scope"]
+        self.assertTrue(scope["full_curriculum"])
+        self.assertIsNone(scope["task_prefix_length"])
+        self.assertEqual(scope["epochs"], 541)
+        self.assertEqual(scope["task_duration_epochs"], 90)
+        self.assertEqual(scope["agent_decisions"], 8_863_744)
+        self.assertEqual(scope["raw_environment_frames"], 35_454_976)
+        self.assertEqual(
+            scope["tasks"],
+            [
+                "ALE/MsPacman-v5",
+                "ALE/Boxing-v5",
+                "ALE/CrazyClimber-v5",
+                "ALE/Frostbite-v5",
+                "ALE/Seaquest-v5",
+                "ALE/Enduro-v5",
+            ],
+        )
+        self.assertEqual(
+            launch["analysis_snapshot_semantics"]["task_boundary_epochs"],
+            [89, 179, 269, 359, 449, 539],
+        )
+        self.assertEqual(
+            launch["analysis_snapshot_semantics"]["final_epoch"],
+            540,
+        )
+
+        retention = launch["continual_retention_evaluation"]
+        self.assertEqual(retention["comparison_method"], "ARROW-50")
+        self.assertEqual(retention["comparison_seed_id"], 0)
+        self.assertFalse(retention["task_identity_exposed_to_agent"])
+        self.assertEqual(
+            retention["acquisition_evaluation_epochs"],
+            [90, 180, 270, 360, 450, 540],
+        )
+        self.assertEqual(retention["final_comparable_evaluation_epoch"], 540)
+        self.assertEqual(retention["raw_return_metric"], "Perf/eval_raw_return_mean")
+        self.assertTrue(retention["multiple_seeds_required_for_claim"])
+
+        overrides = launch["config_overrides"]
+        self.assertTrue(overrides["ac_use_slow_critic_targets"])
+        self.assertTrue(overrides["ac_corrected_imagination_bootstrap"])
+        self.assertNotIn("epochs", overrides)
+        self.assertNotIn("esc.kwargs.swap_sched", overrides)
+        command = launch["command"]
+        self.assertNotIn("--epochs", command)
+        self.assertNotIn("--evaluate-final", command)
+
     def test_swanlab_mirroring_records_names_but_no_credential(self) -> None:
         launch = self._arrow_dry_run(
             "--actor-network",
