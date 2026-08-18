@@ -15,6 +15,16 @@ T = TypeVar("T", bound="Serialisable")
 
 ArrowReplayCapacityRatio = Literal["50-50", "25-75", "75-25"]
 ObservationObjective = Literal["reconstruction", "r2"]
+ActorNetwork = Literal[
+    "mlp",
+    "relu_kan",
+    "relu_kan_bounded",
+    "relu_kan_adaptive",
+    "fast_kan_ac",
+    "fast_kan_ac_param_matched",
+    "fast_kan_ac_stable",
+]
+ActorCriticOptimizer = Literal["adam", "laprop"]
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -182,6 +192,44 @@ class Config(Serialisable):
     mlp_layers: int = 2
     wall_time_optimisation: bool = False
 
+    actor_network: ActorNetwork = "mlp"
+    actor_kan_hidden_features: int = 64
+    actor_kan_grid_size: int = 5
+    actor_kan_spline_order: int = 3
+    actor_kan_input_min: float = 0.0
+    actor_kan_input_max: float = 1.0
+    actor_kan_trainable_grid: bool = False
+    actor_kan_normalize_recurrent_state: bool = True
+    fastkan_hidden_features: int = 34
+    fastkan_hidden_layers: int = 3
+    fastkan_grid_size: int = 8
+    fastkan_input_min: float = -2.0
+    fastkan_input_max: float = 2.0
+    fastkan_rms_norm_epsilon: float = 1e-4
+    fastkan_actor_output_scale: float = 0.01
+    fastkan_actor_unimix: float = 0.01
+
+    ac_optimizer: ActorCriticOptimizer = "adam"
+    ac_lr: float = 1e-4
+    ac_fresh_lr: float = 4e-4
+    ac_optimizer_eps: float = 1e-8
+    ac_optimizer_beta1: float = 0.9
+    ac_optimizer_beta2: float = 0.999
+    ac_optimizer_warmup_steps: int = 0
+    ac_agc_clip: float = 0.0
+    ac_grad_clip: float = 100.0
+    ac_dream_steps: int = 16
+    ac_discount: float = 0.997
+    ac_lambda: float = 0.95
+    ac_entropy_scale: float = 3e-4
+    ac_return_norm_decay: float = 0.99
+    ac_persistent_return_norm: bool = False
+    ac_slow_critic_regularizer: float = 0.0
+    ac_slow_critic_decay: float = 0.98
+    ac_replay_critic_loss_scale: float = 0.0
+    ac_use_slow_critic_targets: bool = False
+    ac_corrected_imagination_bootstrap: bool = False
+
     observation_objective: ObservationObjective = "reconstruction"
     r2_barlow_loss_scale: float = 0.05
     r2_redundancy_scale: float = 5e-4
@@ -200,6 +248,8 @@ class Config(Serialisable):
         return cls(**data)
 
     def __post_init__(self) -> None:
+        if self.epochs < 1:
+            raise ValueError("epochs must be positive")
         assert self.n_sync * self.gen_seq_len == self.data_n * self.data_t
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
@@ -213,6 +263,152 @@ class Config(Serialisable):
             raise ValueError("r2_redundancy_scale must be non-negative")
         if self.r2_normalization_eps <= 0:
             raise ValueError("r2_normalization_eps must be positive")
+        if self.actor_network not in {
+            "mlp",
+            "relu_kan",
+            "relu_kan_bounded",
+            "relu_kan_adaptive",
+            "fast_kan_ac",
+            "fast_kan_ac_param_matched",
+            "fast_kan_ac_stable",
+        }:
+            raise ValueError(f"Unknown actor network: {self.actor_network!r}")
+        if self.actor_kan_hidden_features < 1:
+            raise ValueError("actor_kan_hidden_features must be positive")
+        if self.actor_kan_grid_size < 1:
+            raise ValueError("actor_kan_grid_size must be positive")
+        if self.actor_kan_spline_order < 0:
+            raise ValueError("actor_kan_spline_order must be non-negative")
+        if (
+            self.actor_kan_input_min != 0.0
+            or self.actor_kan_input_max != 1.0
+        ):
+            raise ValueError("The first KAN-Actor protocol requires a [0, 1] grid")
+        expected_trainable_grid = self.actor_network == "relu_kan_adaptive"
+        if self.actor_kan_trainable_grid != expected_trainable_grid:
+            if expected_trainable_grid:
+                raise ValueError(
+                    "relu_kan_adaptive requires actor_kan_trainable_grid=True"
+                )
+            raise ValueError(
+                "Only relu_kan_adaptive may enable actor_kan_trainable_grid"
+            )
+        if not self.actor_kan_normalize_recurrent_state:
+            raise ValueError(
+                "The [0, 1] KAN-Actor input domain requires recurrent-state normalization"
+            )
+        if self.actor_network in {
+            "relu_kan",
+            "relu_kan_bounded",
+            "relu_kan_adaptive",
+        }:
+            basis_count = self.actor_kan_grid_size + self.actor_kan_spline_order
+            if self.actor_kan_hidden_features * basis_count != self.mlp_features:
+                raise ValueError(
+                    "KAN-Actor coefficient matching requires "
+                    "actor_kan_hidden_features * "
+                    "(actor_kan_grid_size + actor_kan_spline_order) == "
+                    f"mlp_features, got {self.actor_kan_hidden_features} * "
+                    f"{basis_count} != {self.mlp_features}"
+                )
+        if self.fastkan_hidden_features < 1 or self.fastkan_hidden_layers < 1:
+            raise ValueError("FastKAN hidden dimensions must be positive")
+        if self.fastkan_grid_size < 2:
+            raise ValueError("FastKAN grid size must be at least 2")
+        if self.fastkan_input_max <= self.fastkan_input_min:
+            raise ValueError("FastKAN input maximum must exceed its minimum")
+        if self.fastkan_rms_norm_epsilon <= 0:
+            raise ValueError("FastKAN RMSNorm epsilon must be positive")
+        if self.fastkan_actor_output_scale < 0:
+            raise ValueError("FastKAN actor output scale must be non-negative")
+        if not 0 <= self.fastkan_actor_unimix < 1:
+            raise ValueError("FastKAN actor unimix must lie in [0, 1)")
+        if self.ac_optimizer not in {"adam", "laprop"}:
+            raise ValueError(f"Unknown actor-critic optimizer: {self.ac_optimizer!r}")
+        if self.ac_lr <= 0 or self.ac_fresh_lr <= 0:
+            raise ValueError("Actor-critic learning rates must be positive")
+        if self.ac_optimizer_eps <= 0:
+            raise ValueError("Actor-critic optimizer epsilon must be positive")
+        if not 0 <= self.ac_optimizer_beta1 < 1 or not 0 <= self.ac_optimizer_beta2 < 1:
+            raise ValueError("Actor-critic optimizer betas must lie in [0, 1)")
+        if self.ac_optimizer_warmup_steps < 0 or self.ac_agc_clip < 0:
+            raise ValueError("Actor-critic warmup and AGC clip must be non-negative")
+        if self.ac_grad_clip < 0 or self.ac_dream_steps < 1:
+            raise ValueError("Actor-critic clipping and dream steps are invalid")
+        if not 0 < self.ac_discount <= 1 or not 0 <= self.ac_lambda <= 1:
+            raise ValueError("Actor-critic discount and lambda are invalid")
+        if self.ac_entropy_scale < 0 or not 0 <= self.ac_return_norm_decay < 1:
+            raise ValueError("Actor-critic entropy scale or return decay is invalid")
+        if self.ac_slow_critic_regularizer < 0:
+            raise ValueError("Slow-critic regularizer must be non-negative")
+        if not 0 <= self.ac_slow_critic_decay < 1:
+            raise ValueError("Slow-critic decay must lie in [0, 1)")
+        if self.ac_replay_critic_loss_scale < 0:
+            raise ValueError("Replay critic loss scale must be non-negative")
+
+        if self.actor_network in {
+            "fast_kan_ac",
+            "fast_kan_ac_param_matched",
+            "fast_kan_ac_stable",
+        }:
+            paper_aligned = {
+                "fastkan_hidden_layers": 3,
+                "fastkan_grid_size": 8,
+                "fastkan_input_min": -2.0,
+                "fastkan_input_max": 2.0,
+                "fastkan_rms_norm_epsilon": 1e-4,
+                "fastkan_actor_output_scale": 0.01,
+                "fastkan_actor_unimix": 0.01,
+                "ac_optimizer": "laprop",
+                "ac_lr": 4e-5,
+                "ac_fresh_lr": 4e-5,
+                "ac_optimizer_eps": 1e-20,
+                "ac_optimizer_beta1": 0.9,
+                "ac_optimizer_beta2": 0.999,
+                "ac_optimizer_warmup_steps": 1000,
+                "ac_agc_clip": 0.3,
+                "ac_grad_clip": 0.0,
+                "ac_dream_steps": 15,
+                "ac_discount": 1.0 - 1.0 / 333.0,
+                "ac_lambda": 0.95,
+                "ac_entropy_scale": 3e-4,
+                "ac_return_norm_decay": 0.99,
+                "ac_persistent_return_norm": True,
+                "ac_slow_critic_regularizer": 1.0,
+                "ac_slow_critic_decay": 0.98,
+            }
+            method_aligned = {
+                "fast_kan_ac": {
+                    "fastkan_hidden_features": 34,
+                    "ac_replay_critic_loss_scale": 0.0,
+                    "ac_use_slow_critic_targets": False,
+                    "ac_corrected_imagination_bootstrap": False,
+                },
+                "fast_kan_ac_param_matched": {
+                    "fastkan_hidden_features": 53,
+                    "ac_replay_critic_loss_scale": 0.3,
+                    "ac_use_slow_critic_targets": False,
+                    "ac_corrected_imagination_bootstrap": False,
+                },
+                "fast_kan_ac_stable": {
+                    "fastkan_hidden_features": 53,
+                    "ac_replay_critic_loss_scale": 0.3,
+                    "ac_use_slow_critic_targets": True,
+                    "ac_corrected_imagination_bootstrap": True,
+                },
+            }
+            paper_aligned.update(method_aligned[self.actor_network])
+            mismatches = {
+                key: (getattr(self, key), expected)
+                for key, expected in paper_aligned.items()
+                if getattr(self, key) != expected
+            }
+            if mismatches:
+                raise ValueError(
+                    f"{self.actor_network} requires its named KAN-Dreamer-aligned "
+                    "FastKAN settings: "
+                    f"{mismatches}"
+                )
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

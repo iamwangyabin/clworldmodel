@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Any, Callable, Optional
 
 import cv2
@@ -12,6 +13,34 @@ from tqdm import tqdm
 from ac import ActorCritic, zh_to_ac_state
 from rssm import ActionT, ContT, ImageT, ResetT
 from wm import RewardT, WorldModel
+
+
+def _environment_worker_seeds(seed: int, n_sync: int) -> tuple[list[int], list[int]]:
+    """Derive disjoint reset and action-space seeds for vector workers."""
+    if seed < 0:
+        raise ValueError("environment seed must be non-negative")
+    if n_sync < 1:
+        raise ValueError("n_sync must be positive")
+    reset_root, action_root = np.random.SeedSequence(seed).spawn(2)
+
+    def expand(root: np.random.SeedSequence) -> list[int]:
+        return [
+            int(worker.generate_state(1, dtype=np.uint32)[0])
+            for worker in root.spawn(n_sync)
+        ]
+
+    return expand(reset_root), expand(action_root)
+
+
+def _make_atari_env(
+    env_fn: Callable[[], Any], env_repeat: int, action_seed: Optional[int]
+) -> Any:
+    env = AtariPreprocessing(
+        env_fn(), frame_skip=env_repeat, screen_size=64, grayscale_obs=False
+    )
+    if action_seed is not None:
+        env.action_space.seed(action_seed)
+    return env
 
 
 class EnvironmentSchedule:
@@ -114,6 +143,7 @@ def evaluate(
     env_fns: Optional[list[Callable[[], Any]]] = None,
     env_repeat: int = 4,
     n_rollouts: int = 10,
+    seed: Optional[int] = None,
 ) -> tuple[float, float]:
     _, _, rews, conts, resets = generate_trajectories(
         n_rollouts * 2**13 // n_sync,
@@ -124,6 +154,7 @@ def evaluate(
         env_repeat,
         n_rollouts,
         no_images=True,
+        seed=seed,
     )
     terms = torch.where(conts == 0)[0]
     starts = torch.where(resets == 1)[0]
@@ -152,6 +183,7 @@ def generate_trajectories(
     env_repeat: int = 4,
     target_terminals: Optional[int] = None,
     no_images: bool = False,
+    seed: Optional[int] = None,
 ) -> tuple[ActionT, Optional[ImageT], RewardT, ContT, ResetT]:
     # Returns [ X ... ] packed as [ N*T ... ] (sort of)
     # To change to [ T N ... ], do reshape and swapaxes
@@ -171,26 +203,26 @@ def generate_trajectories(
     n_samples = 0
     n_terminals = 0
 
+    reset_seeds: Optional[list[int]] = None
+    action_seeds: list[Optional[int]] = [None] * n_sync
+    if seed is not None:
+        reset_seeds, seeded_actions = _environment_worker_seeds(seed, n_sync)
+        action_seeds = seeded_actions
+    default_env_fn = partial(
+        gym.make,
+        "ALE/DonkeyKong-v5",
+        frameskip=1,
+        repeat_action_probability=0,
+    )
+    source_env_fns = [
+        env_fns[i] if env_fns is not None else default_env_fn
+        for i in range(n_sync)
+    ]
     env = AsyncVectorEnv(
         [
-            *map(
-                lambda env: lambda: AtariPreprocessing(
-                    env(), frame_skip=env_repeat, screen_size=64, grayscale_obs=False
-                ),
-                [
-                    env_fns[i]
-                    if env_fns is not None
-                    else (
-                        lambda: gym.make(
-                            "ALE/DonkeyKong-v5",
-                            frameskip=1,
-                            repeat_action_probability=0,
-                        )
-                    )
-                    for i in range(n_sync)
-                ],
-            )
-        ],
+            partial(_make_atari_env, env_fn, env_repeat, action_seed)
+            for env_fn, action_seed in zip(source_env_fns, action_seeds)
+        ]
     )
     z = None
 
@@ -205,7 +237,7 @@ def generate_trajectories(
                 break
             if n_samples == 0:  # First step
                 n_samples += n_sync
-                obs, _ = env.reset()
+                obs, _ = env.reset(seed=reset_seeds)
                 for i in range(n_sync):
                     acts[i].append(0)
                     obss[i].append(obs[i])

@@ -219,8 +219,8 @@ def load_snapshot_specs(snapshot_dir: Path) -> list[SnapshotSpec]:
         raise ValueError(f"Expected exactly one final snapshot in {snapshot_dir}")
     if any(spec.task_index != index for index, spec in enumerate(boundaries)):
         raise ValueError("Boundary snapshots must cover task indices 0..N-1 exactly once")
-    if finals[0].epoch <= boundaries[-1].epoch:
-        raise ValueError("Final snapshot must be later than the last task boundary")
+    if finals[0].epoch < boundaries[-1].epoch:
+        raise ValueError("Final snapshot cannot precede the last task boundary")
     return [*boundaries, finals[0]]
 
 
@@ -245,7 +245,18 @@ def _model_bundle(spec: SnapshotSpec, device_name: str) -> ModelBundle:
     ).to(device)
     world_model.load_state_dict(spec.payload["world_model_state_dict"], strict=True)
     actor_critic = vendor.ActorCritic(
-        int(np.prod(world_model.ls)) + world_model.h_dim, world_model.a_dim
+        int(np.prod(world_model.ls)) + world_model.h_dim,
+        world_model.a_dim,
+        actor_network=str(config.get("actor_network", "mlp")),
+        h_dim=world_model.h_dim,
+        kan_hidden_features=int(config.get("actor_kan_hidden_features", 64)),
+        kan_grid_size=int(config.get("actor_kan_grid_size", 5)),
+        kan_spline_order=int(config.get("actor_kan_spline_order", 3)),
+        kan_input_min=float(config.get("actor_kan_input_min", 0.0)),
+        kan_input_max=float(config.get("actor_kan_input_max", 1.0)),
+        kan_normalize_recurrent_state=bool(
+            config.get("actor_kan_normalize_recurrent_state", True)
+        ),
     ).to(device)
     actor_critic.load_state_dict(spec.payload["actor_critic_state_dict"], strict=True)
     world_model.eval()
