@@ -21,6 +21,7 @@ ActorNetwork = Literal[
     "relu_kan_bounded",
     "relu_kan_adaptive",
     "fast_kan_ac",
+    "fast_kan_ac_param_matched",
 ]
 ActorCriticOptimizer = Literal["adam", "laprop"]
 
@@ -224,6 +225,7 @@ class Config(Serialisable):
     ac_persistent_return_norm: bool = False
     ac_slow_critic_regularizer: float = 0.0
     ac_slow_critic_decay: float = 0.98
+    ac_replay_critic_loss_scale: float = 0.0
 
     observation_objective: ObservationObjective = "reconstruction"
     r2_barlow_loss_scale: float = 0.05
@@ -264,6 +266,7 @@ class Config(Serialisable):
             "relu_kan_bounded",
             "relu_kan_adaptive",
             "fast_kan_ac",
+            "fast_kan_ac_param_matched",
         }:
             raise ValueError(f"Unknown actor network: {self.actor_network!r}")
         if self.actor_kan_hidden_features < 1:
@@ -336,10 +339,11 @@ class Config(Serialisable):
             raise ValueError("Slow-critic regularizer must be non-negative")
         if not 0 <= self.ac_slow_critic_decay < 1:
             raise ValueError("Slow-critic decay must lie in [0, 1)")
+        if self.ac_replay_critic_loss_scale < 0:
+            raise ValueError("Replay critic loss scale must be non-negative")
 
-        if self.actor_network == "fast_kan_ac":
+        if self.actor_network in {"fast_kan_ac", "fast_kan_ac_param_matched"}:
             paper_aligned = {
-                "fastkan_hidden_features": 34,
                 "fastkan_hidden_layers": 3,
                 "fastkan_grid_size": 8,
                 "fastkan_input_min": -2.0,
@@ -365,6 +369,15 @@ class Config(Serialisable):
                 "ac_slow_critic_regularizer": 1.0,
                 "ac_slow_critic_decay": 0.98,
             }
+            method_aligned = {
+                "fastkan_hidden_features": (
+                    53 if self.actor_network == "fast_kan_ac_param_matched" else 34
+                ),
+                "ac_replay_critic_loss_scale": (
+                    0.3 if self.actor_network == "fast_kan_ac_param_matched" else 0.0
+                ),
+            }
+            paper_aligned.update(method_aligned)
             mismatches = {
                 key: (getattr(self, key), expected)
                 for key, expected in paper_aligned.items()
@@ -372,7 +385,8 @@ class Config(Serialisable):
             }
             if mismatches:
                 raise ValueError(
-                    "fast_kan_ac requires the named KAN-Dreamer-aligned settings: "
+                    f"{self.actor_network} requires its named KAN-Dreamer-aligned "
+                    "FastKAN settings: "
                     f"{mismatches}"
                 )
 

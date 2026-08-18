@@ -93,6 +93,18 @@ documented here, covered by focused parity tests, and followed by regenerating
     optimizer, config, and launcher contracts cover the bridge. ARROW replay
     and world-model training remain unchanged, and the omitted DreamerV3
     replay-value loss is explicitly recorded as a protocol deviation.
+16. Add opt-in `fast_kan_ac_param_matched` for the separately named
+    `ARROW-FastKANAC-ParamMatchedRepVal-50` trainability extension. It uses the
+    same project-owned FastKAN Actor/Critic bridge at width 53, within 0.83% of
+    the published ARROW MLP behavior-head parameter count, and applies a
+    `0.3` replay critic loss to the four posterior context frames already
+    sampled for imagination. The replay target follows ARROW's same-index
+    reward convention and draws no additional minibatch. The vendored trainer
+    also exposes per-update actor/critic diagnostics, explicit analysis
+    milestones, and optional credential-free SwanLab TensorBoard mirroring.
+    The default MLP and the completed width-34 FastKAN protocol are unchanged;
+    parameter, target-return, config, logging, snapshot, and launcher contracts
+    cover the new behavior.
 
 ## Known issues at import
 

@@ -171,4 +171,24 @@ This is an independently reconstructed Atari pilot, not a reproduction of
 KAN-Dreamer's DMC experiment. Exact alignments and unavoidable deviations are
 listed in `docs/protocols/arrow_fastkan_ac_kd_aligned_atari.md`.
 
+The follow-up `ARROW-FastKANAC-ParamMatchedRepVal-50` protocol keeps both
+FastKAN heads, increases their width to 53 (1,700,670 combined parameters,
+0.83% below the MLP pair), adds a `0.3` replay critic objective over the
+already-sampled four-frame context, and doubles the one-task budget to 136
+epochs. It writes an explicit 68-epoch midpoint evaluation and snapshot:
+
+```bash
+python scripts/run_arrow_ar50_atari.py \
+  --actor-network fast_kan_ac_param_matched \
+  --task-prefix-length 1 \
+  --task-duration-epochs 136 \
+  --seed 0 \
+  --dry-run
+```
+
+Actor and critic diagnostics always go to TensorBoard. SwanLab mirroring is an
+optional launcher flag and never accepts an API key. The controlled changes and
+claim limits are documented in
+`docs/protocols/arrow_fastkan_ac_param_matched_repval_atari.md`.
+
 Project-wide research and engineering constraints are defined in `AGENTS.md`.

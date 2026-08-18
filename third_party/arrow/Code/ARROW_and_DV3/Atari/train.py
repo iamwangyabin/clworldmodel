@@ -13,7 +13,6 @@ from typing import Optional
 import numpy as np
 import torch
 from torch.optim import Adam
-from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange
 import ale_py
 import replay
@@ -310,6 +309,8 @@ def _save_analysis_snapshot(
             f"boundary_{task_metadata['boundary_index']:02d}_"
             f"task_{task_metadata['task_index']:02d}_epoch_{epoch:04d}.pt"
         )
+    elif reason == "milestone":
+        filename = f"milestone_completed_{epoch + 1:04d}_epoch_{epoch:04d}.pt"
     elif reason == "final":
         filename = f"final_epoch_{epoch:04d}.pt"
     else:
@@ -351,6 +352,25 @@ def _save_analysis_snapshot(
     return path
 
 
+def _init_swanlab(
+    project: Optional[str], experiment_name: Optional[str], config: Config
+):
+    if project is None:
+        return None
+    try:
+        import swanlab
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "--swanlab-project requires the optional swanlab package"
+        ) from exc
+    swanlab.sync_tensorboard_torch()
+    return swanlab.init(
+        project=project,
+        experiment_name=experiment_name,
+        config=config.to_dict(),
+    )
+
+
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
@@ -375,6 +395,7 @@ if __name__ == "__main__":
             "relu_kan_bounded",
             "relu_kan_adaptive",
             "fast_kan_ac",
+            "fast_kan_ac_param_matched",
         ],
         default=None,
         help=(
@@ -420,6 +441,24 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--milestone-completed-epoch",
+        action="append",
+        type=int,
+        default=[],
+        help=(
+            "Evaluate and save a diagnostic snapshot after this many completed "
+            "epochs; may be supplied more than once."
+        ),
+    )
+    parser.add_argument(
+        "--swanlab-project",
+        help="Optionally mirror TensorBoard scalars to this SwanLab project.",
+    )
+    parser.add_argument(
+        "--swanlab-experiment-name",
+        help="Optional SwanLab experiment name; credentials come only from SwanLab.",
+    )
+    parser.add_argument(
         "--evaluate-final",
         action="store_true",
         help="Evaluate the final frozen policy after all configured training epochs.",
@@ -458,6 +497,17 @@ if __name__ == "__main__":
     if args.epochs is not None:
         config_overrides["epochs"] = args.epochs
     config = Config.from_dict(config_overrides)
+    milestone_completed_epochs = set(args.milestone_completed_epoch)
+    invalid_milestones = sorted(
+        epoch
+        for epoch in milestone_completed_epochs
+        if epoch < 1 or epoch > config.epochs
+    )
+    if invalid_milestones:
+        raise ValueError(
+            "Milestone completed epochs must lie within the configured run: "
+            f"{invalid_milestones}"
+        )
 
     if config.algorithm == "arrow":
         print(f"ARROW FIFO/LTDM capacity ratio: {config.arrow_replay_capacity_ratio}")
@@ -542,6 +592,11 @@ if __name__ == "__main__":
         print(f"[DEBUG] log_dir={log_dir} (explicit)")
 
 
+    swanlab_run = _init_swanlab(
+        args.swanlab_project, args.swanlab_experiment_name, config
+    )
+    from torch.utils.tensorboard import SummaryWriter
+
     writer = SummaryWriter(log_dir=log_dir)
     log_dir = Path(log_dir)
     config.save(log_dir / "config.json")
@@ -607,7 +662,7 @@ if __name__ == "__main__":
 
         # Evaluation games
         eval_started = _stage_clock(args.profile_stages)
-        if epoch % 10 == 0:
+        if epoch % 10 == 0 or epoch + 1 in milestone_completed_epochs:
             eval_results_mean, eval_results_std = _evaluate_policy_tasks(
                 config,
                 wm,
@@ -752,10 +807,11 @@ if __name__ == "__main__":
             "persistent_return_norm": config.ac_persistent_return_norm,
             "slow_critic_regularizer": config.ac_slow_critic_regularizer,
             "slow_critic_decay": config.ac_slow_critic_decay,
+            "replay_critic_loss_scale": config.ac_replay_critic_loss_scale,
         }
 
         if config.fresh_ac and epoch % config.fresh_ac == 0:
-            aco, approx_perf = train_ac_from_wm(
+            aco, approx_perf, actor_critic_metrics = train_ac_from_wm(
                 wm,
                 replay,
                 config.ac_train_steps,
@@ -764,7 +820,7 @@ if __name__ == "__main__":
                 **actor_critic_kwargs,
             )
         else:
-            aco, approx_perf = train_ac_from_wm(
+            aco, approx_perf, actor_critic_metrics = train_ac_from_wm(
                 wm,
                 replay,
                 config.ac_train_steps,
@@ -785,6 +841,18 @@ if __name__ == "__main__":
             )
             os.replace(temporary_actor_accounting_path, actor_accounting_path)
         writer.add_scalar("Perf/approx_perf", approx_perf, global_step)
+        actor_critic_updates = (epoch + 1) * config.ac_train_steps
+        writer.add_scalar(
+            "Counters/actor_critic_updates",
+            actor_critic_updates,
+            actor_critic_updates,
+        )
+        for metric_name, metric_value in actor_critic_metrics.items():
+            writer.add_scalar(
+                f"ActorCritic/{metric_name}",
+                metric_value,
+                actor_critic_updates,
+            )
         _print_cuda_memory(f"epoch_end_{epoch}")
 
         if save_nets:
@@ -804,6 +872,22 @@ if __name__ == "__main__":
                     total_env_steps=total_env_steps,
                     reason="task_boundary",
                     task_metadata=boundary_metadata,
+                )
+                writer.flush()
+            if (
+                epoch + 1 in milestone_completed_epochs
+                and boundary_metadata is None
+                and epoch != config.epochs - 1
+            ):
+                _save_analysis_snapshot(
+                    analysis_snapshot_dir,
+                    config=config,
+                    wm=wm,
+                    aco=aco,
+                    epoch=epoch,
+                    world_model_updates=global_step,
+                    total_env_steps=total_env_steps,
+                    reason="milestone",
                 )
                 writer.flush()
             if epoch == config.epochs - 1:
@@ -915,4 +999,8 @@ if __name__ == "__main__":
         print(f"Final eval raw means: {final_raw_means}")
         print(f"Final eval raw stds: {final_raw_stds}")
     writer.close()
+    if swanlab_run is not None:
+        import swanlab
+
+        swanlab.finish()
     _print_cuda_memory("training_end")

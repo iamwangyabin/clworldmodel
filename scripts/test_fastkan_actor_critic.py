@@ -21,7 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on the GPU host
 if torch is not None:
     sys.path.insert(0, str(PROJECT_SRC))
     sys.path.insert(0, str(VENDORED_ATARI))
-    from ac import ActorCritic
+    from ac import ActorCritic, replay_lambda_returns
     from clworldmodel.models.fast_kan import (
         FastKANActor,
         FastKANCritic,
@@ -65,6 +65,17 @@ class FastKANActorCriticTests(unittest.TestCase):
                 "ac_discount": 1.0 - 1.0 / 333.0,
                 "ac_persistent_return_norm": True,
                 "ac_slow_critic_regularizer": 1.0,
+            }
+        )
+        return data
+
+    def _parameter_matched_fastkan_config_data(self) -> dict:
+        data = self._fastkan_config_data()
+        data.update(
+            {
+                "actor_network": "fast_kan_ac_param_matched",
+                "fastkan_hidden_features": 53,
+                "ac_replay_critic_loss_scale": 0.3,
             }
         )
         return data
@@ -128,6 +139,44 @@ class FastKANActorCriticTests(unittest.TestCase):
         self.assertEqual(critic_parameters, 570_849)
         self.assertEqual(actor_parameters + critic_parameters, 1_068_939)
         self.assertLess(actor_parameters + critic_parameters, 1_714_961)
+
+    def test_width_53_fastkan_pair_matches_the_arrow_mlp_budget(self) -> None:
+        actor_critic = ActorCritic(
+            1536,
+            18,
+            actor_network="fast_kan_ac_param_matched",
+            fastkan_hidden_features=53,
+        )
+        actor_parameters = sum(p.numel() for p in actor_critic.actor.parameters())
+        critic_parameters = sum(p.numel() for p in actor_critic.critic.parameters())
+        self.assertEqual(actor_parameters, 793_692)
+        self.assertEqual(critic_parameters, 906_978)
+        self.assertEqual(actor_parameters + critic_parameters, 1_700_670)
+        self.assertEqual(actor_parameters + critic_parameters - 1_714_961, -14_291)
+
+    def test_replay_lambda_returns_use_same_index_rewards_and_stop_at_terminals(self) -> None:
+        rewards = torch.tensor([[[1.0]], [[2.0]], [[4.0]], [[8.0]]])
+        continues = torch.tensor([[[1.0]], [[0.0]], [[1.0]], [[1.0]]])
+        bootstrap = torch.tensor([[[10.0]], [[20.0]], [[30.0]], [[40.0]]])
+        targets = replay_lambda_returns(
+            rewards,
+            continues,
+            bootstrap,
+            discount=0.5,
+            lam=0.5,
+        )
+        expected = torch.tensor([[[6.5]], [[2.0]], [[24.0]]])
+        torch.testing.assert_close(targets, expected)
+
+    def test_parameter_matched_config_requires_replay_value_loss(self) -> None:
+        config = Config.from_dict(self._parameter_matched_fastkan_config_data())
+        self.assertEqual(config.fastkan_hidden_features, 53)
+        self.assertEqual(config.ac_replay_critic_loss_scale, 0.3)
+
+        invalid = self._parameter_matched_fastkan_config_data()
+        invalid["ac_replay_critic_loss_scale"] = 0.0
+        with self.assertRaisesRegex(ValueError, "FastKAN settings"):
+            Config.from_dict(invalid)
 
     def test_named_config_requires_paper_aligned_behavior_settings(self) -> None:
         config = Config.from_dict(self._fastkan_config_data())

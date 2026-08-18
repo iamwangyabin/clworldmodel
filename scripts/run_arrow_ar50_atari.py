@@ -15,6 +15,7 @@ from git_provenance import git_state, require_synced_training_git_state
 ROOT = Path(__file__).resolve().parents[1]
 ARROW_ROOT = ROOT / "third_party" / "arrow"
 UPSTREAM_COMMIT = "cb05e7d97ed83c3cf6e528960db0da6868e29232"
+DREAMERV3_REPVAL_REFERENCE_COMMIT = "e3f02248693a79dc8b0ebd62c93683888ddaccfe"
 R2_DREAMER_COMMIT = "546e4fab8146ea4b14e1d7726bbc1a8a1d50322f"
 R2_BARLOW_LOSS_SCALE = 0.05
 R2_REDUNDANCY_SCALE = 5e-4
@@ -36,9 +37,16 @@ THREAD_ENV_KEYS = (
     "NUMEXPR_NUM_THREADS",
 )
 KAN_ACTOR_NETWORKS = frozenset(
-    {"relu_kan", "relu_kan_bounded", "relu_kan_adaptive", "fast_kan_ac"}
+    {
+        "relu_kan",
+        "relu_kan_bounded",
+        "relu_kan_adaptive",
+        "fast_kan_ac",
+        "fast_kan_ac_param_matched",
+    }
 )
 FASTKAN_AC_EPOCHS = 68
+FASTKAN_AC_PARAM_MATCHED_EPOCHS = 136
 FASTKAN_AC_PAPER_ENVIRONMENT_STEPS = 1_100_000
 FASTKAN_AC_CONFIG_OVERRIDES = {
     "actor_network": "fast_kan_ac",
@@ -67,6 +75,13 @@ FASTKAN_AC_CONFIG_OVERRIDES = {
     "ac_persistent_return_norm": True,
     "ac_slow_critic_regularizer": 1.0,
     "ac_slow_critic_decay": 0.98,
+    "ac_replay_critic_loss_scale": 0.0,
+}
+FASTKAN_AC_PARAM_MATCHED_CONFIG_OVERRIDES = {
+    **FASTKAN_AC_CONFIG_OVERRIDES,
+    "actor_network": "fast_kan_ac_param_matched",
+    "fastkan_hidden_features": 53,
+    "ac_replay_critic_loss_scale": 0.3,
 }
 KAN_ACTOR_METADATA = {
     "relu_kan": {
@@ -117,6 +132,18 @@ KAN_ACTOR_METADATA = {
         "critic_network": "fast_kan",
         "critic_trainable_parameters": 570_849,
     },
+    "fast_kan_ac_param_matched": {
+        "method": "ARROW-FastKANAC-ParamMatchedRepVal-50",
+        "output_prefix": "arrow_fastkan_ac_param_matched_repval_ar50",
+        "hidden_adapter": "rms_norm_per_fastkan_layer",
+        "hidden_adapter_layer_norm_epsilon": 1e-4,
+        "grid_trainable": False,
+        "anchor_parameterization": "fixed_uniform_gaussian_centers",
+        "anchor_parameters": 0,
+        "trainable_parameters": 793_692,
+        "critic_network": "fast_kan",
+        "critic_trainable_parameters": 906_978,
+    },
 }
 
 
@@ -150,6 +177,7 @@ def _parser() -> argparse.ArgumentParser:
             "relu_kan_bounded",
             "relu_kan_adaptive",
             "fast_kan_ac",
+            "fast_kan_ac_param_matched",
         ],
         default="mlp",
         help=(
@@ -192,6 +220,14 @@ def _parser() -> argparse.ArgumentParser:
         "--cpu-threads",
         type=_positive_int,
         help="Limit CPU thread pools and record the setting in the launch manifest",
+    )
+    parser.add_argument(
+        "--swanlab-project",
+        help="Optionally mirror TensorBoard metrics to a configured SwanLab project",
+    )
+    parser.add_argument(
+        "--swanlab-experiment-name",
+        help="Optional SwanLab experiment name; no credential is accepted by this CLI",
     )
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -323,12 +359,17 @@ packages = (
     "torchvision",
     "tqdm",
 )
+package_versions = {name: metadata.version(name) for name in packages}
+try:
+    package_versions["swanlab"] = metadata.version("swanlab")
+except metadata.PackageNotFoundError:
+    package_versions["swanlab"] = None
 print(json.dumps({
     "python": sys.version,
     "platform": platform.platform(),
     "machine": platform.machine(),
     "cpu_count": os.cpu_count(),
-    "packages": {name: metadata.version(name) for name in packages},
+    "packages": package_versions,
     "torch_cuda_build": torch.version.cuda,
     "cudnn_version": torch.backends.cudnn.version(),
     "cuda_device_count": torch.cuda.device_count(),
@@ -398,6 +439,7 @@ def main() -> int:
             "relu_kan_bounded",
             "relu_kan_adaptive",
             "fast_kan_ac",
+            "fast_kan_ac_param_matched",
         }:
             parser.error(
                 "--task-duration-epochs requires a named trainable KAN protocol"
@@ -410,6 +452,16 @@ def main() -> int:
             "fast_kan_ac currently requires --task-prefix-length 1 and "
             f"--task-duration-epochs {FASTKAN_AC_EPOCHS}"
         )
+    if args.actor_network == "fast_kan_ac_param_matched" and (
+        args.task_prefix_length != 1
+        or args.task_duration_epochs != FASTKAN_AC_PARAM_MATCHED_EPOCHS
+    ):
+        parser.error(
+            "fast_kan_ac_param_matched currently requires --task-prefix-length 1 "
+            f"and --task-duration-epochs {FASTKAN_AC_PARAM_MATCHED_EPOCHS}"
+        )
+    if args.swanlab_experiment_name is not None and args.swanlab_project is None:
+        parser.error("--swanlab-experiment-name requires --swanlab-project")
     project_git = (
         git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
     )
@@ -450,7 +502,7 @@ def main() -> int:
     if (
         args.task_duration_epochs is not None
         and task_duration_epochs <= swap_sched
-        and args.actor_network != "fast_kan_ac"
+        and args.actor_network not in {"fast_kan_ac", "fast_kan_ac_param_matched"}
     ):
         parser.error(
             "--task-duration-epochs must exceed the frozen 90-epoch task duration"
@@ -461,7 +513,8 @@ def main() -> int:
         else task_duration_epochs * args.task_prefix_length
     )
     adaptive_kan = args.actor_network == "relu_kan_adaptive"
-    fastkan_ac = args.actor_network == "fast_kan_ac"
+    fastkan_ac = args.actor_network in {"fast_kan_ac", "fast_kan_ac_param_matched"}
+    param_matched_fastkan_ac = args.actor_network == "fast_kan_ac_param_matched"
     resolved_training_config = None
     launch_config_path = config_path
     config_overrides = {}
@@ -477,8 +530,13 @@ def main() -> int:
                 }
             )
         if fastkan_ac:
-            resolved_training_config.update(FASTKAN_AC_CONFIG_OVERRIDES)
-            config_overrides.update(FASTKAN_AC_CONFIG_OVERRIDES)
+            fastkan_overrides = (
+                FASTKAN_AC_PARAM_MATCHED_CONFIG_OVERRIDES
+                if param_matched_fastkan_ac
+                else FASTKAN_AC_CONFIG_OVERRIDES
+            )
+            resolved_training_config.update(fastkan_overrides)
+            config_overrides.update(fastkan_overrides)
         if args.task_duration_epochs is not None:
             resolved_training_config["epochs"] = training_epochs
             resolved_training_config["esc"]["kwargs"]["swap_sched"] = (
@@ -523,6 +581,15 @@ def main() -> int:
         command.append("--actor-kan-trainable-grid")
     if args.task_prefix_length is not None:
         command.extend(("--epochs", str(training_epochs), "--evaluate-final"))
+    milestone_completed_epochs = [68] if param_matched_fastkan_ac else []
+    for milestone_completed_epoch in milestone_completed_epochs:
+        command.extend(
+            ("--milestone-completed-epoch", str(milestone_completed_epoch))
+        )
+    if args.swanlab_project is not None:
+        command.extend(("--swanlab-project", args.swanlab_project))
+    if args.swanlab_experiment_name is not None:
+        command.extend(("--swanlab-experiment-name", args.swanlab_experiment_name))
     if args.profile_stages:
         command.append("--profile-stages")
     command.extend(("--compile-world-model", "--fused-adam", "--tf32"))
@@ -555,7 +622,9 @@ def main() -> int:
                 if is_kan_actor
                 else "matched-short-pilot-control"
             )
-    if fastkan_ac:
+    if param_matched_fastkan_ac:
+        role = "actor-critic-param-matched-replay-value-budget-extension"
+    elif fastkan_ac:
         role = "actor-critic-kan-dreamer-aligned-pilot"
 
     decisions_per_regular_epoch = config["n_sync"] * config["gen_seq_len"]
@@ -596,6 +665,7 @@ def main() -> int:
             "artifact_kind": "analysis_snapshot",
             "resumable": False,
             "task_boundary_epochs": boundary_epochs,
+            "milestone_completed_epochs": milestone_completed_epochs,
             "final_epoch": training_epochs - 1,
             "final_coincides_with_task_boundary": (
                 (training_epochs - 1) in boundary_epochs
@@ -651,6 +721,14 @@ def main() -> int:
                 if fastkan_ac
                 else None
             ),
+            "midpoint_completed_epochs": (
+                FASTKAN_AC_EPOCHS if param_matched_fastkan_ac else None
+            ),
+            "midpoint_agent_decisions": (
+                FASTKAN_AC_EPOCHS * decisions_per_regular_epoch
+                if param_matched_fastkan_ac
+                else None
+            ),
         },
         "curriculum": args.curriculum,
         "seed_id": args.seed,
@@ -692,7 +770,13 @@ def main() -> int:
             "action_features": config["action_space"],
             "recurrent_features": config["gru_units"],
             "kan_hidden_features": (
-                34 if fastkan_ac else 64 if is_kan_actor else None
+                53
+                if param_matched_fastkan_ac
+                else 34
+                if fastkan_ac
+                else 64
+                if is_kan_actor
+                else None
             ),
             "kan_hidden_layers": 3 if fastkan_ac else None,
             "kan_grid_size": 8 if fastkan_ac else 5 if is_kan_actor else None,
@@ -763,6 +847,16 @@ def main() -> int:
                 if is_kan_actor
                 else 1_714_961
             ),
+            "mlp_combined_trainable_parameters": 1_714_961,
+            "combined_parameter_difference_from_mlp": (
+                KAN_ACTOR_METADATA[args.actor_network]["trainable_parameters"]
+                + KAN_ACTOR_METADATA[args.actor_network][
+                    "critic_trainable_parameters"
+                ]
+                - 1_714_961
+                if is_kan_actor
+                else 0
+            ),
             "actor_output_scale": 0.01 if fastkan_ac else None,
             "actor_unimix": 0.01 if fastkan_ac else None,
             "critic_output_scale": 0.0 if fastkan_ac else None,
@@ -802,12 +896,55 @@ def main() -> int:
             },
             "critic_ema_regularizer": 1.0 if fastkan_ac else 0.0,
             "critic_ema_decay": 0.98 if fastkan_ac else None,
-            "critic_replay_loss_scale": 0.0,
+            "critic_replay_loss_scale": (
+                0.3 if param_matched_fastkan_ac else 0.0
+            ),
             "paper_critic_replay_loss_scale": 0.3 if fastkan_ac else None,
             "critic_replay_loss_deviation": (
                 "not ported because ARROW trains behavior separately from its world-model "
                 "replay batches"
-                if fastkan_ac
+                if fastkan_ac and not param_matched_fastkan_ac
+                else None
+            ),
+            "critic_replay_loss_semantics": (
+                "TD-lambda targets over the same four posterior context frames used "
+                "to initialize imagination; no extra replay minibatch is sampled"
+                if param_matched_fastkan_ac
+                else None
+            ),
+            "critic_replay_reward_timing": (
+                "ARROW same-index reward and continuation convention"
+                if param_matched_fastkan_ac
+                else None
+            ),
+            "dreamerv3_repval_reference": (
+                {
+                    "repository": "https://github.com/danijar/dreamerv3",
+                    "commit": DREAMERV3_REPVAL_REFERENCE_COMMIT,
+                }
+                if param_matched_fastkan_ac
+                else None
+            ),
+        },
+        "metric_logging": {
+            "tensorboard": True,
+            "actor_critic_metrics": [
+                "actor_reinforce_loss",
+                "actor_entropy",
+                "critic_imagination_loss",
+                "critic_replay_loss",
+                "total_loss",
+                "return_mean",
+                "return_scale",
+                "gradient_norm",
+            ],
+            "actor_critic_counter": "actor_critic_updates",
+            "swanlab_enabled": args.swanlab_project is not None,
+            "swanlab_project": args.swanlab_project,
+            "swanlab_experiment_name": args.swanlab_experiment_name,
+            "swanlab_credentials_source": (
+                "external SwanLab configuration or environment"
+                if args.swanlab_project is not None
                 else None
             ),
         },
@@ -825,6 +962,8 @@ def main() -> int:
             "reports_raw_and_scaled_returns": (
                 True if args.task_prefix_length is not None else None
             ),
+            "periodic_epoch_index_modulo": 10,
+            "milestone_completed_epochs": milestone_completed_epochs,
         },
         "observation_objective": {
             "name": args.observation_objective,

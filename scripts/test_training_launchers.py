@@ -376,6 +376,78 @@ class TrainingLauncherTests(unittest.TestCase):
         command = launch["command"]
         self.assertEqual(command[command.index("--actor-network") + 1], "fast_kan_ac")
 
+    def test_parameter_matched_fastkan_extension_records_repval_and_midpoint(self) -> None:
+        launch = self._arrow_dry_run(
+            "--actor-network",
+            "fast_kan_ac_param_matched",
+            "--task-prefix-length",
+            "1",
+            "--task-duration-epochs",
+            "136",
+        )
+
+        self.assertEqual(
+            launch["method"],
+            "ARROW-FastKANAC-ParamMatchedRepVal-50-T1-136EpochTrainabilityPilot",
+        )
+        self.assertEqual(
+            launch["role"],
+            "actor-critic-param-matched-replay-value-budget-extension",
+        )
+        self.assertEqual(launch["training_scope"]["epochs"], 136)
+        self.assertEqual(launch["training_scope"]["agent_decisions"], 2_228_224)
+        self.assertEqual(launch["training_scope"]["midpoint_completed_epochs"], 68)
+        self.assertEqual(
+            launch["analysis_snapshot_semantics"]["milestone_completed_epochs"],
+            [68],
+        )
+
+        actor = launch["actor"]
+        self.assertEqual(actor["network"], "fast_kan_ac_param_matched")
+        self.assertEqual(actor["kan_hidden_features"], 53)
+        self.assertEqual(actor["trainable_parameters"], 793_692)
+        self.assertEqual(actor["critic_trainable_parameters"], 906_978)
+        self.assertEqual(actor["combined_trainable_parameters"], 1_700_670)
+        self.assertEqual(actor["combined_parameter_difference_from_mlp"], -14_291)
+
+        training = launch["actor_critic_training"]
+        self.assertEqual(training["critic_replay_loss_scale"], 0.3)
+        self.assertIsNone(training["critic_replay_loss_deviation"])
+        self.assertIn(
+            "same four posterior context frames",
+            training["critic_replay_loss_semantics"],
+        )
+        self.assertEqual(
+            training["dreamerv3_repval_reference"]["commit"],
+            "e3f02248693a79dc8b0ebd62c93683888ddaccfe",
+        )
+
+        overrides = launch["config_overrides"]
+        self.assertEqual(overrides["fastkan_hidden_features"], 53)
+        self.assertEqual(overrides["ac_replay_critic_loss_scale"], 0.3)
+        command = launch["command"]
+        milestone_index = command.index("--milestone-completed-epoch")
+        self.assertEqual(command[milestone_index + 1], "68")
+
+    def test_swanlab_mirroring_records_names_but_no_credential(self) -> None:
+        launch = self._arrow_dry_run(
+            "--actor-network",
+            "fast_kan_ac_param_matched",
+            "--task-prefix-length",
+            "1",
+            "--task-duration-epochs",
+            "136",
+            "--swanlab-project",
+            "clworldmodel",
+            "--swanlab-experiment-name",
+            "fastkan-test",
+        )
+        logging = launch["metric_logging"]
+        self.assertTrue(logging["swanlab_enabled"])
+        self.assertEqual(logging["swanlab_project"], "clworldmodel")
+        self.assertEqual(logging["swanlab_experiment_name"], "fastkan-test")
+        self.assertNotIn("api_key", json.dumps(launch).lower())
+
 
 if __name__ == "__main__":
     unittest.main()

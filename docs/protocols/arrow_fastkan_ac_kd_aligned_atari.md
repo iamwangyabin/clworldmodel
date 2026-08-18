@@ -8,6 +8,11 @@ model base. Its first run is
 `ARROW-FastKANAC-KDAligned-50-T1-68EpochTrainabilityPilot`, a seed-0 MsPacman
 acquisition screen. It has no second task and cannot support a forgetting claim.
 
+The seed-0 pilot completed successfully. Its final 16-rollout MsPacman raw
+return was `1001.875 +/- 450.017`; the highest periodic observation was
+`1458.125` at epoch index 50. This is a negative acquisition result relative to
+the historical MLP screen, not evidence about continual retention.
+
 KAN-Dreamer reports a JAX implementation but does not link author-released
 source code. This protocol is therefore an independent PyTorch reconstruction
 from the paper, the official DreamerV3 configuration, and the original FastKAN
