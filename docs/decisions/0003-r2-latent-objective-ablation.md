@@ -1,6 +1,6 @@
 # Decision 0003: test R2 latent prediction as a named ARROW ablation
 
-- Status: accepted for implementation; experiment unrun
+- Status: completed pilot; acquisition criterion not met
 - Date: 2026-08-16
 
 ## Context
@@ -33,3 +33,6 @@ actor-critic, and continual protocol.
   `4096 x 4096` cross-correlation matrix must be measured on the target GPU.
 - A smoke run and one seed are not evidence of better retention. The five
   frozen seeds are required for an official comparison.
+- The completed seed-0 pilot is retained as a negative result: it was stable
+  numerically but did not establish reliable single-task acquisition. The
+  native-R2 follow-up is documented separately in Decision 0004.

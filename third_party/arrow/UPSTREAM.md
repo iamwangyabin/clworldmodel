@@ -45,66 +45,6 @@ documented here, covered by focused parity tests, and followed by regenerating
 8. Persist world-model and observation-head parameter counts and parameter
    bytes in `model_parameter_accounting.json` for both objectives. The artifact
    explicitly excludes gradients, optimizer state, and activations.
-9. Add an opt-in Atari `relu_kan` actor bridge for the named
-   `ARROW-KANActor-50` ablation. The critic and all world-model modules remain
-   unchanged. The bridge calls the independently implemented project-owned
-   fixed-grid ReLU-KAN actor under `src/clworldmodel/`; the default remains the
-   upstream MLP actor. Fixed-formula, tensor-shape, gradient, parameter-budget,
-   config, critic-isolation, and default-MLP parity tests cover the change.
-10. Persist actor, critic, and combined parameter, persistent-buffer, and byte
-    accounting in `actor_critic_parameter_accounting.json` after actor creation.
-    Optimizer state, gradients, and activations are explicitly out of scope.
-11. Add opt-in explicit epoch and final-evaluation controls for named truncated
-    pilots. Final evaluation uses the upstream stochastic-policy semantics,
-    evaluates only tasks seen during a sequential prefix, and never adds its
-    transitions to replay. Persist both optimization-scaled returns and raw
-    game returns recovered from the fixed task reward scales; regular
-    evaluation also logs both units. Omitting the pilot flags preserves
-    upstream duration and training behavior.
-12. Seed Python `random` from the resolved run seed because ARROW's mixed replay
-    uses it to select FIFO versus LTDM. Derive separate owned collection and
-    evaluation seed streams, seed every Atari worker reset and action space,
-    and restore parent Python, NumPy, and PyTorch CPU/CUDA RNG states after
-    evaluation so its stochastic actions cannot alter later training draws.
-    CUDA remains outside deterministic-only mode and is recorded as such.
-13. Add opt-in `relu_kan_bounded`, a separate named KAN actor variant that
-    preserves the historical direct `relu_kan` bridge and inserts a project-owned
-    LayerNorm--sigmoid adapter between its two fixed-grid KAN layers. This keeps
-    second-layer inputs inside the declared grid support after the direct pilot
-    exposed an out-of-support, inactive-basis failure. The default MLP remains
-    unchanged; fixed-grid support and gradient-reachability tests cover the new
-    bridge.
-14. Add opt-in `relu_kan_adaptive` for the separately named trainable-anchor
-    ReLU-KAN actor protocol. The thin vendored bridge accepts the new validated
-    config and CLI flag while the project-owned actor keeps the bounded
-    LayerNorm--sigmoid interface and learns every per-input, per-basis support
-    start and positive width. Widths use `softplus(raw_width)` rather than
-    unconstrained endpoints so the basis normalization cannot become singular.
-    Fixed-grid initialization, support ordering, anchor gradients, actor
-    interface, parameter accounting, config validation, and launcher contracts
-    cover the intentional deviation. The default MLP remains unchanged.
-15. Add opt-in `fast_kan_ac` for the separately named
-    `ARROW-FastKANAC-KDAligned-50` behavior pilot. The vendored bridge replaces
-    both actor and critic with project-owned, fixed-grid Gaussian FastKAN heads
-    and exposes the protocol's actor-critic optimizer, imagination, return
-    normalization, and slow-critic settings without changing default MLP runs.
-    LaProp and FastKAN live under `src/clworldmodel/`; fixed-center, branch,
-    initialization, tensor-shape, actor/critic replacement, parameter,
-    optimizer, config, and launcher contracts cover the bridge. ARROW replay
-    and world-model training remain unchanged, and the omitted DreamerV3
-    replay-value loss is explicitly recorded as a protocol deviation.
-16. Add opt-in `fast_kan_ac_param_matched` for the separately named
-    `ARROW-FastKANAC-ParamMatchedRepVal-50` trainability extension. It uses the
-    same project-owned FastKAN Actor/Critic bridge at width 53, within 0.83% of
-    the published ARROW MLP behavior-head parameter count, and applies a
-    `0.3` replay critic loss to the four posterior context frames already
-    sampled for imagination. The replay target follows ARROW's same-index
-    reward convention and draws no additional minibatch. The vendored trainer
-    also exposes per-update actor/critic diagnostics, explicit analysis
-    milestones, and optional credential-free SwanLab TensorBoard mirroring.
-    The default MLP and the completed width-34 FastKAN protocol are unchanged;
-    parameter, target-return, config, logging, snapshot, and launcher contracts
-    cover the new behavior.
 17. Add opt-in `fast_kan_ac_stable` for the separately named
     `ARROW-FastKANAC-StableTargets-50` correction pilot. It preserves both
     width-53 project-owned FastKAN behavior heads and all per-epoch budgets,
@@ -115,6 +55,13 @@ documented here, covered by focused parity tests, and followed by regenerating
     names preserve their prior target and bootstrap semantics. Focused tests
     cover the terminal state, slow baseline, config isolation, parameter
     accounting, and launcher contract.
+18. Add metadata-only replay methods and return values for the project-owned
+   native R2-Dreamer adapter. The original `add` writes, FIFO overwrite order,
+   LTDM random-key decisions, and `minibatch` tensor outputs remain unchanged;
+   the optional metadata exposes accepted slots plus sampled time and sequence
+   indices so an external R2 posterior-state sidecar can stay aligned. A
+   deterministic FIFO parity test checks the unchanged minibatch values and
+   wraparound slot map.
 
 ## Known issues at import
 
