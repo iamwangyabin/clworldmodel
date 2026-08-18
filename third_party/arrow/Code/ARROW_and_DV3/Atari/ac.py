@@ -17,6 +17,7 @@ ActionLogT = torch.Tensor
 AcStateT = torch.Tensor
 RewardSymlogCatT = torch.Tensor
 ReturnT = torch.Tensor
+ValueFunction = Callable[[AcStateT], ReturnT]
 # ActionLogT (log probs): [ N n_acts ]
 # AcState (concatenation of flattened LatentT and HiddenT): [ N n_dis*n_cls+h_dim ]
 # RewardSymlogCatT (probs): [ N 255 ]
@@ -95,7 +96,11 @@ def build_actor(
             input_max=kan_input_max,
             normalize_recurrent_state=kan_normalize_recurrent_state,
         )
-    if actor_network in {"fast_kan_ac", "fast_kan_ac_param_matched"}:
+    if actor_network in {
+        "fast_kan_ac",
+        "fast_kan_ac_param_matched",
+        "fast_kan_ac_stable",
+    }:
         from clworldmodel.models.fast_kan import FastKANActor
 
         return FastKANActor(
@@ -124,7 +129,11 @@ def build_critic(
     fastkan_input_max: float,
     fastkan_rms_norm_epsilon: float,
 ) -> nn.Module:
-    if actor_network in {"fast_kan_ac", "fast_kan_ac_param_matched"}:
+    if actor_network in {
+        "fast_kan_ac",
+        "fast_kan_ac_param_matched",
+        "fast_kan_ac_stable",
+    }:
         from clworldmodel.models.fast_kan import FastKANCritic
 
         return FastKANCritic(
@@ -212,8 +221,16 @@ class ActorCritic(nn.Module):
         # Supports T dimension
         return self.actor(state), self.value(state)
 
-    def value(self, state: AcStateT) -> RewardT:
-        critic_bins = self.critic(state).exp()
+    def value(
+        self,
+        state: AcStateT,
+        critic: Optional[Callable[[AcStateT], RewardSymlogCatT]] = None,
+    ) -> RewardT:
+        critic_network = self.critic if critic is None else critic
+        return self.value_from_log_probs(critic_network(state))
+
+    def value_from_log_probs(self, critic_preds_log: RewardSymlogCatT) -> RewardT:
+        critic_bins = critic_preds_log.exp()
         return symexp(critic_bins @ self.symlog_bins)
 
     def compute_loss(
@@ -222,6 +239,7 @@ class ActorCritic(nn.Module):
         actions: ActionT,
         lam_returns: ReturnT,
         scale: float,
+        actor_baseline_values: Optional[ReturnT] = None,
         slow_critic_preds_log: Optional[RewardSymlogCatT] = None,
         slow_critic_regularizer: float = 0.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -232,9 +250,17 @@ class ActorCritic(nn.Module):
         # `action_logs` (log probs): [ T N n_acts ]
         # `action_sample_logs` (log probs): [ T N 1 ]
         action_sample_logs = (action_logs * actions).sum(-1, keepdim=True)
+        critic_values = self.value_from_log_probs(critic_preds_log.detach())
+        if actor_baseline_values is None:
+            actor_baseline_values = critic_values
+        elif actor_baseline_values.shape != lam_returns.shape:
+            raise ValueError(
+                "Actor baseline values and lambda returns must have equal shapes, "
+                f"got {actor_baseline_values.shape} and {lam_returns.shape}"
+            )
         reinforce = (
             -action_sample_logs
-            * (lam_returns - symexp(critic_preds_log.detach().exp() @ self.symlog_bins))
+            * (lam_returns - actor_baseline_values.detach())
             / scale
         ).mean()
 
@@ -333,6 +359,8 @@ def dream_rollout(
     lam: float = 0.95,
     temperature: float = 1.0,
     n_ctx_frames: int = 4,
+    target_value: Optional[ValueFunction] = None,
+    corrected_terminal_bootstrap: bool = False,
 ) -> tuple[AcStateT, ActionT, RewardT, ReturnT, ReplayValueBatch]:
     # Returns: (T=n_steps N=n_sync)
     # States [ T N n_dis n_cls ]
@@ -367,14 +395,17 @@ def dream_rollout(
         zh = wm.zh_transform(z, h)
         reward = symexp(wm.reward_fc(zh))
         cont = wm.continue_fc(zh)
-        action_log, returns_pred = ac(state)
+        if target_value is None:
+            action_log, returns_pred = ac(state)
+            returns_preds.append(returns_pred)
+        else:
+            action_log = ac.actor(state)
         action_dist = td.OneHotCategorical(logits=action_log)
         action = action_dist.sample()
 
         states.append(state)
         actions.append(action)
         rewards.append(reward)
-        returns_preds.append(returns_pred)
         conts.append(cont)
 
         _, z, h = wm.rssm(z, action, h, None, no_reset, temperature=temperature)
@@ -382,14 +413,21 @@ def dream_rollout(
     states = torch.stack(states)
     actions = torch.stack(actions)
     rewards = torch.stack(rewards)
-    returns_preds = torch.stack(returns_preds)
+    # False preserves the recorded ARROW/FastKAN pilot's pre-transition bootstrap.
+    bootstrap_state = zh_to_ac_state(z, h) if corrected_terminal_bootstrap else state
+    if target_value is None:
+        returns_preds = torch.stack(returns_preds)
+        _, final_returns_pred = ac(bootstrap_state)
+    else:
+        target_states = torch.cat((states, bootstrap_state.unsqueeze(0)), dim=0)
+        target_values = target_value(target_states)
+        returns_preds = target_values[:-1]
+        final_returns_pred = target_values[-1]
 
     # Compute returns
     lam_returns = torch.zeros_like(returns_preds, device=returns_preds.device)
     for t in reversed(range(n_steps)):
         if t == n_steps - 1:
-            # Set the last step to just equal discount*final returns preds
-            _, final_returns_pred = ac(state)
             next_returns_pred = final_returns_pred
             next_r = final_returns_pred
         else:
@@ -440,6 +478,8 @@ def train_ac_from_wm(
     slow_critic_regularizer: float = 0.0,
     slow_critic_decay: float = 0.98,
     replay_critic_loss_scale: float = 0.0,
+    use_slow_critic_targets: bool = False,
+    corrected_imagination_bootstrap: bool = False,
 ) -> tuple[ActorCriticOpt, torch.Tensor, dict[str, float]]:
     if aco is None:
         ac = ActorCritic(
@@ -483,11 +523,13 @@ def train_ac_from_wm(
         else:
             raise ValueError(f"Unknown actor-critic optimizer: {optimizer_name!r}")
         slow_critic = None
-        if slow_critic_regularizer:
+        if slow_critic_regularizer or use_slow_critic_targets:
             slow_critic = copy.deepcopy(ac.critic).eval()
             slow_critic.requires_grad_(False)
         aco = ActorCriticOpt(ac, opt, slow_critic=slow_critic)
     ac, opt = aco.ac, aco.opt
+    if use_slow_critic_targets and aco.slow_critic is None:
+        raise ValueError("Slow critic targets require an initialized slow critic")
     for g in opt.param_groups:
         g["lr"] = lr
     scale_ema = aco.return_scale_ema if persistent_return_norm else None
@@ -505,6 +547,9 @@ def train_ac_from_wm(
     }
     progbar = trange(steps, desc="Train AC from WM",disable=True)
     for step in progbar:
+        target_value = None
+        if use_slow_critic_targets:
+            target_value = lambda state: ac.value(state, critic=aco.slow_critic)
         states, actions, _, lam_returns, replay_value_batch = dream_rollout(
             wm,
             ac,
@@ -513,6 +558,8 @@ def train_ac_from_wm(
             n_steps=dream_steps,
             discount=discount,
             lam=lam,
+            target_value=target_value,
+            corrected_terminal_bootstrap=corrected_imagination_bootstrap,
         )
 
         scale = torch.quantile(lam_returns, 0.95) - torch.quantile(lam_returns, 0.05)
@@ -532,18 +579,25 @@ def train_ac_from_wm(
         if aco.slow_critic is not None:
             with torch.no_grad():
                 slow_critic_preds_log = aco.slow_critic(states)
+        actor_baseline_values = None
+        if use_slow_critic_targets:
+            actor_baseline_values = ac.value_from_log_probs(slow_critic_preds_log)
         reinforce, entropy, critic_loss = ac.compute_loss(
             states,
             actions,
             lam_returns,
             torch.max(one, scale_ema),
+            actor_baseline_values=actor_baseline_values,
             slow_critic_preds_log=slow_critic_preds_log,
             slow_critic_regularizer=slow_critic_regularizer,
         )
         replay_critic_loss = torch.zeros((), device=states.device)
         if replay_critic_loss_scale:
             with torch.no_grad():
-                replay_bootstrap_values = ac.value(replay_value_batch.states)
+                replay_bootstrap_values = ac.value(
+                    replay_value_batch.states,
+                    critic=aco.slow_critic if use_slow_critic_targets else None,
+                )
                 replay_targets = replay_lambda_returns(
                     replay_value_batch.rewards,
                     replay_value_batch.continues,

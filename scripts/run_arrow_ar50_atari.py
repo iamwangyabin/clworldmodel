@@ -43,10 +43,12 @@ KAN_ACTOR_NETWORKS = frozenset(
         "relu_kan_adaptive",
         "fast_kan_ac",
         "fast_kan_ac_param_matched",
+        "fast_kan_ac_stable",
     }
 )
 FASTKAN_AC_EPOCHS = 68
 FASTKAN_AC_PARAM_MATCHED_EPOCHS = 136
+FASTKAN_AC_STABLE_EPOCHS = 90
 FASTKAN_AC_PAPER_ENVIRONMENT_STEPS = 1_100_000
 FASTKAN_AC_CONFIG_OVERRIDES = {
     "actor_network": "fast_kan_ac",
@@ -76,12 +78,20 @@ FASTKAN_AC_CONFIG_OVERRIDES = {
     "ac_slow_critic_regularizer": 1.0,
     "ac_slow_critic_decay": 0.98,
     "ac_replay_critic_loss_scale": 0.0,
+    "ac_use_slow_critic_targets": False,
+    "ac_corrected_imagination_bootstrap": False,
 }
 FASTKAN_AC_PARAM_MATCHED_CONFIG_OVERRIDES = {
     **FASTKAN_AC_CONFIG_OVERRIDES,
     "actor_network": "fast_kan_ac_param_matched",
     "fastkan_hidden_features": 53,
     "ac_replay_critic_loss_scale": 0.3,
+}
+FASTKAN_AC_STABLE_CONFIG_OVERRIDES = {
+    **FASTKAN_AC_PARAM_MATCHED_CONFIG_OVERRIDES,
+    "actor_network": "fast_kan_ac_stable",
+    "ac_use_slow_critic_targets": True,
+    "ac_corrected_imagination_bootstrap": True,
 }
 KAN_ACTOR_METADATA = {
     "relu_kan": {
@@ -144,6 +154,18 @@ KAN_ACTOR_METADATA = {
         "critic_network": "fast_kan",
         "critic_trainable_parameters": 906_978,
     },
+    "fast_kan_ac_stable": {
+        "method": "ARROW-FastKANAC-StableTargets-50",
+        "output_prefix": "arrow_fastkan_ac_stable_targets_ar50",
+        "hidden_adapter": "rms_norm_per_fastkan_layer",
+        "hidden_adapter_layer_norm_epsilon": 1e-4,
+        "grid_trainable": False,
+        "anchor_parameterization": "fixed_uniform_gaussian_centers",
+        "anchor_parameters": 0,
+        "trainable_parameters": 793_692,
+        "critic_network": "fast_kan",
+        "critic_trainable_parameters": 906_978,
+    },
 }
 
 
@@ -178,11 +200,12 @@ def _parser() -> argparse.ArgumentParser:
             "relu_kan_adaptive",
             "fast_kan_ac",
             "fast_kan_ac_param_matched",
+            "fast_kan_ac_stable",
         ],
         default="mlp",
         help=(
             "Keep the MLP actor, select an actor-only ReLU-KAN variant, or replace "
-            "both behavior heads with the KAN-Dreamer-aligned FastKAN network"
+            "both behavior heads with a named FastKAN actor-critic protocol"
         ),
     )
     parser.add_argument(
@@ -440,6 +463,7 @@ def main() -> int:
             "relu_kan_adaptive",
             "fast_kan_ac",
             "fast_kan_ac_param_matched",
+            "fast_kan_ac_stable",
         }:
             parser.error(
                 "--task-duration-epochs requires a named trainable KAN protocol"
@@ -459,6 +483,14 @@ def main() -> int:
         parser.error(
             "fast_kan_ac_param_matched currently requires --task-prefix-length 1 "
             f"and --task-duration-epochs {FASTKAN_AC_PARAM_MATCHED_EPOCHS}"
+        )
+    if args.actor_network == "fast_kan_ac_stable" and (
+        args.task_prefix_length != 1
+        or args.task_duration_epochs != FASTKAN_AC_STABLE_EPOCHS
+    ):
+        parser.error(
+            "fast_kan_ac_stable currently requires --task-prefix-length 1 and "
+            f"--task-duration-epochs {FASTKAN_AC_STABLE_EPOCHS}"
         )
     if args.swanlab_experiment_name is not None and args.swanlab_project is None:
         parser.error("--swanlab-experiment-name requires --swanlab-project")
@@ -502,7 +534,8 @@ def main() -> int:
     if (
         args.task_duration_epochs is not None
         and task_duration_epochs <= swap_sched
-        and args.actor_network not in {"fast_kan_ac", "fast_kan_ac_param_matched"}
+        and args.actor_network
+        not in {"fast_kan_ac", "fast_kan_ac_param_matched", "fast_kan_ac_stable"}
     ):
         parser.error(
             "--task-duration-epochs must exceed the frozen 90-epoch task duration"
@@ -513,8 +546,14 @@ def main() -> int:
         else task_duration_epochs * args.task_prefix_length
     )
     adaptive_kan = args.actor_network == "relu_kan_adaptive"
-    fastkan_ac = args.actor_network in {"fast_kan_ac", "fast_kan_ac_param_matched"}
-    param_matched_fastkan_ac = args.actor_network == "fast_kan_ac_param_matched"
+    fastkan_ac = args.actor_network in {
+        "fast_kan_ac",
+        "fast_kan_ac_param_matched",
+        "fast_kan_ac_stable",
+    }
+    extended_fastkan_ac = args.actor_network == "fast_kan_ac_param_matched"
+    stable_fastkan_ac = args.actor_network == "fast_kan_ac_stable"
+    parameter_matched_fastkan_ac = extended_fastkan_ac or stable_fastkan_ac
     resolved_training_config = None
     launch_config_path = config_path
     config_overrides = {}
@@ -530,11 +569,13 @@ def main() -> int:
                 }
             )
         if fastkan_ac:
-            fastkan_overrides = (
-                FASTKAN_AC_PARAM_MATCHED_CONFIG_OVERRIDES
-                if param_matched_fastkan_ac
-                else FASTKAN_AC_CONFIG_OVERRIDES
-            )
+            fastkan_overrides = {
+                "fast_kan_ac": FASTKAN_AC_CONFIG_OVERRIDES,
+                "fast_kan_ac_param_matched": (
+                    FASTKAN_AC_PARAM_MATCHED_CONFIG_OVERRIDES
+                ),
+                "fast_kan_ac_stable": FASTKAN_AC_STABLE_CONFIG_OVERRIDES,
+            }[args.actor_network]
             resolved_training_config.update(fastkan_overrides)
             config_overrides.update(fastkan_overrides)
         if args.task_duration_epochs is not None:
@@ -581,7 +622,7 @@ def main() -> int:
         command.append("--actor-kan-trainable-grid")
     if args.task_prefix_length is not None:
         command.extend(("--epochs", str(training_epochs), "--evaluate-final"))
-    milestone_completed_epochs = [68] if param_matched_fastkan_ac else []
+    milestone_completed_epochs = [68] if extended_fastkan_ac else []
     for milestone_completed_epoch in milestone_completed_epochs:
         command.extend(
             ("--milestone-completed-epoch", str(milestone_completed_epoch))
@@ -622,7 +663,9 @@ def main() -> int:
                 if is_kan_actor
                 else "matched-short-pilot-control"
             )
-    if param_matched_fastkan_ac:
+    if stable_fastkan_ac:
+        role = "actor-critic-stable-target-correction-pilot"
+    elif extended_fastkan_ac:
         role = "actor-critic-param-matched-replay-value-budget-extension"
     elif fastkan_ac:
         role = "actor-critic-kan-dreamer-aligned-pilot"
@@ -722,11 +765,11 @@ def main() -> int:
                 else None
             ),
             "midpoint_completed_epochs": (
-                FASTKAN_AC_EPOCHS if param_matched_fastkan_ac else None
+                FASTKAN_AC_EPOCHS if extended_fastkan_ac else None
             ),
             "midpoint_agent_decisions": (
                 FASTKAN_AC_EPOCHS * decisions_per_regular_epoch
-                if param_matched_fastkan_ac
+                if extended_fastkan_ac
                 else None
             ),
         },
@@ -771,7 +814,7 @@ def main() -> int:
             "recurrent_features": config["gru_units"],
             "kan_hidden_features": (
                 53
-                if param_matched_fastkan_ac
+                if parameter_matched_fastkan_ac
                 else 34
                 if fastkan_ac
                 else 64
@@ -897,24 +940,24 @@ def main() -> int:
             "critic_ema_regularizer": 1.0 if fastkan_ac else 0.0,
             "critic_ema_decay": 0.98 if fastkan_ac else None,
             "critic_replay_loss_scale": (
-                0.3 if param_matched_fastkan_ac else 0.0
+                0.3 if parameter_matched_fastkan_ac else 0.0
             ),
             "paper_critic_replay_loss_scale": 0.3 if fastkan_ac else None,
             "critic_replay_loss_deviation": (
                 "not ported because ARROW trains behavior separately from its world-model "
                 "replay batches"
-                if fastkan_ac and not param_matched_fastkan_ac
+                if fastkan_ac and not parameter_matched_fastkan_ac
                 else None
             ),
             "critic_replay_loss_semantics": (
                 "TD-lambda targets over the same four posterior context frames used "
                 "to initialize imagination; no extra replay minibatch is sampled"
-                if param_matched_fastkan_ac
+                if parameter_matched_fastkan_ac
                 else None
             ),
             "critic_replay_reward_timing": (
                 "ARROW same-index reward and continuation convention"
-                if param_matched_fastkan_ac
+                if parameter_matched_fastkan_ac
                 else None
             ),
             "dreamerv3_repval_reference": (
@@ -922,8 +965,19 @@ def main() -> int:
                     "repository": "https://github.com/danijar/dreamerv3",
                     "commit": DREAMERV3_REPVAL_REFERENCE_COMMIT,
                 }
-                if param_matched_fastkan_ac
+                if parameter_matched_fastkan_ac
                 else None
+            ),
+            "imagination_value_target": (
+                "ema_slow_critic" if stable_fastkan_ac else "online_critic"
+            ),
+            "actor_advantage_baseline": (
+                "ema_slow_critic" if stable_fastkan_ac else "online_critic"
+            ),
+            "terminal_bootstrap_state": (
+                "post_transition_imagined_state"
+                if stable_fastkan_ac
+                else "legacy_last_pre_transition_state"
             ),
         },
         "metric_logging": {

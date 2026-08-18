@@ -22,6 +22,7 @@ ActorNetwork = Literal[
     "relu_kan_adaptive",
     "fast_kan_ac",
     "fast_kan_ac_param_matched",
+    "fast_kan_ac_stable",
 ]
 ActorCriticOptimizer = Literal["adam", "laprop"]
 
@@ -226,6 +227,8 @@ class Config(Serialisable):
     ac_slow_critic_regularizer: float = 0.0
     ac_slow_critic_decay: float = 0.98
     ac_replay_critic_loss_scale: float = 0.0
+    ac_use_slow_critic_targets: bool = False
+    ac_corrected_imagination_bootstrap: bool = False
 
     observation_objective: ObservationObjective = "reconstruction"
     r2_barlow_loss_scale: float = 0.05
@@ -267,6 +270,7 @@ class Config(Serialisable):
             "relu_kan_adaptive",
             "fast_kan_ac",
             "fast_kan_ac_param_matched",
+            "fast_kan_ac_stable",
         }:
             raise ValueError(f"Unknown actor network: {self.actor_network!r}")
         if self.actor_kan_hidden_features < 1:
@@ -342,7 +346,11 @@ class Config(Serialisable):
         if self.ac_replay_critic_loss_scale < 0:
             raise ValueError("Replay critic loss scale must be non-negative")
 
-        if self.actor_network in {"fast_kan_ac", "fast_kan_ac_param_matched"}:
+        if self.actor_network in {
+            "fast_kan_ac",
+            "fast_kan_ac_param_matched",
+            "fast_kan_ac_stable",
+        }:
             paper_aligned = {
                 "fastkan_hidden_layers": 3,
                 "fastkan_grid_size": 8,
@@ -370,14 +378,26 @@ class Config(Serialisable):
                 "ac_slow_critic_decay": 0.98,
             }
             method_aligned = {
-                "fastkan_hidden_features": (
-                    53 if self.actor_network == "fast_kan_ac_param_matched" else 34
-                ),
-                "ac_replay_critic_loss_scale": (
-                    0.3 if self.actor_network == "fast_kan_ac_param_matched" else 0.0
-                ),
+                "fast_kan_ac": {
+                    "fastkan_hidden_features": 34,
+                    "ac_replay_critic_loss_scale": 0.0,
+                    "ac_use_slow_critic_targets": False,
+                    "ac_corrected_imagination_bootstrap": False,
+                },
+                "fast_kan_ac_param_matched": {
+                    "fastkan_hidden_features": 53,
+                    "ac_replay_critic_loss_scale": 0.3,
+                    "ac_use_slow_critic_targets": False,
+                    "ac_corrected_imagination_bootstrap": False,
+                },
+                "fast_kan_ac_stable": {
+                    "fastkan_hidden_features": 53,
+                    "ac_replay_critic_loss_scale": 0.3,
+                    "ac_use_slow_critic_targets": True,
+                    "ac_corrected_imagination_bootstrap": True,
+                },
             }
-            paper_aligned.update(method_aligned)
+            paper_aligned.update(method_aligned[self.actor_network])
             mismatches = {
                 key: (getattr(self, key), expected)
                 for key, expected in paper_aligned.items()

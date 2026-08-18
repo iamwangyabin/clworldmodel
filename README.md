@@ -191,4 +191,26 @@ optional launcher flag and never accepts an API key. The controlled changes and
 claim limits are documented in
 `docs/protocols/arrow_fastkan_ac_param_matched_repval_atari.md`.
 
+For the poor FastKAN actor/critic training dynamics, the corrected follow-up is
+`ARROW-FastKANAC-StableTargets-50`. It keeps both width-53 FastKAN heads and the
+same per-epoch budgets, but uses the existing EMA critic for imagination
+targets, replay-value bootstraps, and the detached actor baseline. It also
+bootstraps lambda returns from the actual post-transition horizon state instead
+of reusing the preceding state. The 90-epoch screen matches the historical MLP
+and bounded KAN acquisition duration:
+
+```bash
+python scripts/run_arrow_ar50_atari.py \
+  --actor-network fast_kan_ac_stable \
+  --task-prefix-length 1 \
+  --task-duration-epochs 90 \
+  --seed 0 \
+  --dry-run
+```
+
+This is a predeclared trainability correction, not an established performance
+improvement. Its invariant, comparison budget, and historical-behavior
+isolation are documented in
+`docs/protocols/arrow_fastkan_ac_stable_targets_atari.md`.
+
 Project-wide research and engineering constraints are defined in `AGENTS.md`.

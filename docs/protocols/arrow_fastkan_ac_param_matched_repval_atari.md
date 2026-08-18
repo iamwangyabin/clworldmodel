@@ -50,6 +50,13 @@ storage convention. It is not line-for-line parity with the current JAX
 DreamerV3 joint loss pass. Replay sampling counts and ARROW-50 sampling
 semantics are unchanged.
 
+This historical extension retains ARROW's online-critic imagination targets
+and its pre-transition horizon bootstrap. Those semantics were identified as
+likely contributors to unstable FastKAN value learning after this protocol was
+defined, so they are not changed retroactively. The separately named
+`ARROW-FastKANAC-StableTargets-50` route uses EMA targets and the actual final
+imagined state.
+
 ## Optimization and duration
 
 The KAN-Dreamer-aligned behavior settings remain LaProp at `4e-5`, epsilon

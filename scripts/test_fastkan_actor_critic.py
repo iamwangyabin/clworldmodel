@@ -21,7 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on the GPU host
 if torch is not None:
     sys.path.insert(0, str(PROJECT_SRC))
     sys.path.insert(0, str(VENDORED_ATARI))
-    from ac import ActorCritic, replay_lambda_returns
+    from ac import ActorCritic, dream_rollout, replay_lambda_returns
     from clworldmodel.models.fast_kan import (
         FastKANActor,
         FastKANCritic,
@@ -76,6 +76,17 @@ class FastKANActorCriticTests(unittest.TestCase):
                 "actor_network": "fast_kan_ac_param_matched",
                 "fastkan_hidden_features": 53,
                 "ac_replay_critic_loss_scale": 0.3,
+            }
+        )
+        return data
+
+    def _stable_fastkan_config_data(self) -> dict:
+        data = self._parameter_matched_fastkan_config_data()
+        data.update(
+            {
+                "actor_network": "fast_kan_ac_stable",
+                "ac_use_slow_critic_targets": True,
+                "ac_corrected_imagination_bootstrap": True,
             }
         )
         return data
@@ -154,6 +165,125 @@ class FastKANActorCriticTests(unittest.TestCase):
         self.assertEqual(actor_parameters + critic_parameters, 1_700_670)
         self.assertEqual(actor_parameters + critic_parameters - 1_714_961, -14_291)
 
+    def test_stable_bridge_keeps_both_parameter_matched_fastkan_heads(self) -> None:
+        actor_critic = ActorCritic(
+            1536,
+            18,
+            actor_network="fast_kan_ac_stable",
+            fastkan_hidden_features=53,
+        )
+        self.assertIsInstance(actor_critic.actor, FastKANActor)
+        self.assertIsInstance(actor_critic.critic, FastKANCritic)
+        self.assertEqual(
+            sum(parameter.numel() for parameter in actor_critic.parameters()),
+            1_700_670,
+        )
+
+    def test_slow_value_baseline_decouples_actor_from_online_critic(self) -> None:
+        torch.manual_seed(13)
+        actor_critic = ActorCritic(
+            6,
+            3,
+            actor_network="fast_kan_ac_stable",
+            fastkan_hidden_features=4,
+        )
+        states = torch.randn(2, 1, 6)
+        actions = torch.zeros(2, 1, 3)
+        actions[..., 0] = 1.0
+        returns = torch.full((2, 1, 1), 2.0)
+
+        reinforce_zero, _, _ = actor_critic.compute_loss(
+            states,
+            actions,
+            returns,
+            torch.tensor(1.0),
+            actor_baseline_values=torch.zeros_like(returns),
+        )
+        reinforce_one, _, _ = actor_critic.compute_loss(
+            states,
+            actions,
+            returns,
+            torch.tensor(1.0),
+            actor_baseline_values=torch.ones_like(returns),
+        )
+        torch.testing.assert_close(reinforce_zero, 2.0 * reinforce_one)
+
+    def test_corrected_rollout_bootstraps_the_post_transition_state(self) -> None:
+        class DummyRssm:
+            @staticmethod
+            def initial_state(n_sync: int):
+                return torch.zeros(n_sync, 1, 1), torch.zeros(n_sync, 1)
+
+            def __call__(
+                self,
+                z,
+                actions,
+                h,
+                images,
+                resets,
+                temperature=1.0,
+            ):
+                del resets, temperature
+                if images is not None:
+                    time, batch = actions.shape[:2]
+                    context_z = torch.zeros(time, batch, 1, 1)
+                    context_h = torch.arange(1, time + 1, dtype=torch.float32)
+                    context_h = context_h.view(time, 1, 1).expand(time, batch, 1)
+                    return None, context_z, context_h
+                return None, z, h + 1.0
+
+        class DummyWorldModel:
+            rssm = DummyRssm()
+
+            @staticmethod
+            def zh_transform(z, h):
+                del z
+                return h
+
+            @staticmethod
+            def reward_fc(zh):
+                return torch.zeros_like(zh)
+
+            @staticmethod
+            def continue_fc(zh):
+                return torch.ones_like(zh)
+
+        class DummyReplay:
+            @staticmethod
+            def minibatch(time, batch, mb_device):
+                actions = torch.zeros(time, batch, 2, device=mb_device)
+                images = torch.zeros(time, batch, 3, 64, 64, device=mb_device)
+                rewards = torch.zeros(time, batch, 1, device=mb_device)
+                continues = torch.ones(time, batch, 1, device=mb_device)
+                resets = torch.zeros(time, batch, 1, device=mb_device)
+                return actions, images, rewards, continues, resets
+
+        class DummyActorCritic:
+            def __call__(self, state):
+                action_logs = torch.full(
+                    (*state.shape[:-1], 2),
+                    -0.6931471805599453,
+                    device=state.device,
+                )
+                return action_logs, state[..., -1:]
+
+        rollout_kwargs = {
+            "wm": DummyWorldModel(),
+            "ac": DummyActorCritic(),
+            "data": DummyReplay(),
+            "n_sync": 1,
+            "n_steps": 1,
+            "discount": 0.5,
+        }
+        legacy_returns = dream_rollout(**rollout_kwargs)[3]
+        corrected_returns = dream_rollout(
+            **rollout_kwargs,
+            corrected_terminal_bootstrap=True,
+        )[3]
+
+        torch.testing.assert_close(legacy_returns, torch.tensor([[[2.0]]]))
+        torch.testing.assert_close(corrected_returns, torch.tensor([[[2.5]]]))
+
     def test_replay_lambda_returns_use_same_index_rewards_and_stop_at_terminals(self) -> None:
         rewards = torch.tensor([[[1.0]], [[2.0]], [[4.0]], [[8.0]]])
         continues = torch.tensor([[[1.0]], [[0.0]], [[1.0]], [[1.0]]])
@@ -175,6 +305,16 @@ class FastKANActorCriticTests(unittest.TestCase):
 
         invalid = self._parameter_matched_fastkan_config_data()
         invalid["ac_replay_critic_loss_scale"] = 0.0
+        with self.assertRaisesRegex(ValueError, "FastKAN settings"):
+            Config.from_dict(invalid)
+
+    def test_stable_config_requires_slow_targets_and_correct_terminal_bootstrap(self) -> None:
+        config = Config.from_dict(self._stable_fastkan_config_data())
+        self.assertTrue(config.ac_use_slow_critic_targets)
+        self.assertTrue(config.ac_corrected_imagination_bootstrap)
+
+        invalid = self._stable_fastkan_config_data()
+        invalid["ac_corrected_imagination_bootstrap"] = False
         with self.assertRaisesRegex(ValueError, "FastKAN settings"):
             Config.from_dict(invalid)
 

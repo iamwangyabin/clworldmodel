@@ -105,6 +105,16 @@ documented here, covered by focused parity tests, and followed by regenerating
     The default MLP and the completed width-34 FastKAN protocol are unchanged;
     parameter, target-return, config, logging, snapshot, and launcher contracts
     cover the new behavior.
+17. Add opt-in `fast_kan_ac_stable` for the separately named
+    `ARROW-FastKANAC-StableTargets-50` correction pilot. It preserves both
+    width-53 project-owned FastKAN behavior heads and all per-epoch budgets,
+    while using the existing EMA critic for imagination targets, replay-value
+    bootstraps, and the detached actor advantage baseline. It also evaluates
+    the horizon bootstrap on the final post-transition imagined state rather
+    than duplicating the last pre-transition value. Historical MLP and FastKAN
+    names preserve their prior target and bootstrap semantics. Focused tests
+    cover the terminal state, slow baseline, config isolation, parameter
+    accounting, and launcher contract.
 
 ## Known issues at import
 

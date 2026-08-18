@@ -100,6 +100,13 @@ ported: its implementation is coupled to DreamerV3's joint replay/world-model
 training pass, whereas ARROW trains behavior in a separate imagination loop.
 The manifest records the applied scale as zero and the paper value separately.
 
+Post-run inspection found two additional inherited behavior-loop deviations.
+This historical route uses the online critic, rather than the EMA critic, for
+imagination targets and the actor advantage baseline. Its horizon bootstrap
+also re-evaluates the last pre-transition state instead of the final imagined
+state. These semantics remain frozen under this protocol name; the corrected
+target path is isolated as `ARROW-FastKANAC-StableTargets-50`.
+
 ## Duration mapping
 
 KAN-Dreamer reports its final result at 1.1M DMC environment steps rather than

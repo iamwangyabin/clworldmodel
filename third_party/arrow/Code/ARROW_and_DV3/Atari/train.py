@@ -396,11 +396,12 @@ if __name__ == "__main__":
             "relu_kan_adaptive",
             "fast_kan_ac",
             "fast_kan_ac_param_matched",
+            "fast_kan_ac_stable",
         ],
         default=None,
         help=(
-            "Optional behavior architecture override; fast_kan_ac replaces both "
-            "actor and critic, while the ReLU-KAN variants replace only the actor."
+            "Optional behavior architecture override; FastKAN variants replace both "
+            "actor and critic, while ReLU-KAN variants replace only the actor."
         ),
     )
     parser.add_argument(
@@ -808,6 +809,10 @@ if __name__ == "__main__":
             "slow_critic_regularizer": config.ac_slow_critic_regularizer,
             "slow_critic_decay": config.ac_slow_critic_decay,
             "replay_critic_loss_scale": config.ac_replay_critic_loss_scale,
+            "use_slow_critic_targets": config.ac_use_slow_critic_targets,
+            "corrected_imagination_bootstrap": (
+                config.ac_corrected_imagination_bootstrap
+            ),
         }
 
         if config.fresh_ac and epoch % config.fresh_ac == 0:

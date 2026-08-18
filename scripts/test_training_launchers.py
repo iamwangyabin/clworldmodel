@@ -367,6 +367,11 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(training["critic_ema_decay"], 0.98)
         self.assertEqual(training["critic_replay_loss_scale"], 0.0)
         self.assertIsNotNone(training["critic_replay_loss_deviation"])
+        self.assertEqual(training["imagination_value_target"], "online_critic")
+        self.assertEqual(
+            training["terminal_bootstrap_state"],
+            "legacy_last_pre_transition_state",
+        )
 
         overrides = launch["config_overrides"]
         self.assertEqual(overrides["actor_network"], "fast_kan_ac")
@@ -413,6 +418,11 @@ class TrainingLauncherTests(unittest.TestCase):
         training = launch["actor_critic_training"]
         self.assertEqual(training["critic_replay_loss_scale"], 0.3)
         self.assertIsNone(training["critic_replay_loss_deviation"])
+        self.assertEqual(training["actor_advantage_baseline"], "online_critic")
+        self.assertEqual(
+            training["terminal_bootstrap_state"],
+            "legacy_last_pre_transition_state",
+        )
         self.assertIn(
             "same four posterior context frames",
             training["critic_replay_loss_semantics"],
@@ -428,6 +438,58 @@ class TrainingLauncherTests(unittest.TestCase):
         command = launch["command"]
         milestone_index = command.index("--milestone-completed-epoch")
         self.assertEqual(command[milestone_index + 1], "68")
+
+    def test_stable_fastkan_uses_slow_targets_and_terminal_state_bootstrap(self) -> None:
+        launch = self._arrow_dry_run(
+            "--actor-network",
+            "fast_kan_ac_stable",
+            "--task-prefix-length",
+            "1",
+            "--task-duration-epochs",
+            "90",
+        )
+
+        self.assertEqual(
+            launch["method"],
+            "ARROW-FastKANAC-StableTargets-50-T1-90EpochTrainabilityPilot",
+        )
+        self.assertEqual(
+            launch["role"],
+            "actor-critic-stable-target-correction-pilot",
+        )
+        self.assertEqual(launch["training_scope"]["epochs"], 90)
+        self.assertEqual(launch["training_scope"]["agent_decisions"], 1_474_560)
+        self.assertEqual(
+            launch["analysis_snapshot_semantics"]["milestone_completed_epochs"],
+            [],
+        )
+
+        actor = launch["actor"]
+        self.assertEqual(actor["network"], "fast_kan_ac_stable")
+        self.assertEqual(actor["critic_network"], "fast_kan")
+        self.assertEqual(actor["kan_hidden_features"], 53)
+        self.assertEqual(actor["combined_trainable_parameters"], 1_700_670)
+
+        training = launch["actor_critic_training"]
+        self.assertEqual(training["critic_replay_loss_scale"], 0.3)
+        self.assertEqual(training["imagination_value_target"], "ema_slow_critic")
+        self.assertEqual(training["actor_advantage_baseline"], "ema_slow_critic")
+        self.assertEqual(
+            training["terminal_bootstrap_state"],
+            "post_transition_imagined_state",
+        )
+
+        overrides = launch["config_overrides"]
+        self.assertTrue(overrides["ac_use_slow_critic_targets"])
+        self.assertTrue(overrides["ac_corrected_imagination_bootstrap"])
+        self.assertEqual(overrides["epochs"], 90)
+        self.assertEqual(overrides["esc.kwargs.swap_sched"], 90)
+        command = launch["command"]
+        self.assertEqual(
+            command[command.index("--actor-network") + 1],
+            "fast_kan_ac_stable",
+        )
+        self.assertNotIn("--milestone-completed-epoch", command)
 
     def test_swanlab_mirroring_records_names_but_no_credential(self) -> None:
         launch = self._arrow_dry_run(
