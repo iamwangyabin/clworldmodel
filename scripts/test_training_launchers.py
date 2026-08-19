@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -178,6 +179,10 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertIn("continue", " ".join(launch["residuals"]["placements"]))
         self.assertEqual(
             launch["replay"]["feature_cache"]["storage_bytes"], 402_653_184
+        )
+        self.assertEqual(
+            launch["project_pythonpath_prepend"],
+            os.pathsep.join((str(ROOT / "src"), str(ROOT))),
         )
         self.assertFalse(launch["observation"]["pixel_decoder"])
         self.assertFalse(output_dir.exists())

@@ -303,7 +303,9 @@ def main() -> int:
     if args.cpu_threads is not None:
         thread_env = {key: str(args.cpu_threads) for key in THREAD_ENV_KEYS}
         env.update(thread_env)
-    project_pythonpath = str(ROOT / "src")
+    # The ARROW subprocess runs from the vendored tree, so both the clean
+    # package and the project-root namespace for vendored adapters are needed.
+    project_pythonpath = os.pathsep.join((str(ROOT / "src"), str(ROOT)))
     inherited_pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = os.pathsep.join(
         value for value in (project_pythonpath, inherited_pythonpath) if value
