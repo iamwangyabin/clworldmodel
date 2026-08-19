@@ -62,6 +62,26 @@ documented here, covered by focused parity tests, and followed by regenerating
    indices so an external R2 posterior-state sidecar can stay aligned. A
    deterministic FIFO parity test checks the unchanged minibatch values and
    wraparound slot map.
+19. Add the opt-in Atari `dinov3_next_feature` path and fixed-capacity residual
+    hooks for the separately named KARROW-FrozenCore-v1 protocol. The path accepts frozen
+    project-owned DINOv3 integration features, removes the pixel decoder, and
+    predicts the stop-gradient observation feature from the one-step RSSM prior.
+    The unchanged GRUCell and MLP behavior heads may receive independent,
+    zero-initialized project-owned KAN or exactly core-parameter-matched MLP
+    corrections. ARROW write and sampling metadata align a byte-accounted frozen
+    feature sidecar without changing replay decisions. Defaults remain the
+    published CNN, reconstruction objective, and no residual. Focused tests cover
+    default parity, correction matching, feature-target gradients, sidecar
+    alignment, configuration isolation, and launcher accounting.
+20. Add the opt-in `freeze_after_first_task` shared-core mode for
+    KARROW-FrozenCore-v1. Task 1 updates the original RSSM, reward/continue,
+    feature-prediction, and actor-critic MLP bases together with their residual
+    adapters. At the first sequential task boundary, the base modules and their
+    optimizer state are removed from future updates; the single residual set
+    remains trainable. The mode also applies residual corrections to posterior
+    logits, latent-prior logits, reward, continuation, and feature prediction so
+    new tasks retain a plastic path after the shared core is frozen. The default
+    ARROW and DINO-only paths remain unchanged.
 
 ## Known issues at import
 

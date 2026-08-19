@@ -8,3 +8,8 @@ third_party/arrow/UPSTREAM.md.
 This product includes selected R2-Dreamer source files, copyright Naoki
 Morihira, licensed under the MIT License. See third_party/r2dreamer/LICENSE
 and third_party/r2dreamer/UPSTREAM.md.
+
+KARROW can load DINOv3 model weights distributed separately by Meta Platforms,
+Inc. under the DINOv3 License. Those weights and DINOv3 source code are not
+included in this repository. Their exact local artifact hashes are recorded in
+each KARROW launch manifest.

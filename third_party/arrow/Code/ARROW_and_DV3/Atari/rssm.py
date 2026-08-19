@@ -85,13 +85,53 @@ class Rssm(nn.Module):
         mlp_features: int,
         mlp_layers: int,
         wto: bool = False,
+        observation_encoder: str = "cnn",
+        dinov3_model_path: Optional[str] = None,
+        dinov3_input_size: int = 256,
+        dinov3_max_batch_size: int = 128,
+        residual_correction: str = "none",
+        residual_bottleneck_features: int = 64,
+        residual_grid_size: int = 8,
+        residual_input_min: float = -2.0,
+        residual_input_max: float = 2.0,
+        residual_rms_norm_epsilon: float = 1e-4,
+        residual_alpha: float = 0.1,
+        image_embedder: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
         self.ls = ls
         self.h_dim = h_dim
 
-        self.recurrent = Recurrent(ls, a_dim, h_dim, mlp_features, mlp_layers if not wto else 0)
-        self.image_embedder = Encoder(img_channels, cnn_depth)
+        self.recurrent = Recurrent(
+            ls,
+            a_dim,
+            h_dim,
+            mlp_features,
+            mlp_layers if not wto else 0,
+            residual_correction=residual_correction,
+            residual_bottleneck_features=residual_bottleneck_features,
+            residual_grid_size=residual_grid_size,
+            residual_input_min=residual_input_min,
+            residual_input_max=residual_input_max,
+            residual_rms_norm_epsilon=residual_rms_norm_epsilon,
+            residual_alpha=residual_alpha,
+        )
+        if image_embedder is not None:
+            self.image_embedder = image_embedder
+        elif observation_encoder == "cnn":
+            self.image_embedder = Encoder(img_channels, cnn_depth)
+        elif observation_encoder == "dinov3_vits16":
+            from clworldmodel.models.frozen_dinov3 import FrozenDinoV3Encoder
+
+            self.image_embedder = FrozenDinoV3Encoder(
+                dinov3_model_path,
+                input_size=dinov3_input_size,
+                max_batch_size=dinov3_max_batch_size,
+            )
+        else:
+            raise ValueError(f"Unknown observation encoder: {observation_encoder!r}")
+        if not hasattr(self.image_embedder, "output_size"):
+            raise TypeError("Image embedder must declare output_size")
         self.representation = Representation(
             ls,
             self.image_embedder.output_size,
@@ -99,8 +139,35 @@ class Rssm(nn.Module):
             mlp_features,
             mlp_layers if not wto else 1,
             uniform=0.01,
+            residual_correction=residual_correction,
+            residual_bottleneck_features=residual_bottleneck_features,
+            residual_grid_size=residual_grid_size,
+            residual_input_min=residual_input_min,
+            residual_input_max=residual_input_max,
+            residual_rms_norm_epsilon=residual_rms_norm_epsilon,
+            residual_alpha=residual_alpha,
         )
-        self.transition = Transition(ls, h_dim, mlp_features, mlp_layers, uniform=0.01)
+        self.transition = Transition(
+            ls,
+            h_dim,
+            mlp_features,
+            mlp_layers,
+            uniform=0.01,
+            residual_correction=residual_correction,
+            residual_bottleneck_features=residual_bottleneck_features,
+            residual_grid_size=residual_grid_size,
+            residual_input_min=residual_input_min,
+            residual_input_max=residual_input_max,
+            residual_rms_norm_epsilon=residual_rms_norm_epsilon,
+            residual_alpha=residual_alpha,
+        )
+
+    def freeze_shared_core(self) -> None:
+        """Freeze base RSSM functions while leaving residual adapters plastic."""
+        self.image_embedder.requires_grad_(False)
+        self.recurrent.freeze_shared_core()
+        self.representation.freeze_shared_core()
+        self.transition.freeze_shared_core()
 
     def __call__(
         self,
@@ -218,7 +285,20 @@ class Rssm(nn.Module):
 
 class Recurrent(nn.Module):
     def __init__(
-        self, ls: LatentShape, a_dim: int, h_dim: int, mlp_features: int, mlp_layers: int
+        self,
+        ls: LatentShape,
+        a_dim: int,
+        h_dim: int,
+        mlp_features: int,
+        mlp_layers: int,
+        *,
+        residual_correction: str = "none",
+        residual_bottleneck_features: int = 64,
+        residual_grid_size: int = 8,
+        residual_input_min: float = -2.0,
+        residual_input_max: float = 2.0,
+        residual_rms_norm_epsilon: float = 1e-4,
+        residual_alpha: float = 0.1,
     ) -> None:
         super().__init__()
         z_dim = ls[0] * ls[1]
@@ -231,12 +311,41 @@ class Recurrent(nn.Module):
             )
         )
         self.rnn = nn.GRUCell(mlp_features if mlp_layers > 0 else z_dim + a_dim, h_dim)
+        if residual_correction == "none":
+            self.residual = None
+        else:
+            from clworldmodel.models.residual_corrections import (
+                build_residual_correction,
+            )
+
+            # Keep every downstream ARROW parameter identical under a shared seed.
+            with torch.random.fork_rng(devices=[]):
+                self.residual = build_residual_correction(
+                    residual_correction,
+                    h_dim,
+                    h_dim,
+                    bottleneck_features=residual_bottleneck_features,
+                    grid_min=residual_input_min,
+                    grid_max=residual_input_max,
+                    num_grids=residual_grid_size,
+                    rms_norm_epsilon=residual_rms_norm_epsilon,
+                    alpha=residual_alpha,
+                )
 
     def forward(self, prev_z: LatentT, prev_a: ActionT, prev_h: HiddenT) -> HiddenT:
         assert len(prev_z.shape) == 3  # [ N 32 32 ]
         assert len(prev_a.shape) == 2  # [ N n_acts ]
         za = torch.cat((prev_z.flatten(1), prev_a), dim=1)
-        return self.rnn(self.za_fcs(za), prev_h)
+        hidden = self.rnn(self.za_fcs(za), prev_h)
+        if self.residual is not None:
+            hidden = hidden + self.residual(hidden)
+        return hidden
+
+    def freeze_shared_core(self) -> None:
+        self.za_fcs.requires_grad_(False)
+        self.rnn.requires_grad_(False)
+        if self.residual is not None:
+            self.residual.requires_grad_(True)
 
 
 class Representation(nn.Module):
@@ -251,6 +360,13 @@ class Representation(nn.Module):
         mlp_features: int,
         mlp_layers: int,
         uniform: float = 0,
+        residual_correction: str = "none",
+        residual_bottleneck_features: int = 64,
+        residual_grid_size: int = 8,
+        residual_input_min: float = -2.0,
+        residual_input_max: float = 2.0,
+        residual_rms_norm_epsilon: float = 1e-4,
+        residual_alpha: float = 0.1,
     ) -> None:
         super().__init__()
         self.ls = ls
@@ -274,6 +390,25 @@ class Representation(nn.Module):
             nn.Unflatten(-1, (n_dis, n_cls)),
             nn.LogSoftmax(-1),
         )
+        if residual_correction == "none":
+            self.residual = None
+        else:
+            from clworldmodel.models.residual_corrections import (
+                build_residual_correction,
+            )
+
+            with torch.random.fork_rng(devices=[]):
+                self.residual = build_residual_correction(
+                    residual_correction,
+                    n_dis * n_cls,
+                    n_dis * n_cls,
+                    bottleneck_features=residual_bottleneck_features,
+                    grid_min=residual_input_min,
+                    grid_max=residual_input_max,
+                    num_grids=residual_grid_size,
+                    rms_norm_epsilon=residual_rms_norm_epsilon,
+                    alpha=residual_alpha,
+                )
 
     def __call__(self, e: EmbedT, h: HiddenT) -> LatentLogDistT:
         return super().__call__(e, h)
@@ -284,6 +419,8 @@ class Representation(nn.Module):
         x1 = self.eh_to_inter(eh)
         if self.e_to_inter is not None:
             x1 = x1 + self.e_to_inter(e)
+        if self.residual is not None:
+            x1 = x1 + self.residual(x1)
         post_log_probs = self.inter_to_z_dist(x1)
         if self.uniform:
             # Use (1-u) of probs from logits + (u) of uniform
@@ -292,10 +429,30 @@ class Representation(nn.Module):
             return ((1 - self.uniform) * probs + self.uniform / self.ls[1]).log()
         return post_log_probs
 
+    def freeze_shared_core(self) -> None:
+        self.eh_to_inter.requires_grad_(False)
+        if self.e_to_inter is not None:
+            self.e_to_inter.requires_grad_(False)
+        self.inter_to_z_dist.requires_grad_(False)
+        if self.residual is not None:
+            self.residual.requires_grad_(True)
+
 
 class Transition(nn.Module):
     def __init__(
-        self, ls: LatentShape, h_dim: int, mlp_features: int, mlp_layers: int, uniform: float = 0
+        self,
+        ls: LatentShape,
+        h_dim: int,
+        mlp_features: int,
+        mlp_layers: int,
+        uniform: float = 0,
+        residual_correction: str = "none",
+        residual_bottleneck_features: int = 64,
+        residual_grid_size: int = 8,
+        residual_input_min: float = -2.0,
+        residual_input_max: float = 2.0,
+        residual_rms_norm_epsilon: float = 1e-4,
+        residual_alpha: float = 0.1,
     ) -> None:
         super().__init__()
         self.ls = ls
@@ -313,10 +470,41 @@ class Transition(nn.Module):
             nn.Unflatten(-1, (n_dis, n_cls)),
             nn.LogSoftmax(-1),
         )
+        if residual_correction == "none":
+            self.residual = None
+        else:
+            from clworldmodel.models.residual_corrections import (
+                build_residual_correction,
+            )
+
+            n_logits = n_dis * n_cls
+            with torch.random.fork_rng(devices=[]):
+                self.residual = build_residual_correction(
+                    residual_correction,
+                    n_logits,
+                    n_logits,
+                    bottleneck_features=residual_bottleneck_features,
+                    grid_min=residual_input_min,
+                    grid_max=residual_input_max,
+                    num_grids=residual_grid_size,
+                    rms_norm_epsilon=residual_rms_norm_epsilon,
+                    alpha=residual_alpha,
+                )
 
     def forward(self, h: HiddenT) -> LatentLogDistT:
         prior_log_probs = self.h_to_z_prior(h)
+        if self.residual is not None:
+            prior_logits = prior_log_probs.flatten(-2)
+            prior_logits = prior_logits + self.residual(prior_logits)
+            prior_log_probs = torch.log_softmax(
+                prior_logits.unflatten(-1, self.ls), dim=-1
+            )
         if self.uniform:
             probs = prior_log_probs.exp()
             return ((1 - self.uniform) * probs + self.uniform / self.ls[1]).log()
         return prior_log_probs
+
+    def freeze_shared_core(self) -> None:
+        self.h_to_z_prior.requires_grad_(False)
+        if self.residual is not None:
+            self.residual.requires_grad_(True)

@@ -1,0 +1,521 @@
+#!/usr/bin/env python3
+"""Launch the fixed-capacity KARROW Frozen-Core Atari protocol and controls."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shlex
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+from git_provenance import git_state, require_synced_training_git_state
+from run_arrow_ar50_atari import (
+    ARROW_ROOT,
+    CURRICULUM_DIRS,
+    ROOT,
+    SEEDS,
+    THREAD_ENV_KEYS,
+    UPSTREAM_COMMIT,
+    _arrow_replay_storage_budget,
+    _config_path,
+    _run_and_tee,
+    _runtime_info,
+    _verify_primary_config,
+    _write_json,
+)
+
+
+DINOV3_MODEL_ID = "facebook/dinov3-vits16-pretrain-lvd1689m"
+DINOV3_FEATURE_DIM = 384
+DINOV3_INPUT_SIZE = 256
+DINOV3_MAX_BATCH_SIZE = 128
+DINOV3_CACHE_DTYPE = "float16"
+DINOV3_FEATURE_LOSS_SCALE = 1.0
+DINOV3_DEPENDENCIES = {"transformers": "4.57.1", "safetensors": "0.6.2"}
+RESIDUAL_BOTTLENECK_FEATURES = 64
+RESIDUAL_GRID_SIZE = 8
+RESIDUAL_INPUT_RANGE = (-2.0, 2.0)
+RESIDUAL_RMS_NORM_EPSILON = 1e-4
+RESIDUAL_ALPHA = 0.1
+VARIANTS = {
+    "dino": {
+        "method": "ARROW-DINO-50",
+        "role": "frozen-representation-control",
+        "residual_correction": "none",
+        "output_prefix": "arrow_dino_ar50",
+    },
+    "mlp": {
+        "method": "ARROW-DINO-FrozenCore-MLPRes-50",
+        "role": "parameter-matched-frozen-core-control",
+        "residual_correction": "mlp",
+        "output_prefix": "arrow_dino_frozen_core_mlp_residual_ar50",
+    },
+    "kan": {
+        "method": "KARROW-FrozenCore-50",
+        "role": "primary-frozen-core-method",
+        "residual_correction": "kan",
+        "output_prefix": "karrow_frozen_core_ar50",
+    },
+}
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Launch KARROW Frozen-Core or a matched frozen-DINO control"
+    )
+    parser.add_argument("--variant", choices=VARIANTS, default="kan")
+    parser.add_argument("--seed", type=int, choices=range(5), default=0)
+    parser.add_argument("--curriculum", choices=CURRICULUM_DIRS, default="original")
+    parser.add_argument(
+        "--dinov3-model-path",
+        type=Path,
+        default=(
+            Path(os.environ["DINOV3_MODEL_PATH"])
+            if "DINOV3_MODEL_PATH" in os.environ
+            else None
+        ),
+        help=(
+            "Absolute local Hugging Face model directory. The launcher never "
+            "downloads weights during a run."
+        ),
+    )
+    parser.add_argument(
+        "--task-prefix-length",
+        type=int,
+        choices=[1, 2, 3],
+        help="Run a one-, two-, or three-task pilot without changing task duration",
+    )
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--python", type=Path, default=Path(sys.executable))
+    parser.add_argument("--cpu-threads", type=int)
+    parser.add_argument("--profile-stages", action="store_true")
+    parser.add_argument("--swanlab-project")
+    parser.add_argument("--swanlab-experiment-name")
+    parser.add_argument("--dry-run", action="store_true")
+    return parser
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _model_artifact_manifest(model_path: Path) -> dict[str, object]:
+    if not model_path.is_absolute():
+        raise ValueError("--dinov3-model-path must resolve to an absolute path")
+    if not model_path.is_dir():
+        raise FileNotFoundError(f"DINOv3 model directory does not exist: {model_path}")
+    config_path = model_path / "config.json"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"DINOv3 config is missing: {config_path}")
+    model_config = json.loads(config_path.read_text(encoding="utf-8"))
+    if model_config.get("hidden_size") != DINOV3_FEATURE_DIM:
+        raise ValueError(
+            "KARROW Frozen-Core requires the 384-dimensional DINOv3 ViT-S model"
+        )
+    if model_config.get("patch_size") != 16:
+        raise ValueError("KARROW Frozen-Core requires a DINOv3 ViT-S/16 model")
+
+    files = []
+    for path in sorted(model_path.rglob("*")):
+        if not path.is_file() or ".git" in path.relative_to(model_path).parts:
+            continue
+        files.append(
+            {
+                "path": str(path.relative_to(model_path)),
+                "size_bytes": path.stat().st_size,
+                "sha256": _sha256(path),
+            }
+        )
+    if not any(
+        item["path"].endswith((".safetensors", ".bin")) for item in files
+    ):
+        raise FileNotFoundError("DINOv3 model directory contains no local weight file")
+    return {
+        "model_id": DINOV3_MODEL_ID,
+        "local_path": str(model_path),
+        "feature_dim": DINOV3_FEATURE_DIM,
+        "files": files,
+        "total_bytes": sum(int(item["size_bytes"]) for item in files),
+        "license": "DINOv3 License",
+        "distributed_with_project": False,
+    }
+
+
+def _feature_cache_budget(config: dict, *, dtype: str) -> dict[str, object]:
+    bytes_per_element = {"float16": 2, "float32": 4}[dtype]
+    transitions_per_buffer = config["data_t"] * config["data_n_max"]
+    bytes_per_buffer = (
+        transitions_per_buffer * DINOV3_FEATURE_DIM * bytes_per_element
+    )
+    replay_devices = {
+        item["rb_type"]: item["rb_device"] for item in config["replay_buffers"]
+    }
+    return {
+        "dtype": dtype,
+        "feature_dim": DINOV3_FEATURE_DIM,
+        "bytes_per_element": bytes_per_element,
+        "storage_bytes": 2 * bytes_per_buffer,
+        "buffers": {
+            "fifo": {
+                "device": replay_devices["FifoReplay"],
+                "storage_bytes": bytes_per_buffer,
+            },
+            "ltdm": {
+                "device": replay_devices["LongTermReplay"],
+                "storage_bytes": bytes_per_buffer,
+            },
+        },
+        "retention_and_sampling": "aligned sidecar; ARROW decisions unchanged",
+    }
+
+
+def _dinov3_dependency_versions(
+    python: Path, env: dict[str, str]
+) -> dict[str, str | None]:
+    probe_code = """
+import json
+from importlib import metadata
+
+versions = {}
+for name in ("transformers", "safetensors"):
+    try:
+        versions[name] = metadata.version(name)
+    except metadata.PackageNotFoundError:
+        versions[name] = None
+print(json.dumps(versions))
+"""
+    probe = subprocess.run(
+        [
+            str(python),
+            "-c",
+            probe_code,
+        ],
+        check=True,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+    return json.loads(probe.stdout)
+
+
+def _resolved_config(
+    source: dict,
+    *,
+    model_path: Path,
+    residual_correction: str,
+    training_epochs: int,
+) -> dict:
+    config = json.loads(json.dumps(source))
+    config.update(
+        {
+            "epochs": training_epochs,
+            "observation_objective": "dinov3_next_feature",
+            "observation_encoder": "dinov3_vits16",
+            "dinov3_model_path": str(model_path),
+            "dinov3_input_size": DINOV3_INPUT_SIZE,
+            "dinov3_max_batch_size": DINOV3_MAX_BATCH_SIZE,
+            "dinov3_feature_cache_dtype": DINOV3_CACHE_DTYPE,
+            "dinov3_feature_loss_scale": DINOV3_FEATURE_LOSS_SCALE,
+            "actor_network": "mlp",
+            "fresh_ac": False,
+            "residual_correction": residual_correction,
+            "residual_bottleneck_features": RESIDUAL_BOTTLENECK_FEATURES,
+            "residual_grid_size": RESIDUAL_GRID_SIZE,
+            "residual_input_min": RESIDUAL_INPUT_RANGE[0],
+            "residual_input_max": RESIDUAL_INPUT_RANGE[1],
+            "residual_rms_norm_epsilon": RESIDUAL_RMS_NORM_EPSILON,
+            "residual_alpha": RESIDUAL_ALPHA,
+            "shared_core_mode": (
+                "freeze_after_first_task"
+                if residual_correction != "none"
+                else "trainable"
+            ),
+        }
+    )
+    return config
+
+
+def main() -> int:
+    parser = _parser()
+    args = parser.parse_args()
+    if args.dinov3_model_path is None:
+        parser.error(
+            "--dinov3-model-path or DINOV3_MODEL_PATH is required; online loading "
+            "is intentionally disabled"
+        )
+    if args.cpu_threads is not None and args.cpu_threads < 1:
+        parser.error("--cpu-threads must be positive")
+    if args.swanlab_experiment_name and not args.swanlab_project:
+        parser.error("--swanlab-experiment-name requires --swanlab-project")
+
+    project_git = (
+        git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
+    )
+    python = args.python.resolve()
+    model_path = args.dinov3_model_path.expanduser().resolve()
+    model_artifact = _model_artifact_manifest(model_path)
+    source_config_path = _config_path(args.curriculum, args.seed)
+    source_config = _verify_primary_config(
+        source_config_path, args.curriculum, args.seed
+    )
+    variant = VARIANTS[args.variant]
+    swap_sched = source_config["esc"]["kwargs"]["swap_sched"]
+    training_epochs = (
+        source_config["epochs"]
+        if args.task_prefix_length is None
+        else swap_sched * args.task_prefix_length
+    )
+    config = _resolved_config(
+        source_config,
+        model_path=model_path,
+        residual_correction=variant["residual_correction"],
+        training_epochs=training_epochs,
+    )
+
+    output_prefix = str(variant["output_prefix"])
+    method = str(variant["method"])
+    role = str(variant["role"])
+    if args.task_prefix_length is not None:
+        output_prefix += f"_t{args.task_prefix_length}_pilot"
+        method += f"-T{args.task_prefix_length}Pilot"
+        role += "-pilot"
+    output_dir = (
+        args.output_dir.expanduser().resolve()
+        if args.output_dir is not None
+        else ROOT
+        / "runs"
+        / f"{output_prefix}_{args.curriculum}_s{args.seed}_analysis"
+    )
+    config_path = output_dir / "resolved_training_config.json"
+    snapshot_dir = output_dir / "analysis_snapshots"
+
+    env = os.environ.copy()
+    thread_env: dict[str, str] = {}
+    if args.cpu_threads is not None:
+        thread_env = {key: str(args.cpu_threads) for key in THREAD_ENV_KEYS}
+        env.update(thread_env)
+    project_pythonpath = str(ROOT / "src")
+    inherited_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join(
+        value for value in (project_pythonpath, inherited_pythonpath) if value
+    )
+    dependency_versions = _dinov3_dependency_versions(python, env)
+
+    command = [
+        str(python),
+        "Code/ARROW_and_DV3/Atari/train.py",
+        "--config",
+        str(config_path),
+        "--arrow-replay-ratio",
+        "50-50",
+        "--log-dir",
+        str(output_dir),
+        "--analysis-snapshot-dir",
+        str(snapshot_dir),
+        "--compile-world-model",
+        "--fused-adam",
+        "--tf32",
+    ]
+    if args.task_prefix_length is not None:
+        command.extend(("--epochs", str(training_epochs), "--evaluate-final"))
+    if args.profile_stages:
+        command.append("--profile-stages")
+    if args.swanlab_project:
+        command.extend(("--swanlab-project", args.swanlab_project))
+    if args.swanlab_experiment_name:
+        command.extend(("--swanlab-experiment-name", args.swanlab_experiment_name))
+
+    decisions_per_epoch = source_config["n_sync"] * source_config["gen_seq_len"]
+    collection_epoch_equivalents = training_epochs
+    if source_config.get("pretrain_enabled", True):
+        collection_epoch_equivalents += (
+            source_config.get("pretrain_data_multiplier", 4) - 1
+        )
+    agent_decisions = decisions_per_epoch * collection_epoch_equivalents
+    raw_environment_frames = agent_decisions * source_config["env_repeat"]
+    boundary_epochs = list(range(swap_sched - 1, training_epochs, swap_sched))
+    tasks = source_config["esc"]["env_configs"]
+    if args.task_prefix_length is not None:
+        tasks = tasks[: args.task_prefix_length]
+
+    launch = {
+        "method": method,
+        "role": role,
+        "protocol": "KARROW-FrozenCore-v1-Atari",
+        "started_at_utc": None,
+        "project_git": project_git,
+        "upstream_arrow_commit": UPSTREAM_COMMIT,
+        "source": str(ARROW_ROOT),
+        "source_config": str(source_config_path),
+        "resolved_training_config": str(config_path),
+        "output_dir": str(output_dir),
+        "analysis_snapshot_dir": str(snapshot_dir),
+        "variant": args.variant,
+        "curriculum": args.curriculum,
+        "seed_id": args.seed,
+        "seed": SEEDS[args.seed],
+        "training_scope": {
+            "task_prefix_length": args.task_prefix_length,
+            "epochs": training_epochs,
+            "task_duration_epochs": swap_sched,
+            "tasks": [task["name"] for task in tasks],
+            "agent_decisions": agent_decisions,
+            "raw_environment_frames": raw_environment_frames,
+            "world_model_updates": training_epochs
+            * source_config["steps_per_batch"],
+            "actor_critic_updates": training_epochs
+            * source_config["ac_train_steps"],
+            "task_boundary_epochs": boundary_epochs,
+        },
+        "observation": {
+            "encoder": "frozen DINOv3 ViT-S/16",
+            "model_artifact": model_artifact,
+            "input_size": DINOV3_INPUT_SIZE,
+            "feature_dim": DINOV3_FEATURE_DIM,
+            "preprocessing": {
+                "resize": [DINOV3_INPUT_SIZE, DINOV3_INPUT_SIZE],
+                "mean": [0.485, 0.456, 0.406],
+                "std": [0.229, 0.224, 0.225],
+            },
+            "pixel_decoder": False,
+            "objective": "one-step prior-state cosine feature prediction",
+            "feature_loss_scale": DINOV3_FEATURE_LOSS_SCALE,
+            "target_gradient": "stopped",
+            "first_and_reset_steps_masked": True,
+        },
+        "residuals": {
+            "kind": variant["residual_correction"],
+            "placements": (
+                []
+                if args.variant == "dino"
+                else [
+                    "post-GRU hidden",
+                    "posterior logits",
+                    "latent prior logits",
+                    "reward",
+                    "continue",
+                    "feature predictor",
+                    "actor logits",
+                    "critic logits",
+                ]
+            ),
+            "independent_modules": True,
+            "bottleneck_features": RESIDUAL_BOTTLENECK_FEATURES,
+            "grid_size": (
+                RESIDUAL_GRID_SIZE if args.variant == "kan" else None
+            ),
+            "grid_range": (
+                list(RESIDUAL_INPUT_RANGE) if args.variant == "kan" else None
+            ),
+            "grid_trainable": False if args.variant == "kan" else None,
+            "alpha": RESIDUAL_ALPHA,
+            "zero_initialized_output": True,
+            "matched_core_parameters": 32_768,
+            "task_specific_parameters": False,
+            "task_id_or_router": False,
+        },
+        "shared_core": {
+            "mode": config["shared_core_mode"],
+            "freeze_after_completed_task": 1 if args.variant != "dino" else None,
+            "frozen_modules": (
+                [
+                    "frozen DINOv3 encoder (frozen from initialization)",
+                    "RSSM input MLP",
+                    "RSSM GRUCell",
+                    "posterior representation MLP",
+                    "latent transition MLP",
+                    "feature predictor base head",
+                    "reward base head",
+                    "continue base head",
+                    "actor MLP trunk and logits",
+                    "critic MLP trunk and logits",
+                ]
+                if args.variant != "dino"
+                else []
+            ),
+            "trainable_after_freeze": (
+                [
+                    "dynamics residual",
+                    "posterior residual",
+                    "prior residual",
+                    "reward residual",
+                    "continue residual",
+                    "feature-prediction residual",
+                    "actor residual",
+                    "critic residual",
+                ]
+                if args.variant != "dino"
+                else []
+            ),
+        },
+        "replay": {
+            "capacity_and_sampling": "ARROW-50 unchanged",
+            "base_storage": _arrow_replay_storage_budget(source_config),
+            "feature_cache": _feature_cache_budget(
+                source_config, dtype=DINOV3_CACHE_DTYPE
+            ),
+        },
+        "determinism": {
+            "python_numpy_torch_environment_and_replay_seeded": True,
+            "torch_deterministic_algorithms": False,
+            "tf32_enabled": True,
+            "known_nondeterminism": [
+                "CUDA kernels are not forced into deterministic-only mode"
+            ],
+        },
+        "runtime_dependencies": dependency_versions,
+        "cpu_threads": args.cpu_threads,
+        "environment": thread_env,
+        "project_pythonpath_prepend": project_pythonpath,
+        "command": command,
+    }
+    print(json.dumps(launch, indent=2))
+    rendered_env = [f"{key}={value}" for key, value in thread_env.items()]
+    rendered_env.append(f"PYTHONPATH={env['PYTHONPATH']}")
+    print(f"command: {shlex.join([*rendered_env, *command])}")
+    if args.dry_run:
+        return 0
+
+    if dependency_versions != DINOV3_DEPENDENCIES:
+        raise RuntimeError(
+            "KARROW requires the pinned DINOv3 dependencies before launch: "
+            f"expected={DINOV3_DEPENDENCIES} observed={dependency_versions}"
+        )
+    if output_dir.exists():
+        raise FileExistsError(f"Refusing to overwrite existing run directory: {output_dir}")
+    runtime_environment = _runtime_info(python, env)
+    runtime_environment["packages"].update(dependency_versions)
+    output_dir.mkdir(parents=True)
+    _write_json(config_path, config)
+    launch["started_at_utc"] = datetime.now(timezone.utc).isoformat()
+    launch["runtime_environment"] = runtime_environment
+    _write_json(output_dir / "launch.json", launch)
+
+    return_code = _run_and_tee(
+        command,
+        cwd=ARROW_ROOT,
+        env=env,
+        log_path=output_dir / "train.log",
+    )
+    status = {
+        "complete": return_code == 0,
+        "return_code": return_code,
+        "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_json(output_dir / "run_status.json", status)
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, command)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -265,19 +265,66 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
     if wm.observation_objective == "reconstruction":
         observation_head_name = "decoder"
         observation_head = wm.decoder
-    else:
+    elif wm.observation_objective == "r2":
         observation_head_name = "r2_projector"
         observation_head = wm.r2_projector
+    else:
+        observation_head_name = "feature_predictor"
+        observation_head = wm.feature_predictor
     return {
         "schema_version": 1,
         "observation_objective": wm.observation_objective,
         "world_model": _parameter_accounting(wm),
+        "observation_encoder": _parameter_accounting(wm.rssm.image_embedder),
         "observation_head_name": observation_head_name,
         "observation_head": _parameter_accounting(observation_head),
         "accounting_scope": (
             "parameters only; excludes gradients, optimizer state, and activations"
         ),
     }
+
+
+@torch.no_grad()
+def _encode_frozen_observation_features(
+    wm: WorldModel,
+    observations: torch.Tensor,
+    *,
+    batch_size: int,
+) -> torch.Tensor:
+    """Encode collected CPU observations once before writing the replay sidecar."""
+    if observations.ndim != 5:
+        raise ValueError("Collected observations must have [time, batch, C, H, W] axes")
+    if batch_size < 1:
+        raise ValueError("DINOv3 encoding batch size must be positive")
+    time, sequences = observations.shape[:2]
+    flat = observations.reshape(-1, *observations.shape[-3:])
+    try:
+        encoder_device = next(wm.rssm.image_embedder.parameters()).device
+    except StopIteration:
+        encoder_device = next(wm.parameters()).device
+    encoded = []
+    for start in range(0, flat.shape[0], batch_size):
+        images = flat[start : start + batch_size].to(encoder_device)
+        encoded.append(wm.rssm.image_embedder(images).detach().cpu())
+    features = torch.cat(encoded, dim=0)
+    return features.view(time, sequences, -1)
+
+
+def _restrict_optimizer_to_trainable(
+    optimizer: torch.optim.Optimizer,
+    module: torch.nn.Module,
+) -> list[torch.nn.Parameter]:
+    """Drop frozen parameters without resetting optimizer state for adapters."""
+    trainable = [parameter for parameter in module.parameters() if parameter.requires_grad]
+    if not trainable:
+        raise RuntimeError("Freezing the shared core left no trainable parameters")
+    trainable_ids = {id(parameter) for parameter in trainable}
+    for parameter in list(optimizer.state):
+        if id(parameter) not in trainable_ids:
+            del optimizer.state[parameter]
+    for parameter_group in optimizer.param_groups:
+        parameter_group["params"] = trainable
+    return trainable
 
 
 def _sha256(path: Path) -> str:
@@ -383,7 +430,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--observation-objective",
-        choices=["reconstruction", "r2"],
+        choices=["reconstruction", "r2", "dinov3_next_feature"],
         default=None,
         help="Optional world-model observation-objective override.",
     )
@@ -513,6 +560,9 @@ if __name__ == "__main__":
     if config.algorithm == "arrow":
         print(f"ARROW FIFO/LTDM capacity ratio: {config.arrow_replay_capacity_ratio}")
     print(f"World-model observation objective: {config.observation_objective}")
+    print(f"Observation encoder: {config.observation_encoder}")
+    print(f"Residual correction: {config.residual_correction}")
+    print(f"Shared core mode: {config.shared_core_mode}")
     print(f"Actor network: {config.actor_network}")
     print(
         "Actor-critic training: "
@@ -547,8 +597,27 @@ if __name__ == "__main__":
         r2_barlow_loss_scale=config.r2_barlow_loss_scale,
         r2_redundancy_scale=config.r2_redundancy_scale,
         r2_normalization_eps=config.r2_normalization_eps,
+        observation_encoder=config.observation_encoder,
+        dinov3_model_path=config.dinov3_model_path,
+        dinov3_input_size=config.dinov3_input_size,
+        dinov3_max_batch_size=config.dinov3_max_batch_size,
+        dinov3_feature_loss_scale=config.dinov3_feature_loss_scale,
+        residual_correction=config.residual_correction,
+        residual_bottleneck_features=config.residual_bottleneck_features,
+        residual_grid_size=config.residual_grid_size,
+        residual_input_min=config.residual_input_min,
+        residual_input_max=config.residual_input_max,
+        residual_rms_norm_epsilon=config.residual_rms_norm_epsilon,
+        residual_alpha=config.residual_alpha,
     ).cuda()
-    opt = Adam(wm.parameters(), lr=config.wm_lr, fused=args.fused_adam)
+    trainable_world_model_parameters = [
+        parameter for parameter in wm.parameters() if parameter.requires_grad
+    ]
+    opt = Adam(
+        trainable_world_model_parameters,
+        lr=config.wm_lr,
+        fused=args.fused_adam,
+    )
     compute_world_model_loss = wm.compute_loss
     if args.compile_world_model:
         compute_world_model_loss = torch.compile(
@@ -557,6 +626,19 @@ if __name__ == "__main__":
 
     envs = config.get_env_schedule()
     replay = config.get_replay_buffer()
+    feature_cache = None
+    if config.observation_objective == "dinov3_next_feature":
+        from clworldmodel.replay import ArrowFrozenFeatureCache
+
+        cache_dtype = {
+            "float16": torch.float16,
+            "float32": torch.float32,
+        }[config.dinov3_feature_cache_dtype]
+        feature_cache = ArrowFrozenFeatureCache(
+            replay,
+            wm.rssm.image_embedder.output_size,
+            dtype=cache_dtype,
+        )
     _print_replay_buffer_debug(config, replay)
 
     # OPTIONAL: Load from existing
@@ -601,6 +683,16 @@ if __name__ == "__main__":
     writer = SummaryWriter(log_dir=log_dir)
     log_dir = Path(log_dir)
     config.save(log_dir / "config.json")
+    if feature_cache is not None:
+        feature_accounting_path = log_dir / "feature_cache_storage_accounting.json"
+        temporary_feature_accounting_path = feature_accounting_path.with_suffix(
+            ".json.tmp"
+        )
+        temporary_feature_accounting_path.write_text(
+            json.dumps(feature_cache.storage_accounting(), indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary_feature_accounting_path, feature_accounting_path)
     parameter_accounting_path = log_dir / "model_parameter_accounting.json"
     temporary_accounting_path = parameter_accounting_path.with_suffix(".json.tmp")
     temporary_accounting_path.write_text(
@@ -615,9 +707,27 @@ if __name__ == "__main__":
 
     best_rews_mean = float("-inf")
     global_step = 0            # gradient updates so far  training iterations
+    shared_core_frozen = False
 
     for epoch in range(config.epochs):
         print("Starting Epoch ", epoch)
+        if (
+            config.shared_core_mode == "freeze_after_first_task"
+            and not shared_core_frozen
+            and epoch > 0
+            and envs.is_new_env()
+        ):
+            if aco is None:
+                raise RuntimeError(
+                    "The actor-critic must be initialized before freezing the shared core"
+                )
+            wm.freeze_shared_core()
+            aco.ac.freeze_shared_core()
+            trainable_world_model_parameters = _restrict_optimizer_to_trainable(opt, wm)
+            _restrict_optimizer_to_trainable(aco.opt, aco.ac)
+            shared_core_frozen = True
+            print("Frozen shared world-model and actor-critic cores after task 1")
+            writer.add_scalar("Continual/shared_core_frozen", 1, global_step)
         epoch_started = _stage_clock(args.profile_stages)
         collect_started = _stage_clock(args.profile_stages)
         if torch.cuda.is_available():
@@ -642,7 +752,16 @@ if __name__ == "__main__":
                 config.data_t,
                 config.data_n,
             )
-            replay.add(_acts, _obss, _rews, _conts, _resets)
+            frozen_features = None
+            if feature_cache is not None:
+                frozen_features = _encode_frozen_observation_features(
+                    wm,
+                    _obss,
+                    batch_size=config.dinov3_max_batch_size,
+                )
+            write_slots = replay.add(_acts, _obss, _rews, _conts, _resets)
+            if feature_cache is not None:
+                feature_cache.record(write_slots, frozen_features)
             print(f"{replay.n_valid=}")
             num_new_env_steps = _acts.shape[0] * _acts.shape[1] * config.env_repeat
             total_env_steps += num_new_env_steps
@@ -713,22 +832,44 @@ if __name__ == "__main__":
         for _ in progbar:
             if args.compile_world_model:
                 torch.compiler.cudagraph_mark_step_begin()
+            observation_features = None
             if epoch > 0 or not config.pretrain_enabled:
+                mb_t_size = config.mb_t_size
+                mb_n_size = config.mb_n_size
+            else:
+                mb_t_size = config.pretrain_mb_t_size
+                mb_n_size = config.pretrain_mb_n_size
+            if feature_cache is None:
                 mb_acts, mb_obss, mb_rews, mb_conts, mb_resets = replay.minibatch(
-                    config.mb_t_size, config.mb_n_size
+                    mb_t_size, mb_n_size
                 )
             else:
-                mb_acts, mb_obss, mb_rews, mb_conts, mb_resets = replay.minibatch(
-                    config.pretrain_mb_t_size, config.pretrain_mb_n_size
+                (
+                    mb_acts,
+                    mb_obss,
+                    observation_features,
+                    mb_rews,
+                    mb_conts,
+                    mb_resets,
+                ) = feature_cache.minibatch(
+                    mb_t_size,
+                    mb_n_size,
                 )
 
             loss, metrics = compute_world_model_loss(
-                mb_acts, mb_obss, mb_rews, mb_conts, mb_resets
+                mb_acts,
+                mb_obss,
+                mb_rews,
+                mb_conts,
+                mb_resets,
+                observation_features=observation_features,
             )
 
             opt.zero_grad(set_to_none=True)
             loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(wm.parameters(), 1000)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                trainable_world_model_parameters, 1000
+            )
             opt.step()
 
             # Optional progress bar logging
@@ -813,6 +954,14 @@ if __name__ == "__main__":
             "corrected_imagination_bootstrap": (
                 config.ac_corrected_imagination_bootstrap
             ),
+            "residual_correction": config.residual_correction,
+            "residual_bottleneck_features": config.residual_bottleneck_features,
+            "residual_grid_size": config.residual_grid_size,
+            "residual_input_min": config.residual_input_min,
+            "residual_input_max": config.residual_input_max,
+            "residual_rms_norm_epsilon": config.residual_rms_norm_epsilon,
+            "residual_alpha": config.residual_alpha,
+            "feature_cache": feature_cache,
         }
 
         if config.fresh_ac and epoch % config.fresh_ac == 0:

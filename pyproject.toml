@@ -32,6 +32,10 @@ atari = [
 online = [
     "swanlab==0.9.4",
 ]
+dinov3 = [
+    "transformers==4.57.1",
+    "safetensors==0.6.2",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

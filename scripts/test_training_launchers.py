@@ -57,6 +57,39 @@ class TrainingLauncherTests(unittest.TestCase):
             )
             return json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
 
+    def _karrow_dry_run(self, *extra_args: str) -> tuple[dict, Path]:
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        model_dir = root / "dinov3"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            json.dumps({"hidden_size": 384, "patch_size": 16}),
+            encoding="utf-8",
+        )
+        (model_dir / "model.safetensors").write_bytes(b"test-weights")
+        output_dir = root / "karrow_run"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/run_karrow_ar50_atari.py",
+                "--seed",
+                "0",
+                "--dinov3-model-path",
+                str(model_dir),
+                "--output-dir",
+                str(output_dir),
+                "--dry-run",
+                *extra_args,
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+        return launch, output_dir
+
     def test_arrow_dry_run_records_complete_analysis_snapshot_contract(self) -> None:
         launch = self._arrow_dry_run()
         output_dir = Path(launch["output_dir"])
@@ -128,6 +161,26 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(command[command.index("--r2-barlow-loss-scale") + 1], "0.05")
         self.assertEqual(command[command.index("--r2-redundancy-scale") + 1], "0.0005")
         self.assertEqual(command[command.index("--r2-normalization-eps") + 1], "1e-08")
+
+    def test_karrow_dry_run_records_matched_residual_and_cache_contract(self) -> None:
+        launch, output_dir = self._karrow_dry_run(
+            "--variant", "kan", "--task-prefix-length", "2"
+        )
+
+        self.assertEqual(launch["method"], "KARROW-FrozenCore-50-T2Pilot")
+        self.assertEqual(launch["training_scope"]["epochs"], 180)
+        self.assertEqual(launch["residuals"]["kind"], "kan")
+        self.assertEqual(launch["residuals"]["matched_core_parameters"], 32_768)
+        self.assertEqual(
+            launch["shared_core"]["mode"], "freeze_after_first_task"
+        )
+        self.assertIn("reward", " ".join(launch["residuals"]["placements"]))
+        self.assertIn("continue", " ".join(launch["residuals"]["placements"]))
+        self.assertEqual(
+            launch["replay"]["feature_cache"]["storage_bytes"], 402_653_184
+        )
+        self.assertFalse(launch["observation"]["pixel_decoder"])
+        self.assertFalse(output_dir.exists())
 
     def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:
         launch = self._arrow_dry_run("--actor-network", "relu_kan")

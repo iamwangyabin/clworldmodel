@@ -16,13 +16,27 @@ def _git(root: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def git_state(root: Path) -> dict[str, int | str | bool]:
+def git_state(root: Path) -> dict[str, int | str | bool | None]:
     """Return the local commit and its relation to the configured upstream."""
     commit = _git(root, "rev-parse", "HEAD")
     dirty = bool(_git(root, "status", "--porcelain=v1", "--untracked-files=normal"))
-    upstream = _git(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
-    behind_ahead = _git(root, "rev-list", "--left-right", "--count", f"{upstream}...HEAD")
-    behind, ahead = (int(value) for value in behind_ahead.split())
+    try:
+        upstream = _git(
+            root,
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        )
+    except subprocess.CalledProcessError:
+        upstream = None
+        behind = None
+        ahead = None
+    else:
+        behind_ahead = _git(
+            root, "rev-list", "--left-right", "--count", f"{upstream}...HEAD"
+        )
+        behind, ahead = (int(value) for value in behind_ahead.split())
     return {
         "commit": commit,
         "dirty": dirty,
@@ -32,13 +46,20 @@ def git_state(root: Path) -> dict[str, int | str | bool]:
     }
 
 
-def require_synced_training_git_state(root: Path) -> dict[str, int | str | bool]:
+def require_synced_training_git_state(
+    root: Path,
+) -> dict[str, int | str | bool | None]:
     """Refuse a training launch unless code is committed and pushed first."""
     state = git_state(root)
     if state["dirty"]:
         raise RuntimeError(
             "Refusing to train from a dirty worktree. Commit and push the exact "
             "code and protocol before launching a run."
+        )
+    if state["upstream"] is None:
+        raise RuntimeError(
+            "Refusing to train from a branch without a configured upstream. Push "
+            "the exact launch commit with upstream tracking first."
         )
     if state["behind"] or state["ahead"]:
         raise RuntimeError(

@@ -2,6 +2,7 @@ from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from rssm import (
     ActionT,
@@ -18,7 +19,7 @@ from vae import Decoder
 
 RewardT = torch.Tensor
 RewardSymlogT = torch.Tensor
-ObservationObjective = Literal["reconstruction", "r2"]
+ObservationObjective = Literal["reconstruction", "r2", "dinov3_next_feature"]
 # RewardT (real): [ N 1 ]
 # RewardSymlogT (symlog(real)): [ N 1 ]
 
@@ -56,9 +57,26 @@ class WorldModel(nn.Module):
         r2_barlow_loss_scale: float = 0.05,
         r2_redundancy_scale: float = 5e-4,
         r2_normalization_eps: float = 1e-8,
+        observation_encoder: str = "cnn",
+        dinov3_model_path: Optional[str] = None,
+        dinov3_input_size: int = 256,
+        dinov3_max_batch_size: int = 128,
+        dinov3_feature_loss_scale: float = 1.0,
+        residual_correction: str = "none",
+        residual_bottleneck_features: int = 64,
+        residual_grid_size: int = 8,
+        residual_input_min: float = -2.0,
+        residual_input_max: float = 2.0,
+        residual_rms_norm_epsilon: float = 1e-4,
+        residual_alpha: float = 0.1,
+        image_embedder: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
-        if observation_objective not in {"reconstruction", "r2"}:
+        if observation_objective not in {
+            "reconstruction",
+            "r2",
+            "dinov3_next_feature",
+        }:
             raise ValueError(f"Unknown observation objective: {observation_objective!r}")
         if r2_barlow_loss_scale <= 0:
             raise ValueError("R2 Barlow loss scale must be positive")
@@ -66,6 +84,8 @@ class WorldModel(nn.Module):
             raise ValueError("R2 redundancy scale must be non-negative")
         if r2_normalization_eps <= 0:
             raise ValueError("R2 normalization epsilon must be positive")
+        if dinov3_feature_loss_scale <= 0:
+            raise ValueError("DINOv3 feature loss scale must be positive")
 
         self.ls = ls
         self.a_dim = a_dim
@@ -74,15 +94,39 @@ class WorldModel(nn.Module):
         self.r2_barlow_loss_scale = r2_barlow_loss_scale
         self.r2_redundancy_scale = r2_redundancy_scale
         self.r2_normalization_eps = r2_normalization_eps
+        self.dinov3_feature_loss_scale = dinov3_feature_loss_scale
+        self.residual_correction = residual_correction
 
-        self.rssm = Rssm(img_channels, ls, a_dim, h_dim, cnn_depth, mlp_features, mlp_layers, wto)
+        self.rssm = Rssm(
+            img_channels,
+            ls,
+            a_dim,
+            h_dim,
+            cnn_depth,
+            mlp_features,
+            mlp_layers,
+            wto,
+            observation_encoder=observation_encoder,
+            dinov3_model_path=dinov3_model_path,
+            dinov3_input_size=dinov3_input_size,
+            dinov3_max_batch_size=dinov3_max_batch_size,
+            residual_correction=residual_correction,
+            residual_bottleneck_features=residual_bottleneck_features,
+            residual_grid_size=residual_grid_size,
+            residual_input_min=residual_input_min,
+            residual_input_max=residual_input_max,
+            residual_rms_norm_epsilon=residual_rms_norm_epsilon,
+            residual_alpha=residual_alpha,
+            image_embedder=image_embedder,
+        )
 
         # Shared feature consumed by observation, reward, and continuation heads.
         self.zh_transform = ZhToModelState(ls, h_dim)
+        self.feature_predictor_residual = None
 
         if observation_objective == "reconstruction":
             self.decoder = Decoder(img_channels, self.zh_transform.out_features, cnn_depth)
-        else:
+        elif observation_objective == "r2":
             from clworldmodel.models.r2 import R2BarlowObjective, R2Projector
 
             self.r2_projector = R2Projector(
@@ -92,6 +136,11 @@ class WorldModel(nn.Module):
             self.r2_objective = R2BarlowObjective(
                 redundancy_scale=r2_redundancy_scale,
                 normalization_eps=r2_normalization_eps,
+            )
+        else:
+            self.feature_predictor = nn.Linear(
+                self.zh_transform.out_features,
+                self.rssm.image_embedder.output_size,
             )
         # NOTE: Weight init here may be 0 init
         self.reward_fc = nn.Sequential(
@@ -103,18 +152,97 @@ class WorldModel(nn.Module):
                 layers=mlp_layers,
             )
         )
-        self.continue_fc = nn.Sequential(
-            *get_mlp_layers(
+        self.reward_residual = None
+        self.continue_residual = None
+        if residual_correction == "none":
+            self.continue_fc = nn.Sequential(
+                *get_mlp_layers(
+                    self.zh_transform.out_features,
+                    1,
+                    final_activation=nn.Sigmoid,
+                    hidden_features=mlp_features,
+                    layers=mlp_layers,
+                )
+            )
+        else:
+            from clworldmodel.models.residual_corrections import (
+                build_residual_correction,
+            )
+
+            self.reward_residual = build_residual_correction(
+                residual_correction,
                 self.zh_transform.out_features,
                 1,
-                final_activation=nn.Sigmoid,
-                hidden_features=mlp_features,
-                layers=mlp_layers,
+                bottleneck_features=residual_bottleneck_features,
+                grid_min=residual_input_min,
+                grid_max=residual_input_max,
+                num_grids=residual_grid_size,
+                rms_norm_epsilon=residual_rms_norm_epsilon,
+                alpha=residual_alpha,
             )
-        )
+            self.continue_fc = nn.Sequential(
+                *get_mlp_layers(
+                    self.zh_transform.out_features,
+                    1,
+                    final_activation=None,
+                    hidden_features=mlp_features,
+                    layers=mlp_layers,
+                )
+            )
+            self.continue_residual = build_residual_correction(
+                residual_correction,
+                self.zh_transform.out_features,
+                1,
+                bottleneck_features=residual_bottleneck_features,
+                grid_min=residual_input_min,
+                grid_max=residual_input_max,
+                num_grids=residual_grid_size,
+                rms_norm_epsilon=residual_rms_norm_epsilon,
+                alpha=residual_alpha,
+            )
+        if observation_objective == "dinov3_next_feature" and residual_correction != "none":
+            from clworldmodel.models.residual_corrections import build_residual_correction
+
+            self.feature_predictor_residual = build_residual_correction(
+                residual_correction,
+                self.zh_transform.out_features,
+                self.rssm.image_embedder.output_size,
+                bottleneck_features=residual_bottleneck_features,
+                grid_min=residual_input_min,
+                grid_max=residual_input_max,
+                num_grids=residual_grid_size,
+                rms_norm_epsilon=residual_rms_norm_epsilon,
+                alpha=residual_alpha,
+            )
+
+    def freeze_shared_core(self) -> None:
+        """Freeze base world-model functions while leaving adapters trainable."""
+        if self.residual_correction == "none":
+            raise ValueError("Frozen shared core requires plastic residual adapters")
+        self.rssm.freeze_shared_core()
+        self.reward_fc.requires_grad_(False)
+        self.continue_fc.requires_grad_(False)
+        if hasattr(self, "decoder"):
+            self.decoder.requires_grad_(False)
+        if hasattr(self, "r2_projector"):
+            self.r2_projector.requires_grad_(False)
+        if hasattr(self, "feature_predictor"):
+            self.feature_predictor.requires_grad_(False)
+        if self.feature_predictor_residual is not None:
+            self.feature_predictor_residual.requires_grad_(True)
+        if self.reward_residual is not None:
+            self.reward_residual.requires_grad_(True)
+        if self.continue_residual is not None:
+            self.continue_residual.requires_grad_(True)
 
     def compute_loss(
-        self, actions: ActionT, xs: ImageT, rews: RewardT, conts: ContT, resets: ResetT
+        self,
+        actions: ActionT,
+        xs: ImageT,
+        rews: RewardT,
+        conts: ContT,
+        resets: ResetT,
+        observation_features: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         # Returns (loss, metrics)
         if len(actions.shape) == 2:
@@ -123,8 +251,20 @@ class WorldModel(nn.Module):
         init_z, init_h = self.rssm.initial_state(n)
         # Shift actions and xs, since RSSM takes (prev_action, next_obs)
         embeddings = None
-        if self.observation_objective == "r2":
-            embeddings = self.rssm.embed_observations(xs)
+        if self.observation_objective in {"r2", "dinov3_next_feature"}:
+            embeddings = (
+                self.rssm.embed_observations(xs)
+                if observation_features is None
+                else observation_features
+            )
+            if embeddings.shape[:2] != actions.shape[:2]:
+                raise ValueError(
+                    "Observation features and actions must share time/batch axes"
+                )
+            if embeddings.shape[-1] != self.rssm.image_embedder.output_size:
+                raise ValueError("Observation features have an unexpected width")
+            if self.observation_objective == "dinov3_next_feature":
+                embeddings = embeddings.detach()
             z_posts, z_samples, hiddens = self.rssm.observe_embeddings(
                 init_z, actions, init_h, embeddings, resets
             )
@@ -157,7 +297,7 @@ class WorldModel(nn.Module):
             observation_metrics = {
                 "Loss/recon": observation_loss,
             }
-        else:
+        elif self.observation_objective == "r2":
             if embeddings is None:
                 raise RuntimeError("R2 observation objective requires encoder embeddings")
             projected = self.r2_projector(zhs_f12)
@@ -172,11 +312,45 @@ class WorldModel(nn.Module):
                 "Metric/r2_invariance": invariance_loss,
                 "Metric/r2_redundancy": redundancy_loss,
             }
+        else:
+            if embeddings is None:
+                raise RuntimeError("DINOv3 objective requires frozen observation features")
+            prior_states = self.zh_transform(z_priors.exp(), hiddens)
+            predicted_features = self.feature_predictor(prior_states)
+            if self.feature_predictor_residual is not None:
+                predicted_features = predicted_features + self.feature_predictor_residual(
+                    prior_states
+                )
+            feature_losses = 1.0 - F.cosine_similarity(
+                predicted_features.float(),
+                embeddings.detach().float(),
+                dim=-1,
+                eps=1e-8,
+            )
+            prediction_mask = resets.squeeze(-1) == 0
+            prediction_mask = prediction_mask.clone()
+            prediction_mask[0] = False
+            valid_predictions = prediction_mask.sum().clamp_min(1)
+            feature_loss = torch.where(
+                prediction_mask,
+                feature_losses,
+                torch.zeros_like(feature_losses),
+            ).sum() / valid_predictions
+            observation_loss = self.dinov3_feature_loss_scale * feature_loss
+            observation_metrics = {
+                "Loss/dinov3_feature": feature_loss,
+                "Loss/dinov3_feature_scaled": observation_loss,
+                "Metric/dinov3_feature_valid_fraction": prediction_mask.float().mean(),
+            }
 
         rews_pred = self.reward_fc(zhs)  # [ T N 1 ]
+        if self.reward_residual is not None:
+            rews_pred = rews_pred + self.reward_residual(zhs)
         rews_loss = (rews_pred - symlog(rews)).square().mean()
 
         conts_pred = self.continue_fc(zhs)  # [ T N 1 ]
+        if self.continue_residual is not None:
+            conts_pred = torch.sigmoid(conts_pred + self.continue_residual(zhs))
         conts_loss = torch.nn.functional.binary_cross_entropy(conts_pred, conts, reduction="mean")
 
         with torch.no_grad():

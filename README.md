@@ -22,6 +22,8 @@ ablations at different stages of evidence:
   single-task acquisition check rather than a retention result;
 - the implementation-ready native `R2Dreamer-ARROW-50` route, which uses the
   upstream R2-Dreamer size12M model and optimizer with ARROW-50 replay;
+- the implementation-ready `KARROW-FrozenCore-v1` route and its frozen-DINO and
+  parameter-matched MLP controls; target-GPU smoke testing is still pending;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -145,6 +147,33 @@ Run `--smoke` first on a target GPU. The adapter adds a byte-accounted CPU
 posterior-state sidecar, so future comparisons must report both trajectory
 capacity and actual storage bytes. See `docs/protocols/r2dreamer_arrow_atari.md`
 for the frozen native-R2 configuration and scope labels.
+
+## New method: KARROW-FrozenCore-v1
+
+`KARROW-FrozenCore-50` freezes a local DINOv3 ViT-S/16 encoder, replaces pixel
+reconstruction with one-step frozen-feature prediction, and trains the standard
+ARROW core jointly with small zero-initialized residual adapters on task 1. At
+the first task boundary, the shared RSSM, latent transition, reward/continue
+heads, and actor-critic MLPs are frozen. Only one fixed set of residual adapters
+continues learning. The KAN arm uses fixed-grid local corrections; its control
+swaps each KAN core for an exactly parameter-matched MLP core.
+
+The launcher supports `dino`, `mlp`, and `kan` arms and never downloads model
+weights during training:
+
+```bash
+python -m pip install -e '.[dinov3]'
+export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
+python scripts/run_karrow_ar50_atari.py \
+  --variant kan \
+  --task-prefix-length 2 \
+  --seed 0 \
+  --dry-run
+```
+
+This is an implemented hypothesis, not a positive result. Its equations,
+freeze timing, byte-accounted feature cache, controls, diagnostics, and claim
+limits are frozen in `docs/protocols/karrow_v1_atari.md`.
 
 ## Actor ablation: ARROW-KANActor-50
 

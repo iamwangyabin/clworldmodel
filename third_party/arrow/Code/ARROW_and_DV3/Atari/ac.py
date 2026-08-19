@@ -47,6 +47,48 @@ def rew_symlog_to_2hot(x: RewardSymlogT) -> RewardSymlogCatT:
     return res
 
 
+class ResidualCategoricalHead(nn.Module):
+    """Preserve an MLP categorical head and add a zero-init residual branch."""
+
+    def __init__(
+        self,
+        base_layers: list[nn.Module],
+        *,
+        residual_correction: str,
+        residual_bottleneck_features: int,
+        residual_grid_size: int,
+        residual_input_min: float,
+        residual_input_max: float,
+        residual_rms_norm_epsilon: float,
+        residual_alpha: float,
+    ) -> None:
+        super().__init__()
+        if not base_layers or not isinstance(base_layers[-1], nn.Linear):
+            raise TypeError("Residual categorical head requires a final linear layer")
+        self.trunk = nn.Sequential(*base_layers[:-1])
+        self.base_head = base_layers[-1]
+        from clworldmodel.models.residual_corrections import build_residual_correction
+
+        self.residual = build_residual_correction(
+            residual_correction,
+            self.base_head.in_features,
+            self.base_head.out_features,
+            bottleneck_features=residual_bottleneck_features,
+            grid_min=residual_input_min,
+            grid_max=residual_input_max,
+            num_grids=residual_grid_size,
+            rms_norm_epsilon=residual_rms_norm_epsilon,
+            alpha=residual_alpha,
+        )
+        if self.residual is None:
+            raise ValueError("Residual categorical head requires a correction")
+
+    def forward(self, state: AcStateT) -> torch.Tensor:
+        features = self.trunk(state)
+        logits = self.base_head(features) + self.residual(features)
+        return torch.log_softmax(logits, dim=-1)
+
+
 def build_actor(
     in_dim: int,
     act_space: int,
@@ -176,43 +218,83 @@ class ActorCritic(nn.Module):
         fastkan_rms_norm_epsilon: float = 1e-4,
         fastkan_actor_output_scale: float = 0.01,
         fastkan_actor_unimix: float = 0.01,
+        residual_correction: str = "none",
+        residual_bottleneck_features: int = 64,
+        residual_grid_size: int = 8,
+        residual_input_min: float = -2.0,
+        residual_input_max: float = 2.0,
+        residual_rms_norm_epsilon: float = 1e-4,
+        residual_alpha: float = 0.1,
     ) -> None:
         super().__init__()
-        self.actor: Callable[[AcStateT], ActionLogT] = build_actor(
-            in_dim,
-            act_space,
-            actor_network=actor_network,
-            h_dim=h_dim,
-            kan_hidden_features=kan_hidden_features,
-            kan_grid_size=kan_grid_size,
-            kan_spline_order=kan_spline_order,
-            kan_input_min=kan_input_min,
-            kan_input_max=kan_input_max,
-            kan_normalize_recurrent_state=kan_normalize_recurrent_state,
-            fastkan_hidden_features=fastkan_hidden_features,
-            fastkan_hidden_layers=fastkan_hidden_layers,
-            fastkan_grid_size=fastkan_grid_size,
-            fastkan_input_min=fastkan_input_min,
-            fastkan_input_max=fastkan_input_max,
-            fastkan_rms_norm_epsilon=fastkan_rms_norm_epsilon,
-            fastkan_actor_output_scale=fastkan_actor_output_scale,
-            fastkan_actor_unimix=fastkan_actor_unimix,
-        )
+        if residual_correction != "none" and actor_network != "mlp":
+            raise ValueError("KARROW residuals require the unchanged MLP behavior heads")
+        if residual_correction == "none":
+            self.actor: Callable[[AcStateT], ActionLogT] = build_actor(
+                in_dim,
+                act_space,
+                actor_network=actor_network,
+                h_dim=h_dim,
+                kan_hidden_features=kan_hidden_features,
+                kan_grid_size=kan_grid_size,
+                kan_spline_order=kan_spline_order,
+                kan_input_min=kan_input_min,
+                kan_input_max=kan_input_max,
+                kan_normalize_recurrent_state=kan_normalize_recurrent_state,
+                fastkan_hidden_features=fastkan_hidden_features,
+                fastkan_hidden_layers=fastkan_hidden_layers,
+                fastkan_grid_size=fastkan_grid_size,
+                fastkan_input_min=fastkan_input_min,
+                fastkan_input_max=fastkan_input_max,
+                fastkan_rms_norm_epsilon=fastkan_rms_norm_epsilon,
+                fastkan_actor_output_scale=fastkan_actor_output_scale,
+                fastkan_actor_unimix=fastkan_actor_unimix,
+            )
+            critic_layers = None
+        else:
+            actor_layers = get_mlp_layers(in_dim, act_space, final_activation=None)
+            critic_layers = get_mlp_layers(in_dim, N_CRITIC_BINS, final_activation=None)
+            torch.nn.init.constant_(critic_layers[-1].weight, 0)
+            torch.nn.init.constant_(critic_layers[-1].bias, 0)
+            residual_kwargs = {
+                "residual_correction": residual_correction,
+                "residual_bottleneck_features": residual_bottleneck_features,
+                "residual_grid_size": residual_grid_size,
+                "residual_input_min": residual_input_min,
+                "residual_input_max": residual_input_max,
+                "residual_rms_norm_epsilon": residual_rms_norm_epsilon,
+                "residual_alpha": residual_alpha,
+            }
+            self.actor = ResidualCategoricalHead(actor_layers, **residual_kwargs)
         self.symlog_bins: torch.Tensor
         self.register_buffer(
             "symlog_bins", torch.linspace(-20, 20, N_CRITIC_BINS).float().unsqueeze(1)
         )
 
-        self.critic: Callable[[AcStateT], RewardSymlogCatT] = build_critic(
-            in_dim,
-            actor_network=actor_network,
-            fastkan_hidden_features=fastkan_hidden_features,
-            fastkan_hidden_layers=fastkan_hidden_layers,
-            fastkan_grid_size=fastkan_grid_size,
-            fastkan_input_min=fastkan_input_min,
-            fastkan_input_max=fastkan_input_max,
-            fastkan_rms_norm_epsilon=fastkan_rms_norm_epsilon,
-        )
+        if critic_layers is None:
+            self.critic: Callable[[AcStateT], RewardSymlogCatT] = build_critic(
+                in_dim,
+                actor_network=actor_network,
+                fastkan_hidden_features=fastkan_hidden_features,
+                fastkan_hidden_layers=fastkan_hidden_layers,
+                fastkan_grid_size=fastkan_grid_size,
+                fastkan_input_min=fastkan_input_min,
+                fastkan_input_max=fastkan_input_max,
+                fastkan_rms_norm_epsilon=fastkan_rms_norm_epsilon,
+            )
+        else:
+            self.critic = ResidualCategoricalHead(critic_layers, **residual_kwargs)
+
+    def freeze_shared_core(self) -> None:
+        """Freeze MLP behavior heads while leaving their residual adapters plastic."""
+        if not isinstance(self.actor, ResidualCategoricalHead) or not isinstance(
+            self.critic, ResidualCategoricalHead
+        ):
+            raise ValueError("Frozen shared core requires residual actor and critic heads")
+        for head in (self.actor, self.critic):
+            head.trunk.requires_grad_(False)
+            head.base_head.requires_grad_(False)
+            head.residual.requires_grad_(True)
 
     def __call__(self, state: AcStateT) -> tuple[ActionLogT, RewardT]:
         return super().__call__(state)
@@ -361,6 +443,7 @@ def dream_rollout(
     n_ctx_frames: int = 4,
     target_value: Optional[ValueFunction] = None,
     corrected_terminal_bootstrap: bool = False,
+    feature_cache: Optional[object] = None,
 ) -> tuple[AcStateT, ActionT, RewardT, ReturnT, ReplayValueBatch]:
     # Returns: (T=n_steps N=n_sync)
     # States [ T N n_dis n_cls ]
@@ -370,13 +453,31 @@ def dream_rollout(
     z, h = wm.rssm.initial_state(n_sync)
     no_reset = torch.zeros(n_sync, 1, device=z.device)
     # Arbitrary (n_ctx_frames) context frames
-    ctx_acts, ctx_images, ctx_rewards, ctx_conts, ctx_resets = data.minibatch(
-        n_ctx_frames, n_sync, mb_device=z.device
-    )
-    assert ctx_images.shape == (n_ctx_frames, n_sync, 3, 64, 64), ctx_images.shape
-    _, context_z, context_h = wm.rssm(
-        z, ctx_acts, h, ctx_images, ctx_resets, temperature=temperature
-    )
+    if feature_cache is None:
+        ctx_acts, ctx_images, ctx_rewards, ctx_conts, ctx_resets = data.minibatch(
+            n_ctx_frames, n_sync, mb_device=z.device
+        )
+        assert ctx_images.shape == (n_ctx_frames, n_sync, 3, 64, 64), ctx_images.shape
+        _, context_z, context_h = wm.rssm(
+            z, ctx_acts, h, ctx_images, ctx_resets, temperature=temperature
+        )
+    else:
+        (
+            ctx_acts,
+            _,
+            ctx_features,
+            ctx_rewards,
+            ctx_conts,
+            ctx_resets,
+        ) = feature_cache.minibatch(n_ctx_frames, n_sync, mb_device=z.device)
+        _, context_z, context_h = wm.rssm.observe_embeddings(
+            z,
+            ctx_acts,
+            h,
+            ctx_features,
+            ctx_resets,
+            temperature=temperature,
+        )
     replay_value_batch = ReplayValueBatch(
         states=zh_to_ac_state(context_z, context_h),
         rewards=ctx_rewards,
@@ -393,8 +494,15 @@ def dream_rollout(
     for _ in range(n_steps):
         state = zh_to_ac_state(z, h)
         zh = wm.zh_transform(z, h)
-        reward = symexp(wm.reward_fc(zh))
-        cont = wm.continue_fc(zh)
+        reward_symlog = wm.reward_fc(zh)
+        if wm.reward_residual is not None:
+            reward_symlog = reward_symlog + wm.reward_residual(zh)
+        reward = symexp(reward_symlog)
+        cont_logits = wm.continue_fc(zh)
+        if wm.continue_residual is not None:
+            cont = torch.sigmoid(cont_logits + wm.continue_residual(zh))
+        else:
+            cont = cont_logits
         if target_value is None:
             action_log, returns_pred = ac(state)
             returns_preds.append(returns_pred)
@@ -480,6 +588,14 @@ def train_ac_from_wm(
     replay_critic_loss_scale: float = 0.0,
     use_slow_critic_targets: bool = False,
     corrected_imagination_bootstrap: bool = False,
+    residual_correction: str = "none",
+    residual_bottleneck_features: int = 64,
+    residual_grid_size: int = 8,
+    residual_input_min: float = -2.0,
+    residual_input_max: float = 2.0,
+    residual_rms_norm_epsilon: float = 1e-4,
+    residual_alpha: float = 0.1,
+    feature_cache: Optional[object] = None,
 ) -> tuple[ActorCriticOpt, torch.Tensor, dict[str, float]]:
     if aco is None:
         ac = ActorCritic(
@@ -501,6 +617,13 @@ def train_ac_from_wm(
             fastkan_rms_norm_epsilon=fastkan_rms_norm_epsilon,
             fastkan_actor_output_scale=fastkan_actor_output_scale,
             fastkan_actor_unimix=fastkan_actor_unimix,
+            residual_correction=residual_correction,
+            residual_bottleneck_features=residual_bottleneck_features,
+            residual_grid_size=residual_grid_size,
+            residual_input_min=residual_input_min,
+            residual_input_max=residual_input_max,
+            residual_rms_norm_epsilon=residual_rms_norm_epsilon,
+            residual_alpha=residual_alpha,
         ).cuda()
         if optimizer_name == "adam":
             opt = Adam(
@@ -528,6 +651,17 @@ def train_ac_from_wm(
             slow_critic.requires_grad_(False)
         aco = ActorCriticOpt(ac, opt, slow_critic=slow_critic)
     ac, opt = aco.ac, aco.opt
+    trainable_parameters = [
+        parameter for parameter in ac.parameters() if parameter.requires_grad
+    ]
+    if not trainable_parameters:
+        raise RuntimeError("Actor-critic has no trainable parameters")
+    trainable_ids = {id(parameter) for parameter in trainable_parameters}
+    for parameter in list(opt.state):
+        if id(parameter) not in trainable_ids:
+            del opt.state[parameter]
+    for parameter_group in opt.param_groups:
+        parameter_group["params"] = trainable_parameters
     if use_slow_critic_targets and aco.slow_critic is None:
         raise ValueError("Slow critic targets require an initialized slow critic")
     for g in opt.param_groups:
@@ -560,6 +694,7 @@ def train_ac_from_wm(
             lam=lam,
             target_value=target_value,
             corrected_terminal_bootstrap=corrected_imagination_bootstrap,
+            feature_cache=feature_cache,
         )
 
         scale = torch.quantile(lam_returns, 0.95) - torch.quantile(lam_returns, 0.05)

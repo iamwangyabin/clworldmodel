@@ -1,20 +1,23 @@
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Literal, Type, TypeVar, Union
+from typing import Any, Callable, Literal, Optional, Type, TypeVar, Union
 
 import gymnasium as gym
 from gymnasium.wrappers import TransformReward
 
 import generate_trajectory
 import replay
-from generate_trajectory import EnvironmentSchedule
+from generate_trajectory import EnvironmentSchedule, SequentialEnvironments
 from replay import FifoReplay, LongTermReplay, MultiTypeReplay, Replay
 
 T = TypeVar("T", bound="Serialisable")
 
 ArrowReplayCapacityRatio = Literal["50-50", "25-75", "75-25"]
-ObservationObjective = Literal["reconstruction", "r2"]
+ObservationObjective = Literal["reconstruction", "r2", "dinov3_next_feature"]
+ObservationEncoder = Literal["cnn", "dinov3_vits16"]
+ResidualCorrection = Literal["none", "mlp", "kan"]
+SharedCoreMode = Literal["trainable", "freeze_after_first_task"]
 ActorNetwork = Literal[
     "mlp",
     "relu_kan",
@@ -234,6 +237,21 @@ class Config(Serialisable):
     r2_barlow_loss_scale: float = 0.05
     r2_redundancy_scale: float = 5e-4
     r2_normalization_eps: float = 1e-8
+    observation_encoder: ObservationEncoder = "cnn"
+    dinov3_model_path: Optional[str] = None
+    dinov3_input_size: int = 256
+    dinov3_max_batch_size: int = 128
+    dinov3_feature_cache_dtype: Literal["float16", "float32"] = "float16"
+    dinov3_feature_loss_scale: float = 1.0
+
+    residual_correction: ResidualCorrection = "none"
+    residual_bottleneck_features: int = 64
+    residual_grid_size: int = 8
+    residual_input_min: float = -2.0
+    residual_input_max: float = 2.0
+    residual_rms_norm_epsilon: float = 1e-4
+    residual_alpha: float = 0.1
+    shared_core_mode: SharedCoreMode = "trainable"
 
     action_space: int = 18
     replay_buffers: list[RbConfig] = field(default_factory=list)
@@ -253,7 +271,11 @@ class Config(Serialisable):
         assert self.n_sync * self.gen_seq_len == self.data_n * self.data_t
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
-        if self.observation_objective not in {"reconstruction", "r2"}:
+        if self.observation_objective not in {
+            "reconstruction",
+            "r2",
+            "dinov3_next_feature",
+        }:
             raise ValueError(
                 f"Unknown observation objective: {self.observation_objective!r}"
             )
@@ -263,6 +285,81 @@ class Config(Serialisable):
             raise ValueError("r2_redundancy_scale must be non-negative")
         if self.r2_normalization_eps <= 0:
             raise ValueError("r2_normalization_eps must be positive")
+        if self.observation_encoder not in {"cnn", "dinov3_vits16"}:
+            raise ValueError(f"Unknown observation encoder: {self.observation_encoder!r}")
+        uses_dinov3 = self.observation_objective == "dinov3_next_feature"
+        if uses_dinov3:
+            if self.algorithm != "arrow":
+                raise ValueError("KARROW Frozen-Core requires ARROW mixed replay")
+            if self.observation_encoder != "dinov3_vits16":
+                raise ValueError("DINOv3 feature prediction requires dinov3_vits16")
+            if self.dinov3_model_path is None:
+                raise ValueError("DINOv3 feature prediction requires dinov3_model_path")
+            if not Path(self.dinov3_model_path).is_absolute():
+                raise ValueError("dinov3_model_path must be absolute")
+            if self.dinov3_input_size != 256:
+                raise ValueError("KARROW Frozen-Core fixes DINOv3 input size at 256")
+            if self.dinov3_max_batch_size < 1:
+                raise ValueError("dinov3_max_batch_size must be positive")
+            if self.dinov3_feature_cache_dtype not in {"float16", "float32"}:
+                raise ValueError("Unknown DINOv3 feature cache dtype")
+            if self.dinov3_feature_loss_scale <= 0:
+                raise ValueError("dinov3_feature_loss_scale must be positive")
+            if self.actor_network != "mlp":
+                raise ValueError("KARROW keeps the original MLP actor and critic")
+            if self.fresh_ac is not False:
+                raise ValueError("KARROW requires one persistent actor-critic across tasks")
+        elif self.observation_encoder != "cnn" or self.dinov3_model_path is not None:
+            raise ValueError(
+                "Only dinov3_next_feature may configure the DINOv3 encoder"
+            )
+
+        if self.residual_correction not in {"none", "mlp", "kan"}:
+            raise ValueError(
+                f"Unknown residual correction: {self.residual_correction!r}"
+            )
+        if self.shared_core_mode not in {"trainable", "freeze_after_first_task"}:
+            raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
+        if self.residual_correction != "none" and not uses_dinov3:
+            raise ValueError("KARROW residuals require the frozen DINOv3 protocol")
+        if (
+            self.residual_correction != "none"
+            and self.shared_core_mode != "freeze_after_first_task"
+        ):
+            raise ValueError(
+                "KARROW residuals require shared_core_mode=freeze_after_first_task"
+            )
+        if self.shared_core_mode == "freeze_after_first_task":
+            if self.residual_correction == "none":
+                raise ValueError(
+                    "Frozen shared core requires a plastic residual correction"
+                )
+            if not uses_dinov3:
+                raise ValueError(
+                    "Frozen shared core is only defined for the DINOv3 protocol"
+                )
+            if self.fresh_ac is not False:
+                raise ValueError(
+                    "Frozen shared core requires one persistent actor-critic"
+                )
+            if self.esc.env_schedule_type is not SequentialEnvironments:
+                raise ValueError(
+                    "Frozen shared core requires a sequential task schedule"
+                )
+            if len(self.esc.env_configs) < 2:
+                raise ValueError(
+                    "Frozen shared core requires at least two scheduled tasks"
+                )
+        if self.residual_bottleneck_features != 64:
+            raise ValueError("KARROW Frozen-Core fixes the residual bottleneck at 64")
+        if self.residual_grid_size != 8:
+            raise ValueError("KARROW Frozen-Core fixes eight Gaussian basis centers")
+        if self.residual_input_min != -2.0 or self.residual_input_max != 2.0:
+            raise ValueError("KARROW Frozen-Core fixes the residual basis range at [-2, 2]")
+        if self.residual_rms_norm_epsilon != 1e-4:
+            raise ValueError("KARROW Frozen-Core fixes residual RMSNorm epsilon at 1e-4")
+        if self.residual_alpha != 0.1:
+            raise ValueError("KARROW Frozen-Core fixes residual alpha at 0.1")
         if self.actor_network not in {
             "mlp",
             "relu_kan",
