@@ -226,6 +226,46 @@ class TrainingLauncherTests(unittest.TestCase):
         )
         self.assertFalse(output_dir.exists())
 
+    def test_karrow_v3_records_replay_consolidation_without_extra_updates(self) -> None:
+        launch, output_dir = self._karrow_dry_run(
+            "--variant",
+            "kan",
+            "--task-prefix-length",
+            "2",
+            script="scripts/run_karrow_incremental_ar50_atari.py",
+        )
+
+        self.assertEqual(launch["method"], "KARROW-ReplayConsolidated-50-T2Pilot")
+        self.assertEqual(launch["protocol"], "KARROW-ReplayConsolidated-v3-Atari")
+        self.assertEqual(launch["visual_version"], "v3")
+        self.assertEqual(launch["role"], "primary-replay-consolidated-method-pilot")
+        consolidation = launch["residual_consolidation"]
+        self.assertEqual(consolidation["mode"], "replay_functional")
+        self.assertEqual(consolidation["replay_batches"], 16)
+        self.assertEqual(consolidation["deterministic_imagination_horizon"], 8)
+        self.assertEqual(consolidation["extra_environment_interactions"], 0)
+        self.assertEqual(consolidation["extra_gradient_updates"], 0)
+        self.assertTrue(consolidation["training_rng_restored_after_estimation"])
+        self.assertTrue(consolidation["post_adam_parameter_delta_scaling"])
+        self.assertEqual(
+            consolidation["boundary_importance_accumulator_peak_bytes"],
+            1_048_576,
+        )
+        self.assertEqual(
+            consolidation["post_adam_delta_snapshot_peak_bytes"],
+            786_432,
+        )
+        self.assertTrue(launch["residuals"]["coordinate_map_frozen_after_task_1"])
+        self.assertEqual(
+            launch["residuals"]["consolidation_state_storage_bytes"],
+            3_145_832,
+        )
+        self.assertEqual(
+            launch["shared_core"]["trainable_after_freeze"],
+            ["Gaussian RBF coefficients in each residual"],
+        )
+        self.assertFalse(output_dir.exists())
+
     def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:
         launch = self._arrow_dry_run("--actor-network", "relu_kan")
 

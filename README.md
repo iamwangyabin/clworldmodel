@@ -24,6 +24,8 @@ ablations at different stages of evidence:
   upstream R2-Dreamer size12M model and optimizer with ARROW-50 replay;
 - the completed negative `KARROW-FrozenCore-v1` two-task pilot and the
   implementation-ready spatial-patch posterior correction in v2;
+- the experimental `KARROW-ReplayConsolidated-v3` incremental KAN path and its
+  fixed-checkpoint DINO/RSSM task-region audit;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -201,6 +203,30 @@ python scripts/run_karrow_spatial_ar50_atari.py \
 The float16 spatial sidecar occupies `1,073,741,824` bytes, so a target-GPU
 memory smoke is required before training. See
 `docs/protocols/karrow_spatial_v2_atari.md`.
+
+## Incremental method: KARROW-ReplayConsolidated-v3
+
+V3 keeps the v2 visual path, but turns the residual KAN into an explicit
+continual-learning mechanism. Before each new task, it estimates the functional
+importance of every Gaussian RBF coefficient from unchanged ARROW replay and
+short deterministic imagination. Task-1 coordinate maps are frozen; important
+coefficients receive smaller future gradients and an anchor penalty, while cold
+coefficients remain plastic. Inference still uses one shared fixed-capacity KAN
+with no task ID or router.
+
+```bash
+python scripts/run_karrow_incremental_ar50_atari.py \
+  --variant kan \
+  --task-prefix-length 2 \
+  --seed 0 \
+  --dry-run
+```
+
+The offline latent audit evaluates all games at one fixed checkpoint and
+reports held-out task decodability, normalized region separation, PCA
+artifacts, and per-module RBF support overlap. See
+`docs/protocols/karrow_replay_consolidated_v3_atari.md` for the equations,
+collection command, and claim limits.
 
 ## Actor ablation: ARROW-KANActor-50
 

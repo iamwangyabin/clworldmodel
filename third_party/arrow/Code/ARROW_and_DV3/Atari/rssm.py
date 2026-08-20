@@ -100,6 +100,7 @@ class Rssm(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_consolidation: str = "none",
         image_embedder: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
@@ -119,6 +120,7 @@ class Rssm(nn.Module):
             residual_input_max=residual_input_max,
             residual_rms_norm_epsilon=residual_rms_norm_epsilon,
             residual_alpha=residual_alpha,
+            residual_consolidation=residual_consolidation,
         )
         if image_embedder is not None:
             self.image_embedder = image_embedder
@@ -154,6 +156,7 @@ class Rssm(nn.Module):
             residual_input_max=residual_input_max,
             residual_rms_norm_epsilon=residual_rms_norm_epsilon,
             residual_alpha=residual_alpha,
+            residual_consolidation=residual_consolidation,
         )
         self.transition = Transition(
             ls,
@@ -168,6 +171,7 @@ class Rssm(nn.Module):
             residual_input_max=residual_input_max,
             residual_rms_norm_epsilon=residual_rms_norm_epsilon,
             residual_alpha=residual_alpha,
+            residual_consolidation=residual_consolidation,
         )
 
     def freeze_shared_core(self) -> None:
@@ -307,6 +311,7 @@ class Recurrent(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_consolidation: str = "none",
     ) -> None:
         super().__init__()
         z_dim = ls[0] * ls[1]
@@ -338,6 +343,7 @@ class Recurrent(nn.Module):
                     num_grids=residual_grid_size,
                     rms_norm_epsilon=residual_rms_norm_epsilon,
                     alpha=residual_alpha,
+                    consolidation_enabled=residual_consolidation != "none",
                 )
 
     def forward(self, prev_z: LatentT, prev_a: ActionT, prev_h: HiddenT) -> HiddenT:
@@ -375,6 +381,7 @@ class Representation(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_consolidation: str = "none",
     ) -> None:
         super().__init__()
         self.ls = ls
@@ -416,6 +423,7 @@ class Representation(nn.Module):
                     num_grids=residual_grid_size,
                     rms_norm_epsilon=residual_rms_norm_epsilon,
                     alpha=residual_alpha,
+                    consolidation_enabled=residual_consolidation != "none",
                 )
 
     def __call__(self, e: EmbedT, h: HiddenT) -> LatentLogDistT:
@@ -461,6 +469,7 @@ class Transition(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_consolidation: str = "none",
     ) -> None:
         super().__init__()
         self.ls = ls
@@ -497,6 +506,7 @@ class Transition(nn.Module):
                     num_grids=residual_grid_size,
                     rms_norm_epsilon=residual_rms_norm_epsilon,
                     alpha=residual_alpha,
+                    consolidation_enabled=residual_consolidation != "none",
                 )
 
     def forward(self, h: HiddenT) -> LatentLogDistT:

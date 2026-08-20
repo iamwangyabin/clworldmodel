@@ -120,6 +120,7 @@ class WorldModel(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_consolidation: str = "none",
         image_embedder: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
@@ -185,6 +186,7 @@ class WorldModel(nn.Module):
             residual_input_max=residual_input_max,
             residual_rms_norm_epsilon=residual_rms_norm_epsilon,
             residual_alpha=residual_alpha,
+            residual_consolidation=residual_consolidation,
             image_embedder=image_embedder,
         )
 
@@ -247,6 +249,7 @@ class WorldModel(nn.Module):
                 num_grids=residual_grid_size,
                 rms_norm_epsilon=residual_rms_norm_epsilon,
                 alpha=residual_alpha,
+                consolidation_enabled=residual_consolidation != "none",
             )
             self.continue_fc = nn.Sequential(
                 *get_mlp_layers(
@@ -267,6 +270,7 @@ class WorldModel(nn.Module):
                 num_grids=residual_grid_size,
                 rms_norm_epsilon=residual_rms_norm_epsilon,
                 alpha=residual_alpha,
+                consolidation_enabled=residual_consolidation != "none",
             )
         if (
             observation_objective
@@ -285,6 +289,7 @@ class WorldModel(nn.Module):
                 num_grids=residual_grid_size,
                 rms_norm_epsilon=residual_rms_norm_epsilon,
                 alpha=residual_alpha,
+                consolidation_enabled=residual_consolidation != "none",
             )
 
     def freeze_shared_core(self) -> None:
@@ -306,6 +311,24 @@ class WorldModel(nn.Module):
             self.reward_residual.requires_grad_(True)
         if self.continue_residual is not None:
             self.continue_residual.requires_grad_(True)
+
+    def consolidation_penalty(self) -> torch.Tensor:
+        if self.residual_correction != "kan":
+            return torch.zeros((), device=next(self.parameters()).device)
+        candidates = (
+            self.rssm.recurrent.residual,
+            self.rssm.representation.residual,
+            self.rssm.transition.residual,
+            self.reward_residual,
+            self.continue_residual,
+            self.feature_predictor_residual,
+        )
+        residuals = tuple(residual for residual in candidates if residual is not None)
+        if not residuals:
+            raise RuntimeError("KAN world model is missing residual corrections")
+        return torch.stack(
+            [residual.consolidation_penalty() for residual in residuals]
+        ).sum()
 
     def compute_loss(
         self,
@@ -474,7 +497,19 @@ class WorldModel(nn.Module):
                     observation_losses, low_kl
                 )
 
-        return z_repr_loss + observation_loss + rews_loss + conts_loss, metrics
+        consolidation_loss = torch.zeros((), device=z_repr_loss.device)
+        if self.residual_correction == "kan":
+            consolidation_loss = self.consolidation_penalty()
+            metrics["Loss/kan_consolidation"] = consolidation_loss.detach()
+
+        return (
+            z_repr_loss
+            + observation_loss
+            + rews_loss
+            + conts_loss
+            + consolidation_loss,
+            metrics,
+        )
 
 
 class ZhToModelState(nn.Module):

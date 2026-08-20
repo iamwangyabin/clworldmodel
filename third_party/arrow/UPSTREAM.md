@@ -97,6 +97,19 @@ documented here, covered by focused parity tests, and followed by regenerating
     and byte accounting. Rollout access to optional reward and continuation
     residuals defaults to none, preserving the pre-residual WorldModel test
     interface without changing production behavior.
+22. Add the separately named opt-in `replay_functional` KAN-consolidation hook
+    for `KARROW-ReplayConsolidated-v3`. At each sequential task boundary, before
+    new-task collection, the trainer visits every project-owned KAN residual on
+    unchanged ARROW replay posteriors and short deterministic imagination. It
+    estimates per-RBF-coefficient squared local output-Jacobian importance,
+    restores all training RNG states, and performs no environment interaction or
+    optimizer update. After Task 1, shared bases and KAN coordinate maps are
+    frozen; only RBF coefficients remain trainable under cumulative gradient
+    protection, post-Adam parameter-delta scaling, and an anchor loss. Defaults
+    remain no consolidation. Focused
+    tests cover configuration isolation, importance persistence, coordinate
+    freezing, value-preserving gradient scaling, launcher budgets, and offline
+    latent-region metrics.
 
 ## Known issues at import
 

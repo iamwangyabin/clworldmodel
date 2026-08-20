@@ -17,7 +17,7 @@ from tqdm import trange
 import ale_py
 import replay
 from replay import MultiTypeReplay
-from ac import ActorCriticOpt, train_ac_from_wm
+from ac import ActorCriticOpt, train_ac_from_wm, zh_to_ac_state
 from config import (
     Config,
     EnvConfig,
@@ -250,8 +250,8 @@ def _actor_critic_parameter_accounting(aco: ActorCriticOpt) -> dict:
         "critic": _module_state_accounting(critic),
         "actor_critic": _module_state_accounting(aco.ac),
         "accounting_scope": (
-            "parameters and persistent buffers; excludes gradients, optimizer state, "
-            "and activations"
+            "parameters and registered buffers; excludes gradients, optimizer state, "
+            "and activations; non-persistent buffers are included when allocated"
         ),
     }
     if aco.slow_critic is not None:
@@ -275,11 +275,14 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         "schema_version": 1,
         "observation_objective": wm.observation_objective,
         "world_model": _parameter_accounting(wm),
+        "world_model_parameter_and_buffer_state": _module_state_accounting(wm),
         "observation_encoder": _parameter_accounting(wm.rssm.image_embedder),
         "observation_head_name": observation_head_name,
         "observation_head": _parameter_accounting(observation_head),
         "accounting_scope": (
-            "parameters only; excludes gradients, optimizer state, and activations"
+            "legacy component entries count parameters only; "
+            "world_model_parameter_and_buffer_state also counts registered buffers; "
+            "all entries exclude gradients, optimizer state, and activations"
         ),
     }
 
@@ -365,6 +368,214 @@ def _restrict_optimizer_to_trainable(
     for parameter_group in optimizer.param_groups:
         parameter_group["params"] = trainable
     return trainable
+
+
+@torch.no_grad()
+def _exercise_world_model_residual_heads(
+    wm: WorldModel,
+    z: torch.Tensor,
+    h: torch.Tensor,
+    *,
+    prior_log_probs: Optional[torch.Tensor] = None,
+) -> None:
+    """Visit every non-RSSM residual at deterministic replay/imagination states."""
+    zhs = wm.zh_transform(z, h)
+    for residual in (wm.reward_residual, wm.continue_residual):
+        if residual is not None:
+            residual(zhs)
+    if wm.feature_predictor_residual is not None:
+        if wm.observation_objective == "dinov3_next_feature":
+            if prior_log_probs is None:
+                raise ValueError("Prior features require deterministic prior logits")
+            feature_state = wm.zh_transform(prior_log_probs.exp(), h)
+        else:
+            feature_state = zhs
+        wm.feature_predictor_residual(feature_state)
+
+
+@torch.no_grad()
+def _observe_replay_for_kan_importance(
+    wm: WorldModel,
+    aco: ActorCriticOpt,
+    feature_cache,
+    *,
+    batches: int,
+    sequence_length: int,
+    sequences: int,
+    imagination_horizon: int,
+) -> None:
+    """Exercise KAN adapters on replay posteriors and deterministic imagination."""
+    device = next(wm.parameters()).device
+    for _ in range(batches):
+        actions, _, features, _, _, resets = feature_cache.minibatch(
+            sequence_length,
+            sequences,
+            mb_device=device,
+        )
+        initial_z, initial_h = wm.rssm.initial_state(actions.shape[1])
+        _, posterior_z, hiddens = wm.rssm.observe_embeddings(
+            initial_z,
+            actions,
+            initial_h,
+            features,
+            resets,
+            stochastic=False,
+        )
+        prior_log_probs = wm.rssm.transition(hiddens)
+        _exercise_world_model_residual_heads(
+            wm,
+            posterior_z,
+            hiddens,
+            prior_log_probs=prior_log_probs,
+        )
+        posterior_states = zh_to_ac_state(posterior_z, hiddens)
+        aco.ac.actor(posterior_states)
+        aco.ac.critic(posterior_states)
+
+        z = posterior_z[-1]
+        h = hiddens[-1]
+        no_reset = torch.zeros(actions.shape[1], 1, device=device)
+        for _ in range(imagination_horizon):
+            state = zh_to_ac_state(z, h)
+            action_log_probs = aco.ac.actor(state)
+            aco.ac.critic(state)
+            action = torch.nn.functional.one_hot(
+                action_log_probs.argmax(dim=-1),
+                num_classes=wm.a_dim,
+            ).to(dtype=z.dtype)
+            imagined_prior, z, h = wm.rssm(
+                z,
+                action,
+                h,
+                None,
+                no_reset,
+                stochastic=False,
+            )
+            _exercise_world_model_residual_heads(
+                wm,
+                z,
+                h,
+                prior_log_probs=imagined_prior,
+            )
+
+
+def _consolidate_kan_from_replay(
+    *,
+    config: Config,
+    wm: WorldModel,
+    aco: ActorCriticOpt,
+    feature_cache,
+    epoch: int,
+    global_step: int,
+    log_dir: Path,
+    writer,
+) -> dict[str, dict[str, float | int]]:
+    """Estimate, persist, and log task-boundary KAN coefficient importance."""
+    if feature_cache is None:
+        raise RuntimeError("Replay KAN consolidation requires frozen feature replay")
+    from clworldmodel.continual import (
+        begin_kan_importance_estimation,
+        cancel_kan_importance_estimation,
+        finish_kan_importance_estimation,
+    )
+
+    roots = {"world_model": wm, "actor_critic": aco.ac}
+    residuals = begin_kan_importance_estimation(roots)
+    wm_was_training = wm.training
+    ac_was_training = aco.ac.training
+    try:
+        with _preserve_training_rng_state():
+            wm.eval()
+            aco.ac.eval()
+            _observe_replay_for_kan_importance(
+                wm,
+                aco,
+                feature_cache,
+                batches=config.residual_consolidation_batches,
+                sequence_length=config.mb_t_size,
+                sequences=config.mb_n_size,
+                imagination_horizon=(
+                    config.residual_consolidation_imagination_horizon
+                ),
+            )
+    except Exception:
+        cancel_kan_importance_estimation(residuals)
+        raise
+    finally:
+        wm.train(wm_was_training)
+        aco.ac.train(ac_was_training)
+
+    diagnostics = finish_kan_importance_estimation(
+        residuals,
+        gradient_power=config.residual_consolidation_gradient_power,
+        min_plasticity=config.residual_consolidation_min_plasticity,
+        anchor_loss_scale=config.residual_consolidation_anchor_loss_scale,
+    )
+    swap_sched = int(config.esc.kwargs["swap_sched"])
+    boundary_index = epoch // swap_sched
+    completed_task_index = (boundary_index - 1) % len(config.esc.env_configs)
+    upcoming_task_index = boundary_index % len(config.esc.env_configs)
+    artifact = {
+        "schema_version": 1,
+        "artifact_kind": "replay_functional_kan_consolidation",
+        "epoch": epoch,
+        "world_model_updates": global_step,
+        "boundary_index": boundary_index,
+        "completed_task": {
+            "index": completed_task_index,
+            "name": config.esc.env_configs[completed_task_index].name,
+        },
+        "upcoming_task": {
+            "index": upcoming_task_index,
+            "name": config.esc.env_configs[upcoming_task_index].name,
+        },
+        "estimator": {
+            "quantity": "squared local output Jacobian per Gaussian RBF coefficient",
+            "replay_batches": config.residual_consolidation_batches,
+            "sequence_length": config.mb_t_size,
+            "sequences_per_batch": config.mb_n_size,
+            "deterministic_imagination_horizon": (
+                config.residual_consolidation_imagination_horizon
+            ),
+            "replay_capacity_and_sampling": "unchanged ARROW mixture",
+            "training_rng_state_restored": True,
+            "gradient_updates": 0,
+            "environment_interactions": 0,
+            "task_identity_exposed_to_agent": False,
+        },
+        "protection": {
+            "cumulative_rule": "coefficient-wise maximum across boundaries",
+            "anchor_rule": "replace only when the new normalized importance is larger",
+            "gradient_power": config.residual_consolidation_gradient_power,
+            "minimum_plasticity": config.residual_consolidation_min_plasticity,
+            "anchor_loss_scale": config.residual_consolidation_anchor_loss_scale,
+        },
+        "modules": diagnostics,
+    }
+    output_dir = log_dir / "kan_consolidation"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"boundary_{boundary_index:02d}.json"
+    temporary_path = path.with_suffix(".json.tmp")
+    temporary_path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary_path, path)
+    for module_name, values in diagnostics.items():
+        tag_name = module_name.replace(".", "/")
+        writer.add_scalar(
+            f"KANConsolidation/{tag_name}/importance_mean",
+            values["importance_mean"],
+            global_step,
+        )
+        writer.add_scalar(
+            f"KANConsolidation/{tag_name}/protected_fraction_ge_0_9",
+            values["protected_fraction_ge_0_9"],
+            global_step,
+        )
+        writer.add_scalar(
+            f"KANConsolidation/{tag_name}/gradient_scale_mean",
+            values["gradient_scale_mean"],
+            global_step,
+        )
+    return diagnostics
 
 
 def _sha256(path: Path) -> str:
@@ -607,6 +818,7 @@ if __name__ == "__main__":
     print(f"World-model observation objective: {config.observation_objective}")
     print(f"Observation encoder: {config.observation_encoder}")
     print(f"Residual correction: {config.residual_correction}")
+    print(f"Residual consolidation: {config.residual_consolidation}")
     print(f"Shared core mode: {config.shared_core_mode}")
     print(f"Actor network: {config.actor_network}")
     print(
@@ -660,6 +872,7 @@ if __name__ == "__main__":
         residual_input_max=config.residual_input_max,
         residual_rms_norm_epsilon=config.residual_rms_norm_epsilon,
         residual_alpha=config.residual_alpha,
+        residual_consolidation=config.residual_consolidation,
     ).cuda()
     trainable_world_model_parameters = [
         parameter for parameter in wm.parameters() if parameter.requires_grad
@@ -762,14 +975,41 @@ if __name__ == "__main__":
     best_rews_mean = float("-inf")
     global_step = 0            # gradient updates so far  training iterations
     shared_core_frozen = False
+    capture_kan_parameter_values = None
+    protect_kan_parameter_updates = None
+    if config.residual_consolidation == "replay_functional":
+        from clworldmodel.continual import (
+            capture_kan_parameter_values,
+            protect_kan_parameter_updates,
+        )
 
     for epoch in range(config.epochs):
         print("Starting Epoch ", epoch)
+        task_boundary = epoch > 0 and envs.is_new_env()
+        if config.residual_consolidation == "replay_functional" and task_boundary:
+            if aco is None:
+                raise RuntimeError(
+                    "The actor-critic must be initialized before KAN consolidation"
+                )
+            diagnostics = _consolidate_kan_from_replay(
+                config=config,
+                wm=wm,
+                aco=aco,
+                feature_cache=feature_cache,
+                epoch=epoch,
+                global_step=global_step,
+                log_dir=log_dir,
+                writer=writer,
+            )
+            print(
+                "Consolidated replay-important KAN coefficients at task boundary "
+                f"{epoch // int(config.esc.kwargs['swap_sched'])}: "
+                f"modules={len(diagnostics)}"
+            )
         if (
             config.shared_core_mode == "freeze_after_first_task"
             and not shared_core_frozen
-            and epoch > 0
-            and envs.is_new_env()
+            and task_boundary
         ):
             if aco is None:
                 raise RuntimeError(
@@ -777,6 +1017,12 @@ if __name__ == "__main__":
                 )
             wm.freeze_shared_core()
             aco.ac.freeze_shared_core()
+            if config.residual_consolidation == "replay_functional":
+                from clworldmodel.continual import freeze_kan_coordinate_maps
+
+                freeze_kan_coordinate_maps(
+                    {"world_model": wm, "actor_critic": aco.ac}
+                )
             trainable_world_model_parameters = _restrict_optimizer_to_trainable(opt, wm)
             _restrict_optimizer_to_trainable(aco.opt, aco.ac)
             shared_core_frozen = True
@@ -948,12 +1194,17 @@ if __name__ == "__main__":
                 observation_features=observation_features,
             )
 
+            protected_values = None
+            if shared_core_frozen and capture_kan_parameter_values is not None:
+                protected_values = capture_kan_parameter_values(wm)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 trainable_world_model_parameters, 1000
             )
             opt.step()
+            if protected_values is not None:
+                protect_kan_parameter_updates(wm, protected_values)
 
             # Optional progress bar logging
             # if global_step % 10 == 0:
@@ -1044,6 +1295,8 @@ if __name__ == "__main__":
             "residual_input_max": config.residual_input_max,
             "residual_rms_norm_epsilon": config.residual_rms_norm_epsilon,
             "residual_alpha": config.residual_alpha,
+            "residual_consolidation": config.residual_consolidation,
+            "protect_residual_updates": shared_core_frozen,
             "feature_cache": feature_cache,
         }
 

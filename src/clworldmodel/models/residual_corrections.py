@@ -93,6 +93,7 @@ class ResidualCorrection(nn.Module):
         num_grids: int = 8,
         rms_norm_epsilon: float = 1e-4,
         alpha: float = 0.1,
+        consolidation_enabled: bool = False,
     ) -> None:
         super().__init__()
         if in_features < 1 or out_features < 1 or bottleneck_features < 1:
@@ -125,6 +126,47 @@ class ResidualCorrection(nn.Module):
         nn.init.zeros_(self.up.weight)
         nn.init.zeros_(self.up.bias)
 
+        coefficient_shape = (
+            (bottleneck_features, bottleneck_features, num_grids)
+            if kind == "kan" and consolidation_enabled
+            else (0,)
+        )
+        self.register_buffer(
+            "consolidation_importance",
+            torch.zeros(coefficient_shape, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "consolidation_anchor",
+            torch.zeros(coefficient_shape, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "consolidation_gradient_scale",
+            torch.ones(coefficient_shape, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "consolidation_anchor_loss_scale",
+            torch.zeros((), dtype=torch.float32),
+        )
+        self.register_buffer(
+            "consolidation_boundaries",
+            torch.zeros((), dtype=torch.long),
+        )
+        self.register_buffer(
+            "consolidation_active",
+            torch.zeros((), dtype=torch.bool),
+        )
+        self.register_buffer(
+            "_importance_sum",
+            torch.empty(0, dtype=torch.float32),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_importance_samples",
+            torch.zeros((), dtype=torch.long),
+            persistent=False,
+        )
+        self._collecting_importance = False
+
     def bottleneck_inputs(self, inputs: torch.Tensor) -> torch.Tensor:
         if inputs.shape[-1] != self.in_features:
             raise ValueError(
@@ -140,8 +182,188 @@ class ResidualCorrection(nn.Module):
             raise TypeError("KAN correction has an unexpected core module")
         return core.basis_activations(self.bottleneck_inputs(inputs))
 
+    def begin_importance_estimation(self) -> None:
+        """Start a no-gradient replay estimate for every RBF coefficient."""
+        core = self._require_kan()
+        if self._collecting_importance:
+            raise RuntimeError("KAN importance estimation is already active")
+        if not self.consolidation_importance.numel():
+            coefficient_shape = core.rbf_weight.shape
+            self.consolidation_importance = torch.zeros(
+                coefficient_shape,
+                device=core.rbf_weight.device,
+                dtype=torch.float32,
+            )
+            self.consolidation_anchor = torch.zeros_like(
+                self.consolidation_importance
+            )
+            self.consolidation_gradient_scale = torch.ones_like(
+                self.consolidation_importance
+            )
+        self._importance_sum = torch.zeros_like(self.consolidation_importance)
+        self._importance_samples.zero_()
+        self._collecting_importance = True
+
+    def cancel_importance_estimation(self) -> None:
+        self._collecting_importance = False
+        self._importance_sum = self._importance_sum.new_empty(0)
+        self._importance_samples.zero_()
+
+    @torch.no_grad()
+    def finish_importance_estimation(
+        self,
+        *,
+        gradient_power: float,
+        min_plasticity: float,
+        anchor_loss_scale: float,
+    ) -> dict[str, float | int]:
+        """Consolidate the replay estimate and anchor newly important weights."""
+        core = self._require_kan()
+        if not self._collecting_importance:
+            raise RuntimeError("KAN importance estimation has not been started")
+        if self._importance_samples.item() < 1:
+            raise RuntimeError("KAN importance estimation observed no samples")
+        if gradient_power <= 0:
+            raise ValueError("gradient_power must be positive")
+        if not 0 <= min_plasticity <= 1:
+            raise ValueError("min_plasticity must lie in [0, 1]")
+        if anchor_loss_scale < 0:
+            raise ValueError("anchor_loss_scale must be non-negative")
+
+        estimate = self._importance_sum / self._importance_samples.float()
+        positive = estimate[estimate > 0]
+        if positive.numel():
+            robust_scale = torch.quantile(positive, 0.99).clamp_min(1e-12)
+            normalized = (estimate / robust_scale).clamp_(0.0, 1.0)
+        else:
+            robust_scale = torch.ones((), device=estimate.device)
+            normalized = torch.zeros_like(estimate)
+
+        current_weight = core.rbf_weight.detach().float()
+        if not self.consolidation_active.item():
+            self.consolidation_anchor.copy_(current_weight)
+        else:
+            newly_dominant = normalized > self.consolidation_importance
+            self.consolidation_anchor.copy_(
+                torch.where(newly_dominant, current_weight, self.consolidation_anchor)
+            )
+        self.consolidation_importance.copy_(
+            torch.maximum(self.consolidation_importance, normalized)
+        )
+        gradient_scale = (
+            (1.0 - self.consolidation_importance).pow(gradient_power)
+            * (1.0 - min_plasticity)
+            + min_plasticity
+        )
+        self.consolidation_gradient_scale.copy_(gradient_scale)
+        self.consolidation_anchor_loss_scale.fill_(anchor_loss_scale)
+        self.consolidation_boundaries.add_(1)
+        self.consolidation_active.fill_(True)
+        self._collecting_importance = False
+
+        diagnostics = self.consolidation_diagnostics()
+        diagnostics.update(
+            {
+                "importance_samples": int(self._importance_samples.item()),
+                "raw_importance_p99": float(robust_scale.item()),
+            }
+        )
+        self._importance_sum = self._importance_sum.new_empty(0)
+        self._importance_samples.zero_()
+        return diagnostics
+
+    def freeze_coordinate_map(self) -> None:
+        """Freeze the shared coordinate system and leave only RBF values plastic."""
+        core = self._require_kan()
+        self.down.requires_grad_(False)
+        self.norm.requires_grad_(False)
+        self.up.requires_grad_(False)
+        core.rbf_weight.requires_grad_(True)
+
+    def consolidation_penalty(self) -> torch.Tensor:
+        """Quadratic anchor loss for replay-important RBF coefficients."""
+        core = self._require_kan()
+        if not self.consolidation_importance.numel():
+            return core.rbf_weight.sum() * 0.0
+        squared_drift = (core.rbf_weight.float() - self.consolidation_anchor).square()
+        return self.consolidation_anchor_loss_scale * (
+            self.consolidation_importance * squared_drift
+        ).mean()
+
+    @torch.no_grad()
+    def consolidation_diagnostics(self) -> dict[str, float | int]:
+        self._require_kan()
+        importance = self.consolidation_importance
+        if not importance.numel():
+            raise RuntimeError("KAN consolidation has not been initialized")
+        scale = self.consolidation_gradient_scale
+        return {
+            "boundaries": int(self.consolidation_boundaries.item()),
+            "coefficients": importance.numel(),
+            "importance_mean": float(importance.mean().item()),
+            "importance_max": float(importance.max().item()),
+            "protected_fraction_ge_0_5": float((importance >= 0.5).float().mean().item()),
+            "protected_fraction_ge_0_9": float((importance >= 0.9).float().mean().item()),
+            "gradient_scale_mean": float(scale.mean().item()),
+            "gradient_scale_min": float(scale.min().item()),
+        }
+
+    def _require_kan(self) -> LocalRBFKANCore:
+        if self.kind != "kan" or not isinstance(self.core, LocalRBFKANCore):
+            raise RuntimeError("Replay consolidation is defined only for KAN corrections")
+        return self.core
+
+    def _effective_rbf_weight(self, core: LocalRBFKANCore) -> torch.Tensor:
+        weight = core.rbf_weight
+        if not self.consolidation_gradient_scale.numel():
+            return weight
+        scale = self.consolidation_gradient_scale.to(dtype=weight.dtype)
+        # The value is exactly ``weight``; only its backward gradient is scaled.
+        return weight.detach() + scale * (weight - weight.detach())
+
+    @torch.no_grad()
+    def _accumulate_importance(
+        self,
+        basis: torch.Tensor,
+        core_values: torch.Tensor,
+    ) -> None:
+        """Accumulate the squared output Jacobian for each RBF coefficient."""
+        flat_basis = basis.reshape(-1, basis.shape[-2], basis.shape[-1]).float()
+        flat_values = core_values.reshape(-1, core_values.shape[-1]).float()
+        if flat_basis.shape[0] != flat_values.shape[0]:
+            raise ValueError("KAN basis and value samples must align")
+
+        sigmoid = torch.sigmoid(flat_values)
+        silu_derivative = sigmoid * (1.0 + flat_values * (1.0 - sigmoid))
+        output_column_norm = self.up.weight.detach().float().square().sum(dim=0)
+        output_sensitivity = (
+            self.alpha**2
+            * silu_derivative.square()
+            * output_column_norm.unsqueeze(0)
+        )
+        self._importance_sum.add_(
+            torch.einsum(
+                "so,sig->oig",
+                output_sensitivity,
+                flat_basis.square(),
+            )
+        )
+        self._importance_samples.add_(flat_basis.shape[0])
+
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        values = self.core(self.bottleneck_inputs(inputs))
+        bottleneck = self.bottleneck_inputs(inputs)
+        if self.kind == "kan":
+            core = self._require_kan()
+            basis = core.basis_activations(bottleneck)
+            values = torch.einsum(
+                "...ig,oig->...o",
+                basis,
+                self._effective_rbf_weight(core),
+            )
+            if self._collecting_importance:
+                self._accumulate_importance(basis, values)
+        else:
+            values = self.core(bottleneck)
         return self.alpha * self.up(F.silu(values))
 
 
@@ -156,6 +378,7 @@ def build_residual_correction(
     num_grids: int = 8,
     rms_norm_epsilon: float = 1e-4,
     alpha: float = 0.1,
+    consolidation_enabled: bool = False,
 ) -> Optional[ResidualCorrection]:
     if kind == "none":
         return None
@@ -171,6 +394,7 @@ def build_residual_correction(
         num_grids=num_grids,
         rms_norm_epsilon=rms_norm_epsilon,
         alpha=alpha,
+        consolidation_enabled=consolidation_enabled,
     )
 
 

@@ -25,6 +25,7 @@ DinoV3FeatureMode = Literal["cls", "patch_grid"]
 DinoV3FeatureLoss = Literal["cosine", "batch_standardized_smooth_l1"]
 DinoV3PatchProjection = Literal["none", "task1_pca"]
 ResidualCorrection = Literal["none", "mlp", "kan"]
+ResidualConsolidation = Literal["none", "replay_functional"]
 SharedCoreMode = Literal["trainable", "freeze_after_first_task"]
 ActorNetwork = Literal[
     "mlp",
@@ -266,6 +267,12 @@ class Config(Serialisable):
     residual_input_max: float = 2.0
     residual_rms_norm_epsilon: float = 1e-4
     residual_alpha: float = 0.1
+    residual_consolidation: ResidualConsolidation = "none"
+    residual_consolidation_batches: int = 16
+    residual_consolidation_imagination_horizon: int = 8
+    residual_consolidation_gradient_power: float = 2.0
+    residual_consolidation_min_plasticity: float = 0.01
+    residual_consolidation_anchor_loss_scale: float = 1.0
     shared_core_mode: SharedCoreMode = "trainable"
 
     action_space: int = 18
@@ -406,6 +413,10 @@ class Config(Serialisable):
             raise ValueError(
                 f"Unknown residual correction: {self.residual_correction!r}"
             )
+        if self.residual_consolidation not in {"none", "replay_functional"}:
+            raise ValueError(
+                f"Unknown residual consolidation: {self.residual_consolidation!r}"
+            )
         if self.shared_core_mode not in {"trainable", "freeze_after_first_task"}:
             raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
         if self.residual_correction != "none" and not uses_dinov3:
@@ -448,6 +459,49 @@ class Config(Serialisable):
             raise ValueError("KARROW Frozen-Core fixes residual RMSNorm epsilon at 1e-4")
         if self.residual_alpha != 0.1:
             raise ValueError("KARROW Frozen-Core fixes residual alpha at 0.1")
+        consolidation_defaults = (
+            16,
+            8,
+            2.0,
+            0.01,
+            1.0,
+        )
+        consolidation_values = (
+            self.residual_consolidation_batches,
+            self.residual_consolidation_imagination_horizon,
+            self.residual_consolidation_gradient_power,
+            self.residual_consolidation_min_plasticity,
+            self.residual_consolidation_anchor_loss_scale,
+        )
+        if self.residual_consolidation == "none":
+            if consolidation_values != consolidation_defaults:
+                raise ValueError(
+                    "Residual consolidation settings require "
+                    "residual_consolidation='replay_functional'"
+                )
+        else:
+            if self.residual_correction != "kan":
+                raise ValueError("Replay consolidation requires KAN residuals")
+            if self.shared_core_mode != "freeze_after_first_task":
+                raise ValueError("Replay consolidation requires a frozen shared core")
+            if self.residual_consolidation_batches < 1:
+                raise ValueError("Residual consolidation batches must be positive")
+            if self.residual_consolidation_imagination_horizon < 0:
+                raise ValueError(
+                    "Residual consolidation imagination horizon must be non-negative"
+                )
+            if self.residual_consolidation_gradient_power <= 0:
+                raise ValueError(
+                    "Residual consolidation gradient power must be positive"
+                )
+            if not 0 <= self.residual_consolidation_min_plasticity <= 1:
+                raise ValueError(
+                    "Residual consolidation minimum plasticity must lie in [0, 1]"
+                )
+            if self.residual_consolidation_anchor_loss_scale < 0:
+                raise ValueError(
+                    "Residual consolidation anchor loss scale must be non-negative"
+                )
         if self.actor_network not in {
             "mlp",
             "relu_kan",

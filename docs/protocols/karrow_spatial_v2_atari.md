@@ -7,6 +7,9 @@ No performance or forgetting claim exists yet. V1 remains reproducible through
 `scripts/run_karrow_ar50_atari.py`; v2 is launched through
 `scripts/run_karrow_spatial_ar50_atari.py`.
 
+V2 does not use replay-functional coefficient consolidation. That behavior is
+isolated in the separately named v3 protocol.
+
 The first question is acquisition, not retention: does a frozen spatial DINOv3
 target make the posterior RSSM state useful enough to approach the original
 ARROW-50 MsPacman learning curve under the same interaction and update budget?

@@ -61,6 +61,7 @@ class ResidualCategoricalHead(nn.Module):
         residual_input_max: float,
         residual_rms_norm_epsilon: float,
         residual_alpha: float,
+        residual_consolidation: str,
     ) -> None:
         super().__init__()
         if not base_layers or not isinstance(base_layers[-1], nn.Linear):
@@ -79,6 +80,7 @@ class ResidualCategoricalHead(nn.Module):
             num_grids=residual_grid_size,
             rms_norm_epsilon=residual_rms_norm_epsilon,
             alpha=residual_alpha,
+            consolidation_enabled=residual_consolidation != "none",
         )
         if self.residual is None:
             raise ValueError("Residual categorical head requires a correction")
@@ -225,6 +227,7 @@ class ActorCritic(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_consolidation: str = "none",
     ) -> None:
         super().__init__()
         if residual_correction != "none" and actor_network != "mlp":
@@ -264,6 +267,7 @@ class ActorCritic(nn.Module):
                 "residual_input_max": residual_input_max,
                 "residual_rms_norm_epsilon": residual_rms_norm_epsilon,
                 "residual_alpha": residual_alpha,
+                "residual_consolidation": residual_consolidation,
             }
             self.actor = ResidualCategoricalHead(actor_layers, **residual_kwargs)
         self.symlog_bins: torch.Tensor
@@ -295,6 +299,18 @@ class ActorCritic(nn.Module):
             head.trunk.requires_grad_(False)
             head.base_head.requires_grad_(False)
             head.residual.requires_grad_(True)
+
+    def consolidation_penalty(self) -> torch.Tensor:
+        if not isinstance(self.actor, ResidualCategoricalHead):
+            return torch.zeros((), device=self.symlog_bins.device)
+        if self.actor.residual.kind != "kan":
+            return torch.zeros((), device=self.symlog_bins.device)
+        if not isinstance(self.critic, ResidualCategoricalHead):
+            raise RuntimeError("Residual actor requires a residual critic")
+        return (
+            self.actor.residual.consolidation_penalty()
+            + self.critic.residual.consolidation_penalty()
+        )
 
     def __call__(self, state: AcStateT) -> tuple[ActionLogT, RewardT]:
         return super().__call__(state)
@@ -597,6 +613,8 @@ def train_ac_from_wm(
     residual_input_max: float = 2.0,
     residual_rms_norm_epsilon: float = 1e-4,
     residual_alpha: float = 0.1,
+    residual_consolidation: str = "none",
+    protect_residual_updates: bool = False,
     feature_cache: Optional[object] = None,
 ) -> tuple[ActorCriticOpt, torch.Tensor, dict[str, float]]:
     if aco is None:
@@ -626,6 +644,7 @@ def train_ac_from_wm(
             residual_input_max=residual_input_max,
             residual_rms_norm_epsilon=residual_rms_norm_epsilon,
             residual_alpha=residual_alpha,
+            residual_consolidation=residual_consolidation,
         ).cuda()
         if optimizer_name == "adam":
             opt = Adam(
@@ -676,11 +695,23 @@ def train_ac_from_wm(
         "actor_entropy": 0.0,
         "critic_imagination_loss": 0.0,
         "critic_replay_loss": 0.0,
+        "kan_consolidation_loss": 0.0,
         "total_loss": 0.0,
         "return_mean": 0.0,
         "return_scale": 0.0,
         "gradient_norm": 0.0,
     }
+    capture_kan_parameter_values = None
+    protect_kan_parameter_updates = None
+    if protect_residual_updates:
+        if residual_consolidation != "replay_functional":
+            raise ValueError(
+                "Protected residual updates require replay-functional consolidation"
+            )
+        from clworldmodel.continual import (
+            capture_kan_parameter_values,
+            protect_kan_parameter_updates,
+        )
     progbar = trange(steps, desc="Train AC from WM",disable=True)
     for step in progbar:
         target_value = None
@@ -753,11 +784,13 @@ def train_ac_from_wm(
                 slow_critic_preds_log=slow_replay_preds_log,
                 slow_critic_regularizer=slow_critic_regularizer,
             )
+        consolidation_loss = ac.consolidation_penalty()
         loss = (
             reinforce
             - entropy_scale * entropy
             + critic_loss
             + replay_critic_loss_scale * replay_critic_loss
+            + consolidation_loss
         )
         if not torch.isfinite(loss):
             raise FloatingPointError(
@@ -766,6 +799,11 @@ def train_ac_from_wm(
                 f"critic={critic_loss.item()} replay_critic={replay_critic_loss.item()}"
             )
 
+        protected_values = (
+            capture_kan_parameter_values(ac)
+            if capture_kan_parameter_values is not None
+            else None
+        )
         opt.zero_grad()
         loss.backward()
         gradient_norm = torch.sqrt(
@@ -778,6 +816,8 @@ def train_ac_from_wm(
         if grad_clip:
             torch.nn.utils.clip_grad_norm_(ac.parameters(), grad_clip)
         opt.step()
+        if protected_values is not None:
+            protect_kan_parameter_updates(ac, protected_values)
         if aco.slow_critic is not None:
             with torch.no_grad():
                 for target, source in zip(
@@ -792,6 +832,7 @@ def train_ac_from_wm(
             "actor_entropy": entropy,
             "critic_imagination_loss": critic_loss,
             "critic_replay_loss": replay_critic_loss,
+            "kan_consolidation_loss": consolidation_loss,
             "total_loss": loss,
             "return_mean": lam_returns.mean(),
             "return_scale": torch.max(one, scale_ema),

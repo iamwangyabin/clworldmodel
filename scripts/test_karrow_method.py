@@ -28,6 +28,10 @@ if torch is not None:
     sys.path.insert(0, str(VENDORED_ATARI))
     from ac import ActorCritic, ResidualCategoricalHead
     from clworldmodel.models.frozen_dinov3 import FrozenDinoV3Encoder
+    from clworldmodel.continual import (
+        capture_kan_parameter_values,
+        protect_kan_parameter_updates,
+    )
     from clworldmodel.models.residual_corrections import (
         LocalRBFKANCore,
         ParameterMatchedMLPCore,
@@ -134,6 +138,33 @@ class KarrowMethodTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "v1"):
             Config.from_dict(invalid)
 
+    def test_replay_consolidation_is_a_named_kan_only_protocol(self) -> None:
+        consolidated = self._karrow_config_data("kan")
+        consolidated.update(
+            {
+                "observation_objective": "dinov3_posterior_feature",
+                "dinov3_feature_mode": "patch_grid",
+                "dinov3_patch_pool_size": 4,
+                "dinov3_patch_feature_dim": 64,
+                "dinov3_patch_projection": "task1_pca",
+                "dinov3_patch_projection_frames": 512,
+                "dinov3_feature_loss_kind": "batch_standardized_smooth_l1",
+                "residual_consolidation": "replay_functional",
+            }
+        )
+        config = Config.from_dict(consolidated)
+        self.assertEqual(config.residual_consolidation, "replay_functional")
+
+        invalid = consolidated.copy()
+        invalid["residual_correction"] = "mlp"
+        with self.assertRaisesRegex(ValueError, "requires KAN"):
+            Config.from_dict(invalid)
+
+        invalid = self._karrow_config_data("kan")
+        invalid["residual_consolidation_batches"] = 8
+        with self.assertRaisesRegex(ValueError, "settings require"):
+            Config.from_dict(invalid)
+
     def test_kan_and_mlp_cores_are_exactly_parameter_matched(self) -> None:
         kan_core = LocalRBFKANCore(64, num_grids=8)
         mlp_core = ParameterMatchedMLPCore(64, num_grids=8)
@@ -154,6 +185,18 @@ class KarrowMethodTests(unittest.TestCase):
             torch.testing.assert_close(kan(inputs), torch.zeros(3, out_features))
             torch.testing.assert_close(mlp(inputs), torch.zeros(3, out_features))
 
+    def test_unconsolidated_kan_forward_matches_the_original_core_path(self) -> None:
+        residual = ResidualCorrection(5, 3, kind="kan", bottleneck_features=4)
+        with torch.no_grad():
+            residual.up.weight.normal_()
+            residual.up.bias.normal_()
+        inputs = torch.randn(7, 5)
+        bottleneck = residual.bottleneck_inputs(inputs)
+        expected = residual.alpha * residual.up(
+            torch.nn.functional.silu(residual.core(bottleneck))
+        )
+        torch.testing.assert_close(residual(inputs), expected)
+
     def test_fixed_basis_support_overlap_separates_distant_inputs(self) -> None:
         core = LocalRBFKANCore(4)
         first = core.basis_activations(torch.full((8, 4), -2.0))
@@ -163,6 +206,102 @@ class KarrowMethodTests(unittest.TestCase):
             soft_basis_support_overlap(first, same), torch.tensor(1.0)
         )
         self.assertLess(soft_basis_support_overlap(first, distant).item(), 0.2)
+
+    def test_replay_importance_consolidates_and_freezes_kan_coordinates(self) -> None:
+        residual = ResidualCorrection(
+            2,
+            1,
+            kind="kan",
+            bottleneck_features=2,
+            num_grids=3,
+        )
+        with torch.no_grad():
+            residual.down.weight.copy_(torch.eye(2))
+            residual.down.bias.zero_()
+            residual.up.weight.fill_(1.0)
+            residual.up.bias.zero_()
+        residual.begin_importance_estimation()
+        residual(torch.tensor([[-2.0, -2.0], [-1.0, -1.0], [1.0, 1.0], [2.0, 2.0]]))
+        diagnostics = residual.finish_importance_estimation(
+            gradient_power=2.0,
+            min_plasticity=0.01,
+            anchor_loss_scale=1.0,
+        )
+        self.assertEqual(diagnostics["importance_samples"], 4)
+        self.assertGreater(diagnostics["importance_max"], 0)
+        self.assertLess(diagnostics["gradient_scale_min"], 1)
+        self.assertTrue(residual.consolidation_active)
+
+        residual.freeze_coordinate_map()
+        self.assertFalse(any(parameter.requires_grad for parameter in residual.down.parameters()))
+        self.assertFalse(any(parameter.requires_grad for parameter in residual.norm.parameters()))
+        self.assertFalse(any(parameter.requires_grad for parameter in residual.up.parameters()))
+        self.assertTrue(residual.core.rbf_weight.requires_grad)
+
+        restored = ResidualCorrection(
+            2,
+            1,
+            kind="kan",
+            bottleneck_features=2,
+            num_grids=3,
+            consolidation_enabled=True,
+        )
+        restored.load_state_dict(residual.state_dict())
+        torch.testing.assert_close(
+            restored.consolidation_importance,
+            residual.consolidation_importance,
+        )
+        torch.testing.assert_close(
+            restored.consolidation_anchor,
+            residual.consolidation_anchor,
+        )
+
+    def test_consolidation_gradient_scale_changes_backward_not_forward(self) -> None:
+        residual = ResidualCorrection(
+            2,
+            1,
+            kind="kan",
+            bottleneck_features=2,
+            num_grids=3,
+            consolidation_enabled=True,
+        )
+        with torch.no_grad():
+            residual.up.weight.fill_(1.0)
+            residual.consolidation_gradient_scale.fill_(0.25)
+        inputs = torch.tensor([[0.5, -0.5], [1.0, -1.0]])
+        scaled_output = residual(inputs)
+        scaled_output.sum().backward()
+        scaled_gradient = residual.core.rbf_weight.grad.detach().clone()
+
+        residual.zero_grad(set_to_none=True)
+        with torch.no_grad():
+            residual.consolidation_gradient_scale.fill_(1.0)
+        unscaled_output = residual(inputs)
+        unscaled_output.sum().backward()
+        unscaled_gradient = residual.core.rbf_weight.grad.detach().clone()
+
+        torch.testing.assert_close(scaled_output, unscaled_output)
+        torch.testing.assert_close(scaled_gradient, 0.25 * unscaled_gradient)
+
+    def test_optimizer_delta_protection_is_effective_after_adaptive_step(self) -> None:
+        residual = ResidualCorrection(
+            2,
+            1,
+            kind="kan",
+            bottleneck_features=2,
+            num_grids=3,
+            consolidation_enabled=True,
+        )
+        residual.consolidation_gradient_scale.fill_(0.1)
+        before = capture_kan_parameter_values(residual)
+        original = residual.core.rbf_weight.detach().clone()
+        with torch.no_grad():
+            residual.core.rbf_weight.add_(2.0)
+        protect_kan_parameter_updates(residual, before)
+        torch.testing.assert_close(
+            residual.core.rbf_weight,
+            original + 0.2,
+        )
 
     def test_zero_init_dynamics_residual_preserves_standard_grucell(self) -> None:
         kwargs = {

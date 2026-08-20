@@ -46,6 +46,13 @@ RESIDUAL_GRID_SIZE = 8
 RESIDUAL_INPUT_RANGE = (-2.0, 2.0)
 RESIDUAL_RMS_NORM_EPSILON = 1e-4
 RESIDUAL_ALPHA = 0.1
+RESIDUAL_MODULE_COUNT = 8
+RESIDUAL_CORE_PARAMETERS = 32_768
+RESIDUAL_CONSOLIDATION_BATCHES = 16
+RESIDUAL_CONSOLIDATION_IMAGINATION_HORIZON = 8
+RESIDUAL_CONSOLIDATION_GRADIENT_POWER = 2.0
+RESIDUAL_CONSOLIDATION_MIN_PLASTICITY = 0.01
+RESIDUAL_CONSOLIDATION_ANCHOR_LOSS_SCALE = 1.0
 PROTOCOLS = {
     "v1": {
         "protocol": "KARROW-FrozenCore-v1-Atari",
@@ -98,6 +105,39 @@ PROTOCOLS = {
             ),
         },
     },
+    "v3": {
+        "protocol": "KARROW-ReplayConsolidated-v3-Atari",
+        "observation_objective": "dinov3_posterior_feature",
+        "feature_mode": "patch_grid",
+        "patch_pool_size": DINOV3_PATCH_POOL_SIZE,
+        "patch_feature_dim": DINOV3_PATCH_FEATURE_DIM,
+        "patch_projection": "task1_pca",
+        "patch_projection_frames": DINOV3_PATCH_PROJECTION_FRAMES,
+        "feature_dim": (
+            DINOV3_PATCH_FEATURE_DIM * DINOV3_PATCH_POOL_SIZE**2
+        ),
+        "feature_loss_kind": "batch_standardized_smooth_l1",
+        "objective_description": (
+            "posterior-state batch-standardized projected spatial feature reconstruction"
+        ),
+        "prediction_state": "posterior",
+        "first_and_reset_steps_masked": False,
+        "replay_functional_consolidation": True,
+        "variants": {
+            "dino": (
+                "ARROW-DINOSpatial-v3Control-50",
+                "arrow_dino_spatial_v3_control_ar50",
+            ),
+            "mlp": (
+                "ARROW-DINOSpatial-FrozenCore-MLPRes-v3Control-50",
+                "arrow_dino_spatial_frozen_core_mlp_v3_control_ar50",
+            ),
+            "kan": (
+                "KARROW-ReplayConsolidated-50",
+                "karrow_replay_consolidated_ar50",
+            ),
+        },
+    },
 }
 VARIANT_ROLES = {
     "dino": ("frozen-representation-control", "none"),
@@ -115,7 +155,10 @@ def _parser(*, default_visual_version: str = "v1") -> argparse.ArgumentParser:
         "--visual-version",
         choices=PROTOCOLS,
         default=default_visual_version,
-        help="v1 preserves the completed CLS pilot; v2 uses spatial patch features",
+        help=(
+            "v1 preserves the CLS pilot; v2 uses spatial patch features; "
+            "v3 adds replay-guided incremental KAN consolidation"
+        ),
     )
     parser.add_argument("--seed", type=int, choices=range(5), default=0)
     parser.add_argument("--curriculum", choices=CURRICULUM_DIRS, default="original")
@@ -270,6 +313,10 @@ def _resolved_config(
     training_epochs: int,
 ) -> dict:
     config = json.loads(json.dumps(source))
+    uses_replay_consolidation = bool(
+        visual_protocol.get("replay_functional_consolidation", False)
+        and residual_correction == "kan"
+    )
     config.update(
         {
             "epochs": training_epochs,
@@ -298,6 +345,22 @@ def _resolved_config(
             "residual_input_max": RESIDUAL_INPUT_RANGE[1],
             "residual_rms_norm_epsilon": RESIDUAL_RMS_NORM_EPSILON,
             "residual_alpha": RESIDUAL_ALPHA,
+            "residual_consolidation": (
+                "replay_functional" if uses_replay_consolidation else "none"
+            ),
+            "residual_consolidation_batches": RESIDUAL_CONSOLIDATION_BATCHES,
+            "residual_consolidation_imagination_horizon": (
+                RESIDUAL_CONSOLIDATION_IMAGINATION_HORIZON
+            ),
+            "residual_consolidation_gradient_power": (
+                RESIDUAL_CONSOLIDATION_GRADIENT_POWER
+            ),
+            "residual_consolidation_min_plasticity": (
+                RESIDUAL_CONSOLIDATION_MIN_PLASTICITY
+            ),
+            "residual_consolidation_anchor_loss_scale": (
+                RESIDUAL_CONSOLIDATION_ANCHOR_LOSS_SCALE
+            ),
             "shared_core_mode": (
                 "freeze_after_first_task"
                 if residual_correction != "none"
@@ -351,6 +414,8 @@ def main(*, default_visual_version: str = "v1") -> int:
     output_prefix = str(output_prefix)
     method = str(method)
     role = str(role)
+    if config["residual_consolidation"] == "replay_functional":
+        role = "primary-replay-consolidated-method"
     if args.task_prefix_length is not None:
         output_prefix += f"_t{args.task_prefix_length}_pilot"
         method += f"-T{args.task_prefix_length}Pilot"
@@ -506,9 +571,73 @@ def main(*, default_visual_version: str = "v1") -> int:
             "grid_trainable": False if args.variant == "kan" else None,
             "alpha": RESIDUAL_ALPHA,
             "zero_initialized_output": True,
-            "matched_core_parameters": 32_768,
+            "matched_core_parameters": RESIDUAL_CORE_PARAMETERS,
             "task_specific_parameters": False,
             "task_id_or_router": False,
+            "coordinate_map_frozen_after_task_1": (
+                config["residual_consolidation"] == "replay_functional"
+            ),
+            "consolidation_state_storage_bytes": (
+                RESIDUAL_MODULE_COUNT
+                * (3 * RESIDUAL_CORE_PARAMETERS * 4 + 4 + 8 + 1)
+                if args.variant == "kan"
+                and config["residual_consolidation"] == "replay_functional"
+                else 0
+            ),
+        },
+        "residual_consolidation": {
+            "mode": config["residual_consolidation"],
+            "boundary_timing": (
+                "before collecting the next task"
+                if config["residual_consolidation"] == "replay_functional"
+                else None
+            ),
+            "importance": (
+                "squared local output Jacobian per Gaussian RBF coefficient"
+                if config["residual_consolidation"] == "replay_functional"
+                else None
+            ),
+            "replay_batches": (
+                RESIDUAL_CONSOLIDATION_BATCHES
+                if config["residual_consolidation"] == "replay_functional"
+                else 0
+            ),
+            "deterministic_imagination_horizon": (
+                RESIDUAL_CONSOLIDATION_IMAGINATION_HORIZON
+                if config["residual_consolidation"] == "replay_functional"
+                else 0
+            ),
+            "gradient_power": (
+                RESIDUAL_CONSOLIDATION_GRADIENT_POWER
+                if config["residual_consolidation"] == "replay_functional"
+                else None
+            ),
+            "minimum_plasticity": (
+                RESIDUAL_CONSOLIDATION_MIN_PLASTICITY
+                if config["residual_consolidation"] == "replay_functional"
+                else None
+            ),
+            "post_adam_parameter_delta_scaling": (
+                config["residual_consolidation"] == "replay_functional"
+            ),
+            "anchor_loss_scale": (
+                RESIDUAL_CONSOLIDATION_ANCHOR_LOSS_SCALE
+                if config["residual_consolidation"] == "replay_functional"
+                else None
+            ),
+            "boundary_importance_accumulator_peak_bytes": (
+                RESIDUAL_MODULE_COUNT * RESIDUAL_CORE_PARAMETERS * 4
+                if config["residual_consolidation"] == "replay_functional"
+                else 0
+            ),
+            "post_adam_delta_snapshot_peak_bytes": (
+                6 * RESIDUAL_CORE_PARAMETERS * 4
+                if config["residual_consolidation"] == "replay_functional"
+                else 0
+            ),
+            "extra_environment_interactions": 0,
+            "extra_gradient_updates": 0,
+            "training_rng_restored_after_estimation": True,
         },
         "shared_core": {
             "mode": config["shared_core_mode"],
@@ -530,16 +659,20 @@ def main(*, default_visual_version: str = "v1") -> int:
                 else []
             ),
             "trainable_after_freeze": (
-                [
-                    "dynamics residual",
-                    "posterior residual",
-                    "prior residual",
-                    "reward residual",
-                    "continue residual",
-                    "feature-prediction residual",
-                    "actor residual",
-                    "critic residual",
-                ]
+                (
+                    ["Gaussian RBF coefficients in each residual"]
+                    if config["residual_consolidation"] == "replay_functional"
+                    else [
+                        "dynamics residual",
+                        "posterior residual",
+                        "prior residual",
+                        "reward residual",
+                        "continue residual",
+                        "feature-prediction residual",
+                        "actor residual",
+                        "critic residual",
+                    ]
+                )
                 if args.variant != "dino"
                 else []
             ),
