@@ -22,8 +22,8 @@ ablations at different stages of evidence:
   single-task acquisition check rather than a retention result;
 - the implementation-ready native `R2Dreamer-ARROW-50` route, which uses the
   upstream R2-Dreamer size12M model and optimizer with ARROW-50 replay;
-- the implementation-ready `KARROW-FrozenCore-v1` route and its frozen-DINO and
-  parameter-matched MLP controls; target-GPU smoke testing is still pending;
+- the completed negative `KARROW-FrozenCore-v1` two-task pilot and the
+  implementation-ready spatial-patch posterior correction in v2;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -171,9 +171,36 @@ python scripts/run_karrow_ar50_atari.py \
   --dry-run
 ```
 
-This is an implemented hypothesis, not a positive result. Its equations,
-freeze timing, byte-accounted feature cache, controls, diagnostics, and claim
-limits are frozen in `docs/protocols/karrow_v1_atari.md`.
+The completed seed-0 two-task pilot is a negative diagnostic: its CLS cosine
+target admitted an almost constant solution and Task 1 acquisition was weak.
+Its equations and claim limits remain frozen in
+`docs/protocols/karrow_v1_atari.md`.
+
+## Corrected visual path: KARROW-SpatialFrozenCore-v2
+
+V2 excludes CLS and register tokens, pools the final DINOv3 patch grid to
+`4 x 4`. Before the first world-model update, it fits a 384-to-64 PCA channel
+projection on 512 uniformly sampled frames from the initial random Task-1
+collection, then freezes that projection permanently. The RSSM posterior
+reconstructs the resulting 1,024 frozen spatial features. Batch-standardized
+SmoothL1 makes a constant feature prediction an explicit nonzero baseline. The
+original Dreamer KL trains the prior; v2 does not reuse the collapsed prior-only
+cosine target.
+
+The v1 launcher keeps its old default. Use the separate v2 launcher for the new
+acquisition screen:
+
+```bash
+python scripts/run_karrow_spatial_ar50_atari.py \
+  --variant dino \
+  --task-prefix-length 1 \
+  --seed 0 \
+  --dry-run
+```
+
+The float16 spatial sidecar occupies `1,073,741,824` bytes, so a target-GPU
+memory smoke is required before training. See
+`docs/protocols/karrow_spatial_v2_atari.md`.
 
 ## Actor ablation: ARROW-KANActor-50
 

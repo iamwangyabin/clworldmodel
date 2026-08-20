@@ -82,6 +82,21 @@ documented here, covered by focused parity tests, and followed by regenerating
     logits, latent-prior logits, reward, continuation, and feature prediction so
     new tasks retain a plastic path after the shared core is frozen. The default
     ARROW and DINO-only paths remain unchanged.
+21. Add the separately named opt-in `dinov3_posterior_feature` observation path
+    for `KARROW-SpatialFrozenCore-v2`. The project-owned frozen encoder excludes
+    CLS and register tokens and pools the native patch grid to `4 x 4`. Before
+    the first world-model update, 512 uniformly selected frames from the initial
+    random Task-1 collection fit one 384-to-64 PCA channel projection, which is
+    then frozen and stored in checkpoints. The resulting 1,024-dimensional
+    float16 sidecar follows the unchanged ARROW write and sample decisions. The
+    feature head reconstructs stopped spatial targets from posterior RSSM states
+    with batch-standardized SmoothL1 and logs a constant-prediction baseline.
+    The completed v1 prior/CLS/cosine behavior remains selectable and unchanged.
+    Focused tests cover token selection, spatial pooling and learned projection,
+    constant-shortcut rejection, target stop-gradient, configuration isolation,
+    and byte accounting. Rollout access to optional reward and continuation
+    residuals defaults to none, preserving the pre-residual WorldModel test
+    interface without changing production behavior.
 
 ## Known issues at import
 

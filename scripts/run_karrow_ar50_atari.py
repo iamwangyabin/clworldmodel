@@ -31,44 +31,92 @@ from run_arrow_ar50_atari import (
 
 
 DINOV3_MODEL_ID = "facebook/dinov3-vits16-pretrain-lvd1689m"
-DINOV3_FEATURE_DIM = 384
+DINOV3_TOKEN_FEATURES = 384
 DINOV3_INPUT_SIZE = 256
 DINOV3_MAX_BATCH_SIZE = 128
 DINOV3_CACHE_DTYPE = "float16"
 DINOV3_FEATURE_LOSS_SCALE = 1.0
+DINOV3_PATCH_POOL_SIZE = 4
+DINOV3_PATCH_FEATURE_DIM = 64
+DINOV3_PATCH_PROJECTION_FRAMES = 512
+DINOV3_FEATURE_STD_FLOOR = 0.05
 DINOV3_DEPENDENCIES = {"transformers": "4.57.1", "safetensors": "0.6.2"}
 RESIDUAL_BOTTLENECK_FEATURES = 64
 RESIDUAL_GRID_SIZE = 8
 RESIDUAL_INPUT_RANGE = (-2.0, 2.0)
 RESIDUAL_RMS_NORM_EPSILON = 1e-4
 RESIDUAL_ALPHA = 0.1
-VARIANTS = {
-    "dino": {
-        "method": "ARROW-DINO-50",
-        "role": "frozen-representation-control",
-        "residual_correction": "none",
-        "output_prefix": "arrow_dino_ar50",
+PROTOCOLS = {
+    "v1": {
+        "protocol": "KARROW-FrozenCore-v1-Atari",
+        "observation_objective": "dinov3_next_feature",
+        "feature_mode": "cls",
+        "patch_pool_size": DINOV3_PATCH_POOL_SIZE,
+        "patch_feature_dim": DINOV3_TOKEN_FEATURES,
+        "patch_projection": "none",
+        "patch_projection_frames": 0,
+        "feature_dim": DINOV3_TOKEN_FEATURES,
+        "feature_loss_kind": "cosine",
+        "objective_description": "one-step prior-state cosine feature prediction",
+        "prediction_state": "one-step prior",
+        "first_and_reset_steps_masked": True,
+        "variants": {
+            "dino": ("ARROW-DINO-50", "arrow_dino_ar50"),
+            "mlp": (
+                "ARROW-DINO-FrozenCore-MLPRes-50",
+                "arrow_dino_frozen_core_mlp_residual_ar50",
+            ),
+            "kan": ("KARROW-FrozenCore-50", "karrow_frozen_core_ar50"),
+        },
     },
-    "mlp": {
-        "method": "ARROW-DINO-FrozenCore-MLPRes-50",
-        "role": "parameter-matched-frozen-core-control",
-        "residual_correction": "mlp",
-        "output_prefix": "arrow_dino_frozen_core_mlp_residual_ar50",
+    "v2": {
+        "protocol": "KARROW-SpatialFrozenCore-v2-Atari",
+        "observation_objective": "dinov3_posterior_feature",
+        "feature_mode": "patch_grid",
+        "patch_pool_size": DINOV3_PATCH_POOL_SIZE,
+        "patch_feature_dim": DINOV3_PATCH_FEATURE_DIM,
+        "patch_projection": "task1_pca",
+        "patch_projection_frames": DINOV3_PATCH_PROJECTION_FRAMES,
+        "feature_dim": (
+            DINOV3_PATCH_FEATURE_DIM * DINOV3_PATCH_POOL_SIZE**2
+        ),
+        "feature_loss_kind": "batch_standardized_smooth_l1",
+        "objective_description": (
+            "posterior-state batch-standardized projected spatial feature reconstruction"
+        ),
+        "prediction_state": "posterior",
+        "first_and_reset_steps_masked": False,
+        "variants": {
+            "dino": ("ARROW-DINOSpatial-50", "arrow_dino_spatial_ar50"),
+            "mlp": (
+                "ARROW-DINOSpatial-FrozenCore-MLPRes-50",
+                "arrow_dino_spatial_frozen_core_mlp_residual_ar50",
+            ),
+            "kan": (
+                "KARROW-SpatialFrozenCore-50",
+                "karrow_spatial_frozen_core_ar50",
+            ),
+        },
     },
-    "kan": {
-        "method": "KARROW-FrozenCore-50",
-        "role": "primary-frozen-core-method",
-        "residual_correction": "kan",
-        "output_prefix": "karrow_frozen_core_ar50",
-    },
+}
+VARIANT_ROLES = {
+    "dino": ("frozen-representation-control", "none"),
+    "mlp": ("parameter-matched-frozen-core-control", "mlp"),
+    "kan": ("primary-frozen-core-method", "kan"),
 }
 
 
-def _parser() -> argparse.ArgumentParser:
+def _parser(*, default_visual_version: str = "v1") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Launch KARROW Frozen-Core or a matched frozen-DINO control"
     )
-    parser.add_argument("--variant", choices=VARIANTS, default="kan")
+    parser.add_argument("--variant", choices=VARIANT_ROLES, default="kan")
+    parser.add_argument(
+        "--visual-version",
+        choices=PROTOCOLS,
+        default=default_visual_version,
+        help="v1 preserves the completed CLS pilot; v2 uses spatial patch features",
+    )
     parser.add_argument("--seed", type=int, choices=range(5), default=0)
     parser.add_argument("--curriculum", choices=CURRICULUM_DIRS, default="original")
     parser.add_argument(
@@ -117,7 +165,7 @@ def _model_artifact_manifest(model_path: Path) -> dict[str, object]:
     if not config_path.is_file():
         raise FileNotFoundError(f"DINOv3 config is missing: {config_path}")
     model_config = json.loads(config_path.read_text(encoding="utf-8"))
-    if model_config.get("hidden_size") != DINOV3_FEATURE_DIM:
+    if model_config.get("hidden_size") != DINOV3_TOKEN_FEATURES:
         raise ValueError(
             "KARROW Frozen-Core requires the 384-dimensional DINOv3 ViT-S model"
         )
@@ -142,7 +190,8 @@ def _model_artifact_manifest(model_path: Path) -> dict[str, object]:
     return {
         "model_id": DINOV3_MODEL_ID,
         "local_path": str(model_path),
-        "feature_dim": DINOV3_FEATURE_DIM,
+        "feature_dim": DINOV3_TOKEN_FEATURES,
+        "token_features": DINOV3_TOKEN_FEATURES,
         "files": files,
         "total_bytes": sum(int(item["size_bytes"]) for item in files),
         "license": "DINOv3 License",
@@ -150,18 +199,23 @@ def _model_artifact_manifest(model_path: Path) -> dict[str, object]:
     }
 
 
-def _feature_cache_budget(config: dict, *, dtype: str) -> dict[str, object]:
+def _feature_cache_budget(
+    config: dict,
+    *,
+    dtype: str,
+    feature_dim: int,
+) -> dict[str, object]:
     bytes_per_element = {"float16": 2, "float32": 4}[dtype]
     transitions_per_buffer = config["data_t"] * config["data_n_max"]
     bytes_per_buffer = (
-        transitions_per_buffer * DINOV3_FEATURE_DIM * bytes_per_element
+        transitions_per_buffer * feature_dim * bytes_per_element
     )
     replay_devices = {
         item["rb_type"]: item["rb_device"] for item in config["replay_buffers"]
     }
     return {
         "dtype": dtype,
-        "feature_dim": DINOV3_FEATURE_DIM,
+        "feature_dim": feature_dim,
         "bytes_per_element": bytes_per_element,
         "storage_bytes": 2 * bytes_per_buffer,
         "buffers": {
@@ -211,6 +265,7 @@ def _resolved_config(
     source: dict,
     *,
     model_path: Path,
+    visual_protocol: dict[str, object],
     residual_correction: str,
     training_epochs: int,
 ) -> dict:
@@ -218,13 +273,22 @@ def _resolved_config(
     config.update(
         {
             "epochs": training_epochs,
-            "observation_objective": "dinov3_next_feature",
+            "observation_objective": visual_protocol["observation_objective"],
             "observation_encoder": "dinov3_vits16",
             "dinov3_model_path": str(model_path),
             "dinov3_input_size": DINOV3_INPUT_SIZE,
             "dinov3_max_batch_size": DINOV3_MAX_BATCH_SIZE,
             "dinov3_feature_cache_dtype": DINOV3_CACHE_DTYPE,
             "dinov3_feature_loss_scale": DINOV3_FEATURE_LOSS_SCALE,
+            "dinov3_feature_mode": visual_protocol["feature_mode"],
+            "dinov3_patch_pool_size": visual_protocol["patch_pool_size"],
+            "dinov3_patch_feature_dim": visual_protocol["patch_feature_dim"],
+            "dinov3_patch_projection": visual_protocol["patch_projection"],
+            "dinov3_patch_projection_frames": visual_protocol[
+                "patch_projection_frames"
+            ],
+            "dinov3_feature_loss_kind": visual_protocol["feature_loss_kind"],
+            "dinov3_feature_std_floor": DINOV3_FEATURE_STD_FLOOR,
             "actor_network": "mlp",
             "fresh_ac": False,
             "residual_correction": residual_correction,
@@ -244,8 +308,8 @@ def _resolved_config(
     return config
 
 
-def main() -> int:
-    parser = _parser()
+def main(*, default_visual_version: str = "v1") -> int:
+    parser = _parser(default_visual_version=default_visual_version)
     args = parser.parse_args()
     if args.dinov3_model_path is None:
         parser.error(
@@ -267,7 +331,9 @@ def main() -> int:
     source_config = _verify_primary_config(
         source_config_path, args.curriculum, args.seed
     )
-    variant = VARIANTS[args.variant]
+    visual_protocol = PROTOCOLS[args.visual_version]
+    role, residual_correction = VARIANT_ROLES[args.variant]
+    method, output_prefix = visual_protocol["variants"][args.variant]
     swap_sched = source_config["esc"]["kwargs"]["swap_sched"]
     training_epochs = (
         source_config["epochs"]
@@ -277,13 +343,14 @@ def main() -> int:
     config = _resolved_config(
         source_config,
         model_path=model_path,
-        residual_correction=variant["residual_correction"],
+        visual_protocol=visual_protocol,
+        residual_correction=residual_correction,
         training_epochs=training_epochs,
     )
 
-    output_prefix = str(variant["output_prefix"])
-    method = str(variant["method"])
-    role = str(variant["role"])
+    output_prefix = str(output_prefix)
+    method = str(method)
+    role = str(role)
     if args.task_prefix_length is not None:
         output_prefix += f"_t{args.task_prefix_length}_pilot"
         method += f"-T{args.task_prefix_length}Pilot"
@@ -352,7 +419,7 @@ def main() -> int:
     launch = {
         "method": method,
         "role": role,
-        "protocol": "KARROW-FrozenCore-v1-Atari",
+        "protocol": visual_protocol["protocol"],
         "started_at_utc": None,
         "project_git": project_git,
         "upstream_arrow_commit": UPSTREAM_COMMIT,
@@ -362,6 +429,7 @@ def main() -> int:
         "output_dir": str(output_dir),
         "analysis_snapshot_dir": str(snapshot_dir),
         "variant": args.variant,
+        "visual_version": args.visual_version,
         "curriculum": args.curriculum,
         "seed_id": args.seed,
         "seed": SEEDS[args.seed],
@@ -382,20 +450,37 @@ def main() -> int:
             "encoder": "frozen DINOv3 ViT-S/16",
             "model_artifact": model_artifact,
             "input_size": DINOV3_INPUT_SIZE,
-            "feature_dim": DINOV3_FEATURE_DIM,
+            "feature_mode": visual_protocol["feature_mode"],
+            "patch_pool_size": visual_protocol["patch_pool_size"],
+            "patch_feature_dim": visual_protocol["patch_feature_dim"],
+            "patch_projection": visual_protocol["patch_projection"],
+            "patch_projection_frames": visual_protocol[
+                "patch_projection_frames"
+            ],
+            "patch_projection_fit": (
+                "closed-form PCA before the first world-model update"
+                if visual_protocol["patch_projection"] == "task1_pca"
+                else None
+            ),
+            "feature_dim": visual_protocol["feature_dim"],
             "preprocessing": {
                 "resize": [DINOV3_INPUT_SIZE, DINOV3_INPUT_SIZE],
                 "mean": [0.485, 0.456, 0.406],
                 "std": [0.229, 0.224, 0.225],
             },
             "pixel_decoder": False,
-            "objective": "one-step prior-state cosine feature prediction",
+            "objective": visual_protocol["objective_description"],
+            "prediction_state": visual_protocol["prediction_state"],
+            "feature_loss_kind": visual_protocol["feature_loss_kind"],
             "feature_loss_scale": DINOV3_FEATURE_LOSS_SCALE,
+            "feature_std_floor": DINOV3_FEATURE_STD_FLOOR,
             "target_gradient": "stopped",
-            "first_and_reset_steps_masked": True,
+            "first_and_reset_steps_masked": visual_protocol[
+                "first_and_reset_steps_masked"
+            ],
         },
         "residuals": {
-            "kind": variant["residual_correction"],
+            "kind": residual_correction,
             "placements": (
                 []
                 if args.variant == "dino"
@@ -463,7 +548,9 @@ def main() -> int:
             "capacity_and_sampling": "ARROW-50 unchanged",
             "base_storage": _arrow_replay_storage_budget(source_config),
             "feature_cache": _feature_cache_budget(
-                source_config, dtype=DINOV3_CACHE_DTYPE
+                source_config,
+                dtype=DINOV3_CACHE_DTYPE,
+                feature_dim=int(visual_protocol["feature_dim"]),
             ),
         },
         "determinism": {

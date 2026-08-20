@@ -19,7 +19,12 @@ from vae import Decoder
 
 RewardT = torch.Tensor
 RewardSymlogT = torch.Tensor
-ObservationObjective = Literal["reconstruction", "r2", "dinov3_next_feature"]
+ObservationObjective = Literal[
+    "reconstruction",
+    "r2",
+    "dinov3_next_feature",
+    "dinov3_posterior_feature",
+]
 # RewardT (real): [ N 1 ]
 # RewardSymlogT (symlog(real)): [ N 1 ]
 
@@ -42,6 +47,46 @@ def symexp(x: torch.Tensor) -> torch.Tensor:
     return x.sign() * (x.abs().exp() - 1)
 
 
+def batch_standardized_smooth_l1(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    std_floor: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Match sample-wise feature variation without rewarding a common direction."""
+    if predictions.shape != targets.shape:
+        raise ValueError("Feature predictions and targets must have equal shapes")
+    if predictions.ndim < 2:
+        raise ValueError("Feature matching requires sample and feature dimensions")
+    if std_floor <= 0:
+        raise ValueError("Feature standard-deviation floor must be positive")
+
+    targets = targets.detach().float()
+    predictions = predictions.float()
+    reduce_dims = tuple(range(targets.ndim - 1))
+    target_mean = targets.mean(dim=reduce_dims, keepdim=True)
+    prediction_mean = predictions.mean(dim=reduce_dims, keepdim=True)
+    target_std = targets.std(dim=reduce_dims, unbiased=False, keepdim=True).clamp_min(
+        std_floor
+    )
+    prediction_std = predictions.std(
+        dim=reduce_dims, unbiased=False, keepdim=True
+    ).clamp_min(std_floor)
+    standardized_targets = (targets - target_mean) / target_std
+    standardized_predictions = (predictions - prediction_mean) / prediction_std
+    losses = F.smooth_l1_loss(
+        standardized_predictions,
+        standardized_targets,
+        reduction="none",
+    ).mean(-1)
+    constant_losses = F.smooth_l1_loss(
+        torch.zeros_like(standardized_targets),
+        standardized_targets,
+        reduction="none",
+    ).mean(-1)
+    return losses, constant_losses
+
+
 class WorldModel(nn.Module):
     def __init__(
         self,
@@ -62,6 +107,12 @@ class WorldModel(nn.Module):
         dinov3_input_size: int = 256,
         dinov3_max_batch_size: int = 128,
         dinov3_feature_loss_scale: float = 1.0,
+        dinov3_feature_mode: str = "cls",
+        dinov3_patch_pool_size: int = 4,
+        dinov3_patch_feature_dim: int = 384,
+        dinov3_patch_projection: str = "none",
+        dinov3_feature_loss_kind: str = "cosine",
+        dinov3_feature_std_floor: float = 0.05,
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
         residual_grid_size: int = 8,
@@ -76,6 +127,7 @@ class WorldModel(nn.Module):
             "reconstruction",
             "r2",
             "dinov3_next_feature",
+            "dinov3_posterior_feature",
         }:
             raise ValueError(f"Unknown observation objective: {observation_objective!r}")
         if r2_barlow_loss_scale <= 0:
@@ -86,6 +138,16 @@ class WorldModel(nn.Module):
             raise ValueError("R2 normalization epsilon must be positive")
         if dinov3_feature_loss_scale <= 0:
             raise ValueError("DINOv3 feature loss scale must be positive")
+        if dinov3_feature_std_floor <= 0:
+            raise ValueError("DINOv3 feature standard-deviation floor must be positive")
+        if observation_objective == "dinov3_next_feature":
+            if dinov3_feature_loss_kind != "cosine":
+                raise ValueError("DINOv3 prior-feature prediction requires cosine loss")
+        elif observation_objective == "dinov3_posterior_feature":
+            if dinov3_feature_loss_kind != "batch_standardized_smooth_l1":
+                raise ValueError(
+                    "DINOv3 posterior features require batch-standardized SmoothL1"
+                )
 
         self.ls = ls
         self.a_dim = a_dim
@@ -95,6 +157,8 @@ class WorldModel(nn.Module):
         self.r2_redundancy_scale = r2_redundancy_scale
         self.r2_normalization_eps = r2_normalization_eps
         self.dinov3_feature_loss_scale = dinov3_feature_loss_scale
+        self.dinov3_feature_loss_kind = dinov3_feature_loss_kind
+        self.dinov3_feature_std_floor = dinov3_feature_std_floor
         self.residual_correction = residual_correction
 
         self.rssm = Rssm(
@@ -110,6 +174,10 @@ class WorldModel(nn.Module):
             dinov3_model_path=dinov3_model_path,
             dinov3_input_size=dinov3_input_size,
             dinov3_max_batch_size=dinov3_max_batch_size,
+            dinov3_feature_mode=dinov3_feature_mode,
+            dinov3_patch_pool_size=dinov3_patch_pool_size,
+            dinov3_patch_feature_dim=dinov3_patch_feature_dim,
+            dinov3_patch_projection=dinov3_patch_projection,
             residual_correction=residual_correction,
             residual_bottleneck_features=residual_bottleneck_features,
             residual_grid_size=residual_grid_size,
@@ -200,7 +268,11 @@ class WorldModel(nn.Module):
                 rms_norm_epsilon=residual_rms_norm_epsilon,
                 alpha=residual_alpha,
             )
-        if observation_objective == "dinov3_next_feature" and residual_correction != "none":
+        if (
+            observation_objective
+            in {"dinov3_next_feature", "dinov3_posterior_feature"}
+            and residual_correction != "none"
+        ):
             from clworldmodel.models.residual_corrections import build_residual_correction
 
             self.feature_predictor_residual = build_residual_correction(
@@ -251,7 +323,11 @@ class WorldModel(nn.Module):
         init_z, init_h = self.rssm.initial_state(n)
         # Shift actions and xs, since RSSM takes (prev_action, next_obs)
         embeddings = None
-        if self.observation_objective in {"r2", "dinov3_next_feature"}:
+        if self.observation_objective in {
+            "r2",
+            "dinov3_next_feature",
+            "dinov3_posterior_feature",
+        }:
             embeddings = (
                 self.rssm.embed_observations(xs)
                 if observation_features is None
@@ -263,7 +339,10 @@ class WorldModel(nn.Module):
                 )
             if embeddings.shape[-1] != self.rssm.image_embedder.output_size:
                 raise ValueError("Observation features have an unexpected width")
-            if self.observation_objective == "dinov3_next_feature":
+            if self.observation_objective in {
+                "dinov3_next_feature",
+                "dinov3_posterior_feature",
+            }:
                 embeddings = embeddings.detach()
             z_posts, z_samples, hiddens = self.rssm.observe_embeddings(
                 init_z, actions, init_h, embeddings, resets
@@ -312,7 +391,7 @@ class WorldModel(nn.Module):
                 "Metric/r2_invariance": invariance_loss,
                 "Metric/r2_redundancy": redundancy_loss,
             }
-        else:
+        elif self.observation_objective == "dinov3_next_feature":
             if embeddings is None:
                 raise RuntimeError("DINOv3 objective requires frozen observation features")
             prior_states = self.zh_transform(z_priors.exp(), hiddens)
@@ -341,6 +420,33 @@ class WorldModel(nn.Module):
                 "Loss/dinov3_feature": feature_loss,
                 "Loss/dinov3_feature_scaled": observation_loss,
                 "Metric/dinov3_feature_valid_fraction": prediction_mask.float().mean(),
+            }
+        else:
+            if embeddings is None:
+                raise RuntimeError("DINOv3 objective requires frozen observation features")
+            predicted_features = self.feature_predictor(zhs)
+            if self.feature_predictor_residual is not None:
+                predicted_features = predicted_features + self.feature_predictor_residual(
+                    zhs
+                )
+            feature_losses, constant_losses = batch_standardized_smooth_l1(
+                predicted_features,
+                embeddings,
+                std_floor=self.dinov3_feature_std_floor,
+            )
+            feature_loss = feature_losses.mean()
+            constant_loss = constant_losses.mean()
+            observation_loss = self.dinov3_feature_loss_scale * feature_loss
+            observation_metrics = {
+                "Loss/dinov3_feature": feature_loss,
+                "Loss/dinov3_feature_scaled": observation_loss,
+                "Metric/dinov3_feature_valid_fraction": torch.ones(
+                    (), device=feature_loss.device
+                ),
+                "Metric/dinov3_constant_feature_loss": constant_loss,
+                "Metric/dinov3_model_to_constant_ratio": (
+                    feature_loss / constant_loss.clamp_min(1e-8)
+                ),
             }
 
         rews_pred = self.reward_fc(zhs)  # [ T N 1 ]

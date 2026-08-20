@@ -38,7 +38,7 @@ if torch is not None:
     from config import Config
     from replay import FifoReplay, LongTermReplay, MultiTypeReplay
     from rssm import Recurrent
-    from wm import WorldModel
+    from wm import WorldModel, batch_standardized_smooth_l1
 
 
 @unittest.skipIf(torch is None, "requires the pinned PyTorch experiment environment")
@@ -97,6 +97,41 @@ class KarrowMethodTests(unittest.TestCase):
         invalid = self._karrow_config_data()
         invalid["fresh_ac"] = 10
         with self.assertRaisesRegex(ValueError, "persistent actor-critic"):
+            Config.from_dict(invalid)
+
+    def test_config_isolates_spatial_patch_v2_from_completed_cls_v1(self) -> None:
+        spatial = self._karrow_config_data("kan")
+        spatial.update(
+            {
+                "observation_objective": "dinov3_posterior_feature",
+                "dinov3_feature_mode": "patch_grid",
+                "dinov3_patch_pool_size": 4,
+                "dinov3_patch_feature_dim": 64,
+                "dinov3_patch_projection": "task1_pca",
+                "dinov3_patch_projection_frames": 512,
+                "dinov3_feature_loss_kind": "batch_standardized_smooth_l1",
+                "dinov3_feature_std_floor": 0.05,
+            }
+        )
+        config = Config.from_dict(spatial)
+        self.assertEqual(config.observation_objective, "dinov3_posterior_feature")
+        self.assertEqual(config.dinov3_feature_mode, "patch_grid")
+        self.assertEqual(config.dinov3_patch_feature_dim, 64)
+        self.assertEqual(config.dinov3_patch_projection, "task1_pca")
+
+        invalid = spatial.copy()
+        invalid["dinov3_feature_mode"] = "cls"
+        with self.assertRaisesRegex(ValueError, "spatial v2"):
+            Config.from_dict(invalid)
+
+        invalid = spatial.copy()
+        invalid["dinov3_patch_feature_dim"] = 384
+        with self.assertRaisesRegex(ValueError, "64 dimensions"):
+            Config.from_dict(invalid)
+
+        invalid = self._karrow_config_data("kan")
+        invalid["dinov3_feature_mode"] = "patch_grid"
+        with self.assertRaisesRegex(ValueError, "v1"):
             Config.from_dict(invalid)
 
     def test_kan_and_mlp_cores_are_exactly_parameter_matched(self) -> None:
@@ -242,6 +277,102 @@ class KarrowMethodTests(unittest.TestCase):
         self.assertFalse(backbone.training)
         self.assertTrue(all(not parameter.requires_grad for parameter in encoder.parameters()))
 
+    def test_frozen_encoder_uses_pooled_patch_tokens_not_cls_or_registers(self) -> None:
+        class FakeBackbone(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.config = SimpleNamespace(
+                    hidden_size=384,
+                    patch_size=16,
+                    num_register_tokens=2,
+                )
+                self.scale = nn.Parameter(torch.tensor(1.0))
+
+            def forward(self, *, pixel_values: torch.Tensor) -> SimpleNamespace:
+                batch = pixel_values.shape[0]
+                cls = torch.full((batch, 1, 384), -100.0, device=pixel_values.device)
+                registers = torch.full(
+                    (batch, 2, 384), -200.0, device=pixel_values.device
+                )
+                patch_ids = torch.arange(
+                    256, device=pixel_values.device, dtype=pixel_values.dtype
+                ).view(1, 256, 1)
+                patches = (patch_ids * self.scale).expand(batch, -1, 384)
+                return SimpleNamespace(
+                    last_hidden_state=torch.cat((cls, registers, patches), dim=1)
+                )
+
+        encoder = FrozenDinoV3Encoder(
+            None,
+            input_size=256,
+            feature_mode="patch_grid",
+            patch_pool_size=4,
+            patch_feature_dim=64,
+            patch_projection="task1_pca",
+            backbone=FakeBackbone(),
+        )
+        images = torch.rand(2, 3, 64, 64)
+        raw_features = encoder.extract_patch_features(images)
+        self.assertEqual(raw_features.shape, (2, 4, 4, 384))
+        self.assertTrue(encoder.requires_projection_fit)
+        with self.assertRaisesRegex(RuntimeError, "Fit the Task-1"):
+            encoder(images)
+
+        torch.manual_seed(41)
+        calibration = torch.randn(8, 4, 4, 384)
+        metadata = encoder.fit_patch_projection(calibration)
+        self.assertEqual(metadata["calibration_patch_samples"], 128)
+        self.assertFalse(encoder.requires_projection_fit)
+
+        output = encoder(images)
+        self.assertEqual(output.shape, (2, 4 * 4 * 64))
+        grid = output.view(2, 4, 4, 64)
+        source = torch.arange(256, dtype=grid.dtype).view(1, 1, 16, 16)
+        expected = torch.nn.functional.adaptive_avg_pool2d(source, (4, 4))[0, 0]
+        torch.testing.assert_close(raw_features[0, :, :, 0], expected)
+        torch.testing.assert_close(
+            grid, encoder.project_patch_features(raw_features),
+        )
+        gram = encoder.patch_projection.T @ encoder.patch_projection
+        torch.testing.assert_close(gram, torch.eye(64), atol=2e-5, rtol=2e-5)
+        self.assertFalse(encoder.patch_projection.requires_grad)
+
+        restored = FrozenDinoV3Encoder(
+            None,
+            input_size=256,
+            feature_mode="patch_grid",
+            patch_pool_size=4,
+            patch_feature_dim=64,
+            patch_projection="task1_pca",
+            backbone=FakeBackbone(),
+        )
+        restored.load_state_dict(encoder.state_dict())
+        self.assertFalse(restored.requires_projection_fit)
+        torch.testing.assert_close(restored(images), output)
+
+    def test_standardized_feature_loss_rejects_constant_shortcut(self) -> None:
+        targets = torch.tensor(
+            [
+                [[-2.0, 1.0], [0.0, 3.0]],
+                [[2.0, 5.0], [4.0, 7.0]],
+            ],
+            requires_grad=True,
+        )
+        perfect, constant = batch_standardized_smooth_l1(
+            targets.detach().clone(), targets, std_floor=0.05
+        )
+        torch.testing.assert_close(perfect, torch.zeros_like(perfect))
+        self.assertGreater(constant.mean().item(), 0.1)
+
+        predictions = torch.zeros_like(targets, requires_grad=True)
+        losses, constant = batch_standardized_smooth_l1(
+            predictions, targets, std_floor=0.05
+        )
+        torch.testing.assert_close(losses, constant)
+        losses.mean().backward()
+        self.assertIsNone(targets.grad)
+        self.assertGreater(predictions.grad.abs().sum().item(), 0)
+
     def test_feature_objective_is_decoder_free_and_stops_target_gradient(self) -> None:
         class FakeEmbedder(nn.Module):
             output_size = 6
@@ -290,6 +421,58 @@ class KarrowMethodTests(unittest.TestCase):
         self.assertGreater(model.feature_predictor.weight.grad.abs().sum().item(), 0)
         torch.testing.assert_close(
             metrics["Metric/dinov3_feature_valid_fraction"], torch.tensor(0.5)
+        )
+
+    def test_spatial_feature_objective_reconstructs_every_posterior_state(self) -> None:
+        class FakeEmbedder(nn.Module):
+            output_size = 6
+
+            def forward(self, images: torch.Tensor) -> torch.Tensor:
+                return images.mean((2, 3)).repeat(1, 2)
+
+        torch.manual_seed(37)
+        model = WorldModel(
+            3,
+            (2, 3),
+            4,
+            5,
+            cnn_depth=2,
+            mlp_features=8,
+            mlp_layers=2,
+            observation_objective="dinov3_posterior_feature",
+            observation_encoder="dinov3_vits16",
+            dinov3_feature_loss_kind="batch_standardized_smooth_l1",
+            dinov3_feature_std_floor=0.05,
+            residual_correction="kan",
+            image_embedder=FakeEmbedder(),
+        )
+        actions = torch.nn.functional.one_hot(
+            torch.tensor([[0, 1], [2, 3], [1, 0]]), num_classes=4
+        ).float()
+        observations = torch.zeros(3, 2, 3, 64, 64)
+        features = torch.randn(3, 2, 6, requires_grad=True)
+        rewards = torch.randn(3, 2, 1)
+        continues = torch.ones(3, 2, 1)
+        resets = torch.zeros(3, 2, 1)
+        resets[1, 1] = 1
+
+        loss, metrics = model.compute_loss(
+            actions,
+            observations,
+            rewards,
+            continues,
+            resets,
+            observation_features=features,
+        )
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIsNone(features.grad)
+        self.assertGreater(model.feature_predictor.weight.grad.abs().sum().item(), 0)
+        self.assertIn("Metric/dinov3_constant_feature_loss", metrics)
+        self.assertIn("Metric/dinov3_model_to_constant_ratio", metrics)
+        torch.testing.assert_close(
+            metrics["Metric/dinov3_feature_valid_fraction"], torch.tensor(1.0)
         )
 
     def test_feature_cache_follows_arrow_write_and_sample_metadata(self) -> None:

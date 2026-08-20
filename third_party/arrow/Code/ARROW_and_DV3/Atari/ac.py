@@ -495,12 +495,14 @@ def dream_rollout(
         state = zh_to_ac_state(z, h)
         zh = wm.zh_transform(z, h)
         reward_symlog = wm.reward_fc(zh)
-        if wm.reward_residual is not None:
-            reward_symlog = reward_symlog + wm.reward_residual(zh)
+        reward_residual = getattr(wm, "reward_residual", None)
+        if reward_residual is not None:
+            reward_symlog = reward_symlog + reward_residual(zh)
         reward = symexp(reward_symlog)
         cont_logits = wm.continue_fc(zh)
-        if wm.continue_residual is not None:
-            cont = torch.sigmoid(cont_logits + wm.continue_residual(zh))
+        continue_residual = getattr(wm, "continue_residual", None)
+        if continue_residual is not None:
+            cont = torch.sigmoid(cont_logits + continue_residual(zh))
         else:
             cont = cont_logits
         if target_value is None:

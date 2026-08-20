@@ -2,8 +2,17 @@
 
 ## Status and question
 
-The implementation is ready for a target-GPU smoke test and controlled pilots.
-No performance or forgetting result is claimed yet.
+The seed-0 original-order two-task pilot completed successfully as an execution
+run and produced a negative method result. At the Task 1 boundary it reached
+`521.875 +/- 74.265` raw MsPacman return. After Task 2 it reached
+`464.375 +/- 76.809` on MsPacman and `-32.0625 +/- 23.7315` on Boxing over 16
+stochastic rollouts. This does not support a continual-learning claim.
+
+The failure begins before the shared core is frozen. The CLS cosine feature
+loss fell to about `0.004` while a constant feature predictor is already near
+that scale, and most posterior KL values remained below the free-bits threshold.
+Decision 0007 therefore preserves this protocol for reproduction and introduces
+the separately named spatial posterior-feature v2 correction.
 
 KARROW asks whether local, fixed-capacity KAN residual updates reduce RSSM and
 policy interference relative to an exactly parameter-matched MLP residual, once

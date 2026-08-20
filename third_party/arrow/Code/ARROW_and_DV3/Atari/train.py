@@ -310,6 +310,46 @@ def _encode_frozen_observation_features(
     return features.view(time, sequences, -1)
 
 
+@torch.no_grad()
+def _fit_dinov3_patch_projection(
+    wm: WorldModel,
+    observations: torch.Tensor,
+    *,
+    calibration_frames: int,
+) -> dict[str, object]:
+    """Learn one Task-1 PCA bottleneck before any world-model update."""
+    encoder = wm.rssm.image_embedder
+    if not getattr(encoder, "requires_projection_fit", False):
+        raise RuntimeError("The DINOv3 patch projection does not require fitting")
+    if observations.ndim != 5:
+        raise ValueError("Collected observations must have [time, batch, C, H, W] axes")
+    flat = observations.reshape(-1, *observations.shape[-3:])
+    if calibration_frames < 1 or calibration_frames > flat.shape[0]:
+        raise ValueError(
+            "Patch projection calibration frames must fit in the first collection"
+        )
+    indices = torch.linspace(
+        0,
+        flat.shape[0] - 1,
+        steps=calibration_frames,
+        dtype=torch.float64,
+    ).round().long()
+    try:
+        encoder_device = next(encoder.parameters()).device
+    except StopIteration:
+        encoder_device = next(wm.parameters()).device
+    calibration_images = flat.index_select(0, indices).to(encoder_device)
+    raw_patch_features = encoder.extract_patch_features(calibration_images)
+    metadata = encoder.fit_patch_projection(raw_patch_features)
+    return {
+        **metadata,
+        "calibration_frames": calibration_frames,
+        "frame_selection": "uniform over first Task-1 random collection",
+        "fit_timing": "before first world-model update",
+        "frozen_after_fit": True,
+    }
+
+
 def _restrict_optimizer_to_trainable(
     optimizer: torch.optim.Optimizer,
     module: torch.nn.Module,
@@ -430,7 +470,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--observation-objective",
-        choices=["reconstruction", "r2", "dinov3_next_feature"],
+        choices=[
+            "reconstruction",
+            "r2",
+            "dinov3_next_feature",
+            "dinov3_posterior_feature",
+        ],
         default=None,
         help="Optional world-model observation-objective override.",
     )
@@ -602,6 +647,12 @@ if __name__ == "__main__":
         dinov3_input_size=config.dinov3_input_size,
         dinov3_max_batch_size=config.dinov3_max_batch_size,
         dinov3_feature_loss_scale=config.dinov3_feature_loss_scale,
+        dinov3_feature_mode=config.dinov3_feature_mode,
+        dinov3_patch_pool_size=config.dinov3_patch_pool_size,
+        dinov3_patch_feature_dim=config.dinov3_patch_feature_dim,
+        dinov3_patch_projection=config.dinov3_patch_projection,
+        dinov3_feature_loss_kind=config.dinov3_feature_loss_kind,
+        dinov3_feature_std_floor=config.dinov3_feature_std_floor,
         residual_correction=config.residual_correction,
         residual_bottleneck_features=config.residual_bottleneck_features,
         residual_grid_size=config.residual_grid_size,
@@ -627,7 +678,10 @@ if __name__ == "__main__":
     envs = config.get_env_schedule()
     replay = config.get_replay_buffer()
     feature_cache = None
-    if config.observation_objective == "dinov3_next_feature":
+    if config.observation_objective in {
+        "dinov3_next_feature",
+        "dinov3_posterior_feature",
+    }:
         from clworldmodel.replay import ArrowFrozenFeatureCache
 
         cache_dtype = {
@@ -754,6 +808,35 @@ if __name__ == "__main__":
             )
             frozen_features = None
             if feature_cache is not None:
+                encoder = wm.rssm.image_embedder
+                if getattr(encoder, "requires_projection_fit", False):
+                    if epoch != 0 or not random_policy or global_step != 0:
+                        raise RuntimeError(
+                            "Task-1 patch PCA must be fitted before model training"
+                        )
+                    projection_metadata = _fit_dinov3_patch_projection(
+                        wm,
+                        _obss,
+                        calibration_frames=config.dinov3_patch_projection_frames,
+                    )
+                    projection_path = log_dir / "dinov3_patch_projection.json"
+                    temporary_projection_path = projection_path.with_suffix(
+                        ".json.tmp"
+                    )
+                    temporary_projection_path.write_text(
+                        json.dumps(projection_metadata, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                    os.replace(temporary_projection_path, projection_path)
+                    writer.add_scalar(
+                        "DINOv3/patch_projection_explained_variance",
+                        projection_metadata["explained_variance_ratio"],
+                        global_step,
+                    )
+                    print(
+                        "Fitted and froze Task-1 DINOv3 patch PCA: "
+                        f"{projection_metadata}"
+                    )
                 frozen_features = _encode_frozen_observation_features(
                     wm,
                     _obss,

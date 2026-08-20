@@ -89,6 +89,10 @@ class Rssm(nn.Module):
         dinov3_model_path: Optional[str] = None,
         dinov3_input_size: int = 256,
         dinov3_max_batch_size: int = 128,
+        dinov3_feature_mode: str = "cls",
+        dinov3_patch_pool_size: int = 4,
+        dinov3_patch_feature_dim: int = 384,
+        dinov3_patch_projection: str = "none",
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
         residual_grid_size: int = 8,
@@ -127,6 +131,10 @@ class Rssm(nn.Module):
                 dinov3_model_path,
                 input_size=dinov3_input_size,
                 max_batch_size=dinov3_max_batch_size,
+                feature_mode=dinov3_feature_mode,
+                patch_pool_size=dinov3_patch_pool_size,
+                patch_feature_dim=dinov3_patch_feature_dim,
+                patch_projection=dinov3_patch_projection,
             )
         else:
             raise ValueError(f"Unknown observation encoder: {observation_encoder!r}")

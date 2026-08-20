@@ -58,7 +58,11 @@ class TrainingLauncherTests(unittest.TestCase):
             )
             return json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
 
-    def _karrow_dry_run(self, *extra_args: str) -> tuple[dict, Path]:
+    def _karrow_dry_run(
+        self,
+        *extra_args: str,
+        script: str = "scripts/run_karrow_ar50_atari.py",
+    ) -> tuple[dict, Path]:
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -73,7 +77,7 @@ class TrainingLauncherTests(unittest.TestCase):
         result = subprocess.run(
             [
                 sys.executable,
-                "scripts/run_karrow_ar50_atari.py",
+                script,
                 "--seed",
                 "0",
                 "--dinov3-model-path",
@@ -185,6 +189,41 @@ class TrainingLauncherTests(unittest.TestCase):
             os.pathsep.join((str(ROOT / "src"), str(ROOT))),
         )
         self.assertFalse(launch["observation"]["pixel_decoder"])
+        self.assertFalse(output_dir.exists())
+
+    def test_karrow_spatial_v2_uses_patch_posterior_and_accounts_cache(self) -> None:
+        launch, output_dir = self._karrow_dry_run(
+            "--variant",
+            "kan",
+            "--task-prefix-length",
+            "2",
+            script="scripts/run_karrow_spatial_ar50_atari.py",
+        )
+
+        self.assertEqual(launch["method"], "KARROW-SpatialFrozenCore-50-T2Pilot")
+        self.assertEqual(launch["protocol"], "KARROW-SpatialFrozenCore-v2-Atari")
+        self.assertEqual(launch["visual_version"], "v2")
+        observation = launch["observation"]
+        self.assertEqual(observation["feature_mode"], "patch_grid")
+        self.assertEqual(observation["patch_pool_size"], 4)
+        self.assertEqual(observation["patch_feature_dim"], 64)
+        self.assertEqual(observation["patch_projection"], "task1_pca")
+        self.assertEqual(observation["patch_projection_frames"], 512)
+        self.assertEqual(
+            observation["patch_projection_fit"],
+            "closed-form PCA before the first world-model update",
+        )
+        self.assertEqual(observation["feature_dim"], 1_024)
+        self.assertEqual(observation["prediction_state"], "posterior")
+        self.assertEqual(
+            observation["feature_loss_kind"],
+            "batch_standardized_smooth_l1",
+        )
+        self.assertFalse(observation["first_and_reset_steps_masked"])
+        self.assertEqual(
+            launch["replay"]["feature_cache"]["storage_bytes"],
+            1_073_741_824,
+        )
         self.assertFalse(output_dir.exists())
 
     def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:

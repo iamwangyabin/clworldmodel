@@ -14,8 +14,16 @@ from replay import FifoReplay, LongTermReplay, MultiTypeReplay, Replay
 T = TypeVar("T", bound="Serialisable")
 
 ArrowReplayCapacityRatio = Literal["50-50", "25-75", "75-25"]
-ObservationObjective = Literal["reconstruction", "r2", "dinov3_next_feature"]
+ObservationObjective = Literal[
+    "reconstruction",
+    "r2",
+    "dinov3_next_feature",
+    "dinov3_posterior_feature",
+]
 ObservationEncoder = Literal["cnn", "dinov3_vits16"]
+DinoV3FeatureMode = Literal["cls", "patch_grid"]
+DinoV3FeatureLoss = Literal["cosine", "batch_standardized_smooth_l1"]
+DinoV3PatchProjection = Literal["none", "task1_pca"]
 ResidualCorrection = Literal["none", "mlp", "kan"]
 SharedCoreMode = Literal["trainable", "freeze_after_first_task"]
 ActorNetwork = Literal[
@@ -243,6 +251,13 @@ class Config(Serialisable):
     dinov3_max_batch_size: int = 128
     dinov3_feature_cache_dtype: Literal["float16", "float32"] = "float16"
     dinov3_feature_loss_scale: float = 1.0
+    dinov3_feature_mode: DinoV3FeatureMode = "cls"
+    dinov3_patch_pool_size: int = 4
+    dinov3_patch_feature_dim: int = 384
+    dinov3_patch_projection: DinoV3PatchProjection = "none"
+    dinov3_patch_projection_frames: int = 0
+    dinov3_feature_loss_kind: DinoV3FeatureLoss = "cosine"
+    dinov3_feature_std_floor: float = 0.05
 
     residual_correction: ResidualCorrection = "none"
     residual_bottleneck_features: int = 64
@@ -275,6 +290,7 @@ class Config(Serialisable):
             "reconstruction",
             "r2",
             "dinov3_next_feature",
+            "dinov3_posterior_feature",
         }:
             raise ValueError(
                 f"Unknown observation objective: {self.observation_objective!r}"
@@ -287,7 +303,10 @@ class Config(Serialisable):
             raise ValueError("r2_normalization_eps must be positive")
         if self.observation_encoder not in {"cnn", "dinov3_vits16"}:
             raise ValueError(f"Unknown observation encoder: {self.observation_encoder!r}")
-        uses_dinov3 = self.observation_objective == "dinov3_next_feature"
+        uses_dinov3 = self.observation_objective in {
+            "dinov3_next_feature",
+            "dinov3_posterior_feature",
+        }
         if uses_dinov3:
             if self.algorithm != "arrow":
                 raise ValueError("KARROW Frozen-Core requires ARROW mixed replay")
@@ -305,13 +324,82 @@ class Config(Serialisable):
                 raise ValueError("Unknown DINOv3 feature cache dtype")
             if self.dinov3_feature_loss_scale <= 0:
                 raise ValueError("dinov3_feature_loss_scale must be positive")
+            if self.dinov3_feature_mode not in {"cls", "patch_grid"}:
+                raise ValueError("Unknown DINOv3 feature mode")
+            if self.dinov3_patch_pool_size < 1:
+                raise ValueError("dinov3_patch_pool_size must be positive")
+            if not 1 <= self.dinov3_patch_feature_dim <= 384:
+                raise ValueError("dinov3_patch_feature_dim must be in [1, 384]")
+            if self.dinov3_patch_projection not in {"none", "task1_pca"}:
+                raise ValueError("Unknown DINOv3 patch projection")
+            if self.dinov3_patch_projection_frames < 0:
+                raise ValueError("dinov3_patch_projection_frames must be non-negative")
+            if self.dinov3_feature_loss_kind not in {
+                "cosine",
+                "batch_standardized_smooth_l1",
+            }:
+                raise ValueError("Unknown DINOv3 feature loss")
+            if self.dinov3_feature_std_floor <= 0:
+                raise ValueError("dinov3_feature_std_floor must be positive")
+            if self.observation_objective == "dinov3_next_feature":
+                if self.dinov3_feature_mode != "cls":
+                    raise ValueError("KARROW v1 fixes DINOv3 output to the CLS token")
+                if self.dinov3_feature_loss_kind != "cosine":
+                    raise ValueError("KARROW v1 fixes the feature loss to cosine")
+                if self.dinov3_patch_feature_dim != 384:
+                    raise ValueError(
+                        "KARROW v1 does not use projected patch features"
+                    )
+                if (
+                    self.dinov3_patch_projection != "none"
+                    or self.dinov3_patch_projection_frames != 0
+                ):
+                    raise ValueError("KARROW v1 does not fit a patch projection")
+            else:
+                if self.dinov3_feature_mode != "patch_grid":
+                    raise ValueError(
+                        "KARROW spatial v2 requires pooled DINOv3 patch tokens"
+                    )
+                if self.dinov3_patch_pool_size != 4:
+                    raise ValueError("KARROW spatial v2 fixes a 4x4 patch grid")
+                if self.dinov3_patch_feature_dim != 64:
+                    raise ValueError(
+                        "KARROW spatial v2 fixes each patch feature at 64 dimensions"
+                    )
+                if self.dinov3_patch_projection != "task1_pca":
+                    raise ValueError(
+                        "KARROW spatial v2 learns a Task-1 PCA patch projection"
+                    )
+                if self.dinov3_patch_projection_frames != 512:
+                    raise ValueError(
+                        "KARROW spatial v2 fits PCA on 512 initial Task-1 frames"
+                    )
+                if self.random_policy != "first":
+                    raise ValueError(
+                        "KARROW spatial v2 requires an initial random Task-1 collection"
+                    )
+                if (
+                    self.dinov3_feature_loss_kind
+                    != "batch_standardized_smooth_l1"
+                ):
+                    raise ValueError(
+                        "KARROW spatial v2 requires batch-standardized SmoothL1"
+                    )
             if self.actor_network != "mlp":
                 raise ValueError("KARROW keeps the original MLP actor and critic")
             if self.fresh_ac is not False:
                 raise ValueError("KARROW requires one persistent actor-critic across tasks")
-        elif self.observation_encoder != "cnn" or self.dinov3_model_path is not None:
+        elif (
+            self.observation_encoder != "cnn"
+            or self.dinov3_model_path is not None
+            or self.dinov3_feature_mode != "cls"
+            or self.dinov3_patch_feature_dim != 384
+            or self.dinov3_patch_projection != "none"
+            or self.dinov3_patch_projection_frames != 0
+            or self.dinov3_feature_loss_kind != "cosine"
+        ):
             raise ValueError(
-                "Only dinov3_next_feature may configure the DINOv3 encoder"
+                "Only DINOv3 feature objectives may configure the DINOv3 encoder"
             )
 
         if self.residual_correction not in {"none", "mlp", "kan"}:
