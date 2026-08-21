@@ -1,3 +1,4 @@
+import copy
 from typing import Literal, Optional
 
 import torch
@@ -111,6 +112,7 @@ class WorldModel(nn.Module):
         dinov3_patch_pool_size: int = 4,
         dinov3_patch_feature_dim: int = 384,
         dinov3_patch_projection: str = "none",
+        dinov3_patch_projection_seed: int = 0,
         dinov3_feature_loss_kind: str = "cosine",
         dinov3_feature_std_floor: float = 0.05,
         residual_correction: str = "none",
@@ -122,6 +124,7 @@ class WorldModel(nn.Module):
         residual_alpha: float = 0.1,
         residual_input_mode: str = "base_output",
         residual_consolidation: str = "none",
+        num_task_experts: int = 1,
         image_embedder: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
@@ -181,6 +184,8 @@ class WorldModel(nn.Module):
             dinov3_patch_pool_size=dinov3_patch_pool_size,
             dinov3_patch_feature_dim=dinov3_patch_feature_dim,
             dinov3_patch_projection=dinov3_patch_projection,
+            dinov3_patch_projection_seed=dinov3_patch_projection_seed,
+            num_task_experts=num_task_experts,
             residual_correction=residual_correction,
             residual_bottleneck_features=residual_bottleneck_features,
             residual_grid_size=residual_grid_size,
@@ -353,6 +358,80 @@ class WorldModel(nn.Module):
                 consolidation_enabled=residual_consolidation != "none",
             )
 
+        self.reward_experts = nn.ModuleList(
+            copy.deepcopy(self.reward_fc) for _ in range(num_task_experts - 1)
+        )
+        self.continue_experts = nn.ModuleList(
+            copy.deepcopy(self.continue_fc) for _ in range(num_task_experts - 1)
+        )
+        initialized = None
+        if num_task_experts > 1:
+            initialized = torch.zeros(num_task_experts, dtype=torch.bool)
+            initialized[0] = True
+        self.register_buffer("task_expert_initialized", initialized)
+
+    def _head_for(
+        self,
+        base: nn.Module,
+        experts: nn.ModuleList,
+        task_id: Optional[int | torch.Tensor],
+    ) -> nn.Module:
+        task_index = self.rssm._task_index(task_id)
+        return base if task_index == 0 else experts[task_index - 1]
+
+    def initialize_task_expert(
+        self, target_task_id: int, source_task_id: int
+    ) -> bool:
+        """Warm-start a new expert once while keeping later task states isolated."""
+        target_index = self.rssm._task_index(target_task_id)
+        source_index = self.rssm._task_index(source_task_id)
+        if self.task_expert_initialized is None:
+            return False
+        if bool(self.task_expert_initialized[target_index].item()):
+            return False
+        if not bool(self.task_expert_initialized[source_index].item()):
+            raise ValueError(
+                f"Cannot warm-start task {target_task_id} from uninitialized task "
+                f"{source_task_id}"
+            )
+        self.rssm.copy_task_expert(target_index, source_index)
+        self._head_for(
+            self.reward_fc, self.reward_experts, target_index
+        ).load_state_dict(
+            self._head_for(self.reward_fc, self.reward_experts, source_index).state_dict()
+        )
+        self._head_for(
+            self.continue_fc, self.continue_experts, target_index
+        ).load_state_dict(
+            self._head_for(
+                self.continue_fc, self.continue_experts, source_index
+            ).state_dict()
+        )
+        self.task_expert_initialized[target_index] = True
+        return True
+
+    def predict_reward_symlog(
+        self, model_state: torch.Tensor, task_id: Optional[int | torch.Tensor] = None
+    ) -> torch.Tensor:
+        prediction = self._head_for(
+            self.reward_fc, self.reward_experts, task_id
+        )(model_state)
+        if self.reward_residual is not None:
+            prediction = prediction + self.reward_residual(model_state)
+        return prediction
+
+    def predict_continue(
+        self, model_state: torch.Tensor, task_id: Optional[int | torch.Tensor] = None
+    ) -> torch.Tensor:
+        prediction = self._head_for(
+            self.continue_fc, self.continue_experts, task_id
+        )(model_state)
+        if self.continue_residual is not None:
+            prediction = torch.sigmoid(
+                prediction + self.continue_residual(model_state)
+            )
+        return prediction
+
     def freeze_shared_core(self) -> None:
         """Freeze base world-model functions while leaving adapters trainable."""
         if self.residual_correction == "none":
@@ -360,6 +439,10 @@ class WorldModel(nn.Module):
         self.rssm.freeze_shared_core()
         self.reward_fc.requires_grad_(False)
         self.continue_fc.requires_grad_(False)
+        for reward_head in self.reward_experts:
+            reward_head.requires_grad_(False)
+        for continue_head in self.continue_experts:
+            continue_head.requires_grad_(False)
         if hasattr(self, "decoder"):
             self.decoder.requires_grad_(False)
         if hasattr(self, "r2_projector"):
@@ -399,6 +482,7 @@ class WorldModel(nn.Module):
         conts: ContT,
         resets: ResetT,
         observation_features: Optional[torch.Tensor] = None,
+        task_id: Optional[int | torch.Tensor] = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         # Returns (loss, metrics)
         if len(actions.shape) == 2:
@@ -429,11 +513,18 @@ class WorldModel(nn.Module):
             }:
                 embeddings = embeddings.detach()
             z_posts, z_samples, hiddens = self.rssm.observe_embeddings(
-                init_z, actions, init_h, embeddings, resets
+                init_z,
+                actions,
+                init_h,
+                embeddings,
+                resets,
+                task_id=task_id,
             )
         else:
-            z_posts, z_samples, hiddens = self.rssm(init_z, actions, init_h, xs, resets)
-        z_priors = self.rssm.transition(hiddens)
+            z_posts, z_samples, hiddens = self.rssm(
+                init_z, actions, init_h, xs, resets, task_id=task_id
+            )
+        z_priors = self.rssm.prior(hiddens, task_id)
 
         # Dynamics and representation losses
         dyn_loss_scale = 0.5
@@ -533,14 +624,10 @@ class WorldModel(nn.Module):
                 ),
             }
 
-        rews_pred = self.reward_fc(zhs)  # [ T N 1 ]
-        if self.reward_residual is not None:
-            rews_pred = rews_pred + self.reward_residual(zhs)
+        rews_pred = self.predict_reward_symlog(zhs, task_id)  # [ T N 1 ]
         rews_loss = (rews_pred - symlog(rews)).square().mean()
 
-        conts_pred = self.continue_fc(zhs)  # [ T N 1 ]
-        if self.continue_residual is not None:
-            conts_pred = torch.sigmoid(conts_pred + self.continue_residual(zhs))
+        conts_pred = self.predict_continue(zhs, task_id)  # [ T N 1 ]
         conts_loss = torch.nn.functional.binary_cross_entropy(conts_pred, conts, reduction="mean")
 
         with torch.no_grad():

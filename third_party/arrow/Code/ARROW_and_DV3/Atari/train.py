@@ -15,7 +15,7 @@ import numpy as np
 import torch
 from torch.optim import Adam
 from tqdm import trange
-import ale_py
+import ale_py  # noqa: F401  # Registers ALE environments with Gymnasium.
 import replay
 from replay import MultiTypeReplay
 from ac import (
@@ -26,9 +26,6 @@ from ac import (
 )
 from config import (
     Config,
-    EnvConfig,
-    EnvScheduleConfig,
-    RbConfig,
     _arrow_fifo_ltdm_capacity_ns,
     _arrow_fifo_ltdm_sampling_weights,
 )
@@ -155,19 +152,32 @@ def _evaluate_policy_tasks(
     aco: Optional[ActorCriticOpt],
     eval_funcs,
     environment_seed_rng: np.random.Generator,
+    actor_critic_bank=None,
 ) -> tuple[list[float], list[float]]:
     means = []
     stds = []
     with _preserve_training_rng_state():
-        for env_fns in eval_funcs:
+        for task_id, env_fns in enumerate(eval_funcs):
+            task_aco = (
+                actor_critic_bank.get_optional(task_id)
+                if actor_critic_bank is not None
+                else aco
+            )
+            evaluation_kwargs = {}
+            if config.continual_method == "moe_arrow":
+                evaluation_kwargs = {
+                    "task_id": task_id,
+                    "deterministic_policy": True,
+                }
             mean, std = evaluate(
                 config.n_sync,
                 wm=wm,
-                ac=aco.ac if aco is not None else None,
+                ac=task_aco.ac if task_aco is not None else None,
                 env_fns=env_fns,
                 env_repeat=config.env_repeat,
                 n_rollouts=16,
                 seed=_next_environment_seed(environment_seed_rng),
+                **evaluation_kwargs,
             )
             means.append(mean)
             stds.append(std)
@@ -265,6 +275,23 @@ def _actor_critic_parameter_accounting(aco: ActorCriticOpt) -> dict:
         accounting["slow_critic"] = _module_state_accounting(aco.slow_critic)
         accounting["accounting_scope"] += "; slow critic is training state only"
     return accounting
+
+
+def _actor_critic_bank_parameter_accounting(bank) -> dict:
+    per_task = {
+        str(task_id): _actor_critic_parameter_accounting(bank.get(task_id))
+        for task_id in bank.task_ids()
+    }
+    return {
+        "schema_version": 1,
+        "topology": "per_task_actor_critic_bank",
+        "task_ids": list(bank.task_ids()),
+        "per_task": per_task,
+        "aggregate_actor_critic_parameters": sum(
+            task["actor_critic"]["parameters"] for task in per_task.values()
+        ),
+        "optimizer_state_excluded": True,
+    }
 
 
 def _world_model_parameter_accounting(wm: WorldModel) -> dict:
@@ -1033,6 +1060,11 @@ if __name__ == "__main__":
     if args.epochs is not None:
         config_overrides["epochs"] = args.epochs
     config = Config.from_dict(config_overrides)
+    if config.continual_method == "moe_arrow" and analysis_snapshot_dir is not None:
+        raise ValueError(
+            "MoE-ARROW analysis snapshots are disabled until replay, all actor optimizers, "
+            "and task-router state are saved resumably"
+        )
     milestone_completed_epochs = set(args.milestone_completed_epoch)
     invalid_milestones = sorted(
         epoch
@@ -1082,6 +1114,14 @@ if __name__ == "__main__":
     print(f"Residual input mode: {config.residual_input_mode}")
     print(f"Residual consolidation: {config.residual_consolidation}")
     print(f"Shared core mode: {config.shared_core_mode}")
+    print(f"Continual method: {config.continual_method}")
+    if config.continual_method == "moe_arrow":
+        print(
+            "MoE-ARROW routing: "
+            f"experts={config.rssm_num_experts} actor_bank=per_task "
+            "warm_start=previous_task_once current_fraction="
+            f"{config.moe_arrow_current_task_fraction}"
+        )
     if resume_payload is not None:
         print(
             "Initializing from analysis snapshot: "
@@ -1130,6 +1170,7 @@ if __name__ == "__main__":
         dinov3_patch_pool_size=config.dinov3_patch_pool_size,
         dinov3_patch_feature_dim=config.dinov3_patch_feature_dim,
         dinov3_patch_projection=config.dinov3_patch_projection,
+        dinov3_patch_projection_seed=config.dinov3_patch_projection_seed,
         dinov3_feature_loss_kind=config.dinov3_feature_loss_kind,
         dinov3_feature_std_floor=config.dinov3_feature_std_floor,
         residual_correction=config.residual_correction,
@@ -1141,6 +1182,7 @@ if __name__ == "__main__":
         residual_alpha=config.residual_alpha,
         residual_input_mode=config.residual_input_mode,
         residual_consolidation=config.residual_consolidation,
+        num_task_experts=config.rssm_num_experts,
     ).cuda()
     resume_world_model_opened: list[str] = []
     resume_state_report: dict[str, dict[str, list[str]]] = {}
@@ -1216,6 +1258,29 @@ if __name__ == "__main__":
             "Loaded actor-critic weights; KAN residuals are plastic. "
             f"Opened behavior readouts: {resume_actor_critic_opened or 'none'}"
         )
+
+    actor_critic_bank = None
+    if config.continual_method == "moe_arrow":
+        from clworldmodel.continual import (
+            ActorCriticBank,
+            allocate_task_updates,
+            shuffled_task_schedule,
+        )
+
+        actor_critic_bank = ActorCriticBank()
+        task_update_rng = np.random.default_rng(
+            np.random.SeedSequence([config.seed, 0x4D4F4541])
+        )
+
+        def build_task_actor_critic(task_id: int) -> ActorCriticOpt:
+            # Task-bank construction must not perturb world-model sampling RNG.
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(config.seed + 1_000_003 * (task_id + 1))
+                return build_actor_critic_opt(
+                    wm,
+                    lr=config.ac_lr,
+                    **_actor_critic_constructor_kwargs(config),
+                )
 
     if log_dir is None:
         current_time = datetime.now().strftime("%b%d_%H-%M-%S")
@@ -1311,6 +1376,34 @@ if __name__ == "__main__":
 
     for epoch in range(config.epochs):
         print("Starting Epoch ", epoch)
+        current_task_id = None
+        if config.continual_method == "moe_arrow":
+            current_task_id = envs.current_task_index()
+            warm_start_from = current_task_id - 1 if current_task_id > 0 else None
+            if current_task_id not in actor_critic_bank:
+                if warm_start_from is not None:
+                    if warm_start_from not in actor_critic_bank:
+                        raise RuntimeError(
+                            f"Task {current_task_id} arrived before task "
+                            f"{warm_start_from} was initialized"
+                        )
+                    initialized = wm.initialize_task_expert(
+                        current_task_id, warm_start_from
+                    )
+                    if initialized:
+                        print(
+                            f"Warm-started world-model expert {current_task_id} "
+                            f"from expert {warm_start_from}"
+                        )
+                actor_critic_bank.ensure(
+                    current_task_id,
+                    build_task_actor_critic,
+                    warm_start_from=warm_start_from,
+                )
+                print(
+                    f"Initialized independent actor-critic for task {current_task_id}"
+                )
+            aco = actor_critic_bank.get(current_task_id)
         task_boundary = epoch > 0 and envs.is_new_env()
         if config.residual_consolidation == "replay_functional" and task_boundary:
             if aco is None:
@@ -1376,6 +1469,7 @@ if __name__ == "__main__":
                     env_fns=envs.funcs(),
                     env_repeat=config.env_repeat,
                     seed=_next_environment_seed(collection_environment_seed_rng),
+                    task_id=current_task_id,
                 ),
                 config.data_t,
                 config.data_n,
@@ -1416,7 +1510,14 @@ if __name__ == "__main__":
                     _obss,
                     batch_size=config.dinov3_max_batch_size,
                 )
-            write_slots = replay.add(_acts, _obss, _rews, _conts, _resets)
+            write_slots = replay.add(
+                _acts,
+                _obss,
+                _rews,
+                _conts,
+                _resets,
+                task_id=current_task_id,
+            )
             if feature_cache is not None:
                 feature_cache.record(write_slots, frozen_features)
             print(f"{replay.n_valid=}")
@@ -1434,6 +1535,11 @@ if __name__ == "__main__":
                 print(f"Saving best rews eps mean {rews_eps_mean=}")
                 torch.save(wm.state_dict(), log_dir / "save_wm_best.pt")
                 torch.save(aco.ac.state_dict(), log_dir / "save_ac_best.pt")
+                if actor_critic_bank is not None:
+                    torch.save(
+                        actor_critic_bank.inference_state_dict(),
+                        log_dir / "save_ac_bank_best.pt",
+                    )
 
         collect_seconds = _stage_elapsed(collect_started, args.profile_stages)
 
@@ -1446,6 +1552,7 @@ if __name__ == "__main__":
                 aco,
                 envs.eval_funcs(),
                 evaluation_environment_seed_rng,
+                actor_critic_bank=actor_critic_bank,
             )
             eval_raw_mean, eval_raw_std = _raw_return_statistics(
                 config.esc.env_configs, eval_results_mean, eval_results_std
@@ -1479,14 +1586,40 @@ if __name__ == "__main__":
         eval_seconds = _stage_elapsed(eval_started, args.profile_stages)
 
         world_model_started = _stage_clock(args.profile_stages)
-        progbar = trange(
+        world_model_updates_this_epoch = (
             config.steps_per_batch
             if epoch > 0 or not config.pretrain_enabled
-            else config.pretrain_steps,
+            else config.pretrain_steps
+        )
+        world_model_task_schedule = None
+        if config.continual_method == "moe_arrow":
+            available_task_ids = replay.available_task_ids()
+            world_model_allocation = allocate_task_updates(
+                world_model_updates_this_epoch,
+                current_task_id=current_task_id,
+                available_task_ids=available_task_ids,
+                current_task_fraction=config.moe_arrow_current_task_fraction,
+            )
+            world_model_task_schedule = shuffled_task_schedule(
+                world_model_allocation, task_update_rng
+            )
+            for task_id, update_count in world_model_allocation.items():
+                writer.add_scalar(
+                    f"MoEArrow/world_model_updates_task_{task_id}",
+                    update_count,
+                    global_step,
+                )
+        progbar = trange(
+            world_model_updates_this_epoch,
             desc=f"Epoch {epoch + 1}/{config.epochs}",
             disable = True,
         )
-        for _ in progbar:
+        for update_index in progbar:
+            update_task_id = (
+                world_model_task_schedule[update_index]
+                if world_model_task_schedule is not None
+                else None
+            )
             if args.compile_world_model:
                 torch.compiler.cudagraph_mark_step_begin()
             observation_features = None
@@ -1496,9 +1629,12 @@ if __name__ == "__main__":
             else:
                 mb_t_size = config.pretrain_mb_t_size
                 mb_n_size = config.pretrain_mb_n_size
+            replay_sample_kwargs = {}
+            if update_task_id is not None:
+                replay_sample_kwargs["task_id"] = update_task_id
             if feature_cache is None:
                 mb_acts, mb_obss, mb_rews, mb_conts, mb_resets = replay.minibatch(
-                    mb_t_size, mb_n_size
+                    mb_t_size, mb_n_size, **replay_sample_kwargs
                 )
             else:
                 (
@@ -1511,15 +1647,21 @@ if __name__ == "__main__":
                 ) = feature_cache.minibatch(
                     mb_t_size,
                     mb_n_size,
+                    **replay_sample_kwargs,
                 )
 
+            world_model_loss_kwargs = {
+                "observation_features": observation_features,
+            }
+            if update_task_id is not None:
+                world_model_loss_kwargs["task_id"] = update_task_id
             loss, metrics = compute_world_model_loss(
                 mb_acts,
                 mb_obss,
                 mb_rews,
                 mb_conts,
                 mb_resets,
-                observation_features=observation_features,
+                **world_model_loss_kwargs,
             )
 
             protected_values = None
@@ -1632,7 +1774,58 @@ if __name__ == "__main__":
             "feature_cache": feature_cache,
         }
 
-        if config.fresh_ac and epoch % config.fresh_ac == 0:
+        if config.continual_method == "moe_arrow":
+            actor_available_tasks = tuple(
+                task_id
+                for task_id in actor_critic_bank.task_ids()
+                if task_id in replay.available_task_ids()
+            )
+            actor_allocation = allocate_task_updates(
+                config.ac_train_steps,
+                current_task_id=current_task_id,
+                available_task_ids=actor_available_tasks,
+                current_task_fraction=config.moe_arrow_current_task_fraction,
+            )
+            actor_metric_totals: dict[str, float] = {}
+            approx_perf_total = 0.0
+            for task_id, task_steps in actor_allocation.items():
+                writer.add_scalar(
+                    f"MoEArrow/actor_critic_updates_task_{task_id}",
+                    task_steps,
+                    (epoch + 1) * config.ac_train_steps,
+                )
+                if task_steps == 0:
+                    continue
+                task_aco, task_perf, task_metrics = train_ac_from_wm(
+                    wm,
+                    replay,
+                    task_steps,
+                    config.ac_train_sync,
+                    aco=actor_critic_bank.get(task_id),
+                    lr=config.ac_lr,
+                    task_id=task_id,
+                    **actor_critic_kwargs,
+                )
+                if task_aco is not actor_critic_bank.get(task_id):
+                    raise RuntimeError("Actor training replaced a task-bank entry")
+                approx_perf_total += float(task_perf.detach().item()) * task_steps
+                for metric_name, metric_value in task_metrics.items():
+                    actor_metric_totals[metric_name] = (
+                        actor_metric_totals.get(metric_name, 0.0)
+                        + metric_value * task_steps
+                    )
+                    writer.add_scalar(
+                        f"ActorCriticTask/{task_id}/{metric_name}",
+                        metric_value,
+                        (epoch + 1) * config.ac_train_steps,
+                    )
+            approx_perf = approx_perf_total / config.ac_train_steps
+            actor_critic_metrics = {
+                name: total / config.ac_train_steps
+                for name, total in actor_metric_totals.items()
+            }
+            aco = actor_critic_bank.get(current_task_id)
+        elif config.fresh_ac and epoch % config.fresh_ac == 0:
             aco, approx_perf, actor_critic_metrics = train_ac_from_wm(
                 wm,
                 replay,
@@ -1653,12 +1846,17 @@ if __name__ == "__main__":
             )
 
         actor_seconds = _stage_elapsed(actor_started, args.profile_stages)
-        if not actor_accounting_path.exists():
+        if actor_critic_bank is not None or not actor_accounting_path.exists():
             temporary_actor_accounting_path = actor_accounting_path.with_suffix(
                 ".json.tmp"
             )
+            actor_accounting = (
+                _actor_critic_bank_parameter_accounting(actor_critic_bank)
+                if actor_critic_bank is not None
+                else _actor_critic_parameter_accounting(aco)
+            )
             temporary_actor_accounting_path.write_text(
-                json.dumps(_actor_critic_parameter_accounting(aco), indent=2) + "\n",
+                json.dumps(actor_accounting, indent=2) + "\n",
                 encoding="utf-8",
             )
             os.replace(temporary_actor_accounting_path, actor_accounting_path)
@@ -1677,9 +1875,16 @@ if __name__ == "__main__":
             )
         _print_cuda_memory(f"epoch_end_{epoch}")
 
-        if save_nets:
+        if save_nets or (
+            config.continual_method == "moe_arrow" and epoch == config.epochs - 1
+        ):
             torch.save(wm.state_dict(), log_dir / "save_wm.pt")
             torch.save(aco.ac.state_dict(), log_dir / "save_ac.pt")
+            if actor_critic_bank is not None:
+                torch.save(
+                    actor_critic_bank.inference_state_dict(),
+                    log_dir / "save_ac_bank.pt",
+                )
 
         if analysis_snapshot_dir is not None:
             boundary_metadata = _task_boundary_metadata(config, epoch)
@@ -1753,7 +1958,12 @@ if __name__ == "__main__":
             eval_funcs = eval_funcs[:seen_tasks]
             task_configs = task_configs[:seen_tasks]
         final_scaled_means, final_scaled_stds = _evaluate_policy_tasks(
-            config, wm, aco, eval_funcs, evaluation_environment_seed_rng
+            config,
+            wm,
+            aco,
+            eval_funcs,
+            evaluation_environment_seed_rng,
+            actor_critic_bank=actor_critic_bank,
         )
         final_raw_means, final_raw_stds = _raw_return_statistics(
             task_configs, final_scaled_means, final_scaled_stds
@@ -1761,7 +1971,11 @@ if __name__ == "__main__":
         final_evaluation = {
             "schema_version": 1,
             "evaluation_after_completed_epochs": config.epochs,
-            "policy": "stochastic",
+            "policy": (
+                "deterministic_argmax_and_latent_mode"
+                if config.continual_method == "moe_arrow"
+                else "stochastic"
+            ),
             "rollouts_per_task": 16,
             "tasks": [
                 {

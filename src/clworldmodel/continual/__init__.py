@@ -10,6 +10,7 @@ from .kan_consolidation import (
     named_kan_residuals,
     protect_kan_parameter_updates,
 )
+from .moe_arrow import ActorCriticBank, allocate_task_updates, shuffled_task_schedule
 
 __all__ = [
     "begin_kan_importance_estimation",
@@ -20,4 +21,7 @@ __all__ = [
     "kan_consolidation_penalty",
     "named_kan_residuals",
     "protect_kan_parameter_updates",
+    "ActorCriticBank",
+    "allocate_task_updates",
+    "shuffled_task_schedule",
 ]

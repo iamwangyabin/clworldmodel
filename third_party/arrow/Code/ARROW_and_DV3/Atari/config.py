@@ -23,7 +23,8 @@ ObservationObjective = Literal[
 ObservationEncoder = Literal["cnn", "dinov3_vits16"]
 DinoV3FeatureMode = Literal["cls", "patch_grid"]
 DinoV3FeatureLoss = Literal["cosine", "batch_standardized_smooth_l1"]
-DinoV3PatchProjection = Literal["none", "task1_pca"]
+DinoV3PatchProjection = Literal["none", "task1_pca", "fixed_orthogonal"]
+ContinualMethod = Literal["none", "moe_arrow"]
 ResidualCorrection = Literal["none", "mlp", "kan"]
 ResidualInputMode = Literal["base_output", "module_input"]
 ResidualConsolidation = Literal["none", "replay_functional"]
@@ -185,6 +186,10 @@ class Config(Serialisable):
     # int = create fresh ac every n epochs
     fresh_ac: Union[bool, int] = False
 
+    continual_method: ContinualMethod = "none"
+    rssm_num_experts: int = 1
+    moe_arrow_current_task_fraction: float = 0.5
+
     n_sync: int = 2
     gen_seq_len: int = 4096
     env_repeat: int = 4
@@ -262,6 +267,7 @@ class Config(Serialisable):
     dinov3_patch_feature_dim: int = 384
     dinov3_patch_projection: DinoV3PatchProjection = "none"
     dinov3_patch_projection_frames: int = 0
+    dinov3_patch_projection_seed: int = 0
     dinov3_feature_loss_kind: DinoV3FeatureLoss = "cosine"
     dinov3_feature_std_floor: float = 0.05
 
@@ -299,6 +305,35 @@ class Config(Serialisable):
         assert self.n_sync * self.gen_seq_len == self.data_n * self.data_t
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
+        if self.continual_method not in {"none", "moe_arrow"}:
+            raise ValueError(f"Unknown continual method: {self.continual_method!r}")
+        is_moe_arrow = self.continual_method == "moe_arrow"
+        if is_moe_arrow:
+            if self.algorithm != "arrow":
+                raise ValueError("MoE-ARROW requires ARROW mixed replay")
+            if self.esc.env_schedule_type is not SequentialEnvironments:
+                raise ValueError("MoE-ARROW requires a sequential task schedule")
+            if len(self.esc.env_configs) < 2:
+                raise ValueError("MoE-ARROW requires at least two scheduled tasks")
+            if self.rssm_num_experts != len(self.esc.env_configs):
+                raise ValueError(
+                    "MoE-ARROW v1 requires one RSSM expert per scheduled task"
+                )
+            if not 0 < self.moe_arrow_current_task_fraction < 1:
+                raise ValueError(
+                    "MoE-ARROW current-task update fraction must lie in (0, 1)"
+                )
+            if self.residual_correction != "none":
+                raise ValueError("MoE-ARROW does not use residual corrections")
+            if self.shared_core_mode != "trainable":
+                raise ValueError("MoE-ARROW keeps shared modules trainable")
+            if self.observation_objective != "dinov3_next_feature":
+                raise ValueError(
+                    "MoE-ARROW predicts frozen DINOv3 features from the RSSM prior"
+                )
+        else:
+            if self.rssm_num_experts != 1:
+                raise ValueError("RSSM experts require continual_method='moe_arrow'")
         if self.observation_objective not in {
             "reconstruction",
             "r2",
@@ -343,10 +378,16 @@ class Config(Serialisable):
                 raise ValueError("dinov3_patch_pool_size must be positive")
             if not 1 <= self.dinov3_patch_feature_dim <= 384:
                 raise ValueError("dinov3_patch_feature_dim must be in [1, 384]")
-            if self.dinov3_patch_projection not in {"none", "task1_pca"}:
+            if self.dinov3_patch_projection not in {
+                "none",
+                "task1_pca",
+                "fixed_orthogonal",
+            }:
                 raise ValueError("Unknown DINOv3 patch projection")
             if self.dinov3_patch_projection_frames < 0:
                 raise ValueError("dinov3_patch_projection_frames must be non-negative")
+            if self.dinov3_patch_projection_seed < 0:
+                raise ValueError("dinov3_patch_projection_seed must be non-negative")
             if self.dinov3_feature_loss_kind not in {
                 "cosine",
                 "batch_standardized_smooth_l1",
@@ -355,19 +396,40 @@ class Config(Serialisable):
             if self.dinov3_feature_std_floor <= 0:
                 raise ValueError("dinov3_feature_std_floor must be positive")
             if self.observation_objective == "dinov3_next_feature":
-                if self.dinov3_feature_mode != "cls":
-                    raise ValueError("KARROW v1 fixes DINOv3 output to the CLS token")
-                if self.dinov3_feature_loss_kind != "cosine":
-                    raise ValueError("KARROW v1 fixes the feature loss to cosine")
-                if self.dinov3_patch_feature_dim != 384:
-                    raise ValueError(
-                        "KARROW v1 does not use projected patch features"
-                    )
-                if (
-                    self.dinov3_patch_projection != "none"
-                    or self.dinov3_patch_projection_frames != 0
-                ):
-                    raise ValueError("KARROW v1 does not fit a patch projection")
+                if is_moe_arrow:
+                    if self.dinov3_feature_mode != "patch_grid":
+                        raise ValueError(
+                            "MoE-ARROW requires pooled DINOv3 patch features"
+                        )
+                    if self.dinov3_patch_pool_size != 4:
+                        raise ValueError("MoE-ARROW fixes a 4x4 DINOv3 patch grid")
+                    if self.dinov3_patch_feature_dim != 64:
+                        raise ValueError(
+                            "MoE-ARROW fixes each projected patch at 64 dimensions"
+                        )
+                    if self.dinov3_patch_projection != "fixed_orthogonal":
+                        raise ValueError(
+                            "MoE-ARROW requires a task-independent fixed projection"
+                        )
+                    if self.dinov3_patch_projection_frames != 0:
+                        raise ValueError("MoE-ARROW never fits a Task-1 projection")
+                    if self.dinov3_feature_loss_kind != "cosine":
+                        raise ValueError("MoE-ARROW fixes the prior feature loss to cosine")
+                else:
+                    if self.dinov3_feature_mode != "cls":
+                        raise ValueError("KARROW v1 fixes DINOv3 output to the CLS token")
+                    if self.dinov3_feature_loss_kind != "cosine":
+                        raise ValueError("KARROW v1 fixes the feature loss to cosine")
+                    if self.dinov3_patch_feature_dim != 384:
+                        raise ValueError(
+                            "KARROW v1 does not use projected patch features"
+                        )
+                    if (
+                        self.dinov3_patch_projection != "none"
+                        or self.dinov3_patch_projection_frames != 0
+                        or self.dinov3_patch_projection_seed != 0
+                    ):
+                        raise ValueError("KARROW v1 does not fit a patch projection")
             else:
                 if self.dinov3_feature_mode != "patch_grid":
                     raise ValueError(
@@ -409,6 +471,7 @@ class Config(Serialisable):
             or self.dinov3_patch_feature_dim != 384
             or self.dinov3_patch_projection != "none"
             or self.dinov3_patch_projection_frames != 0
+            or self.dinov3_patch_projection_seed != 0
             or self.dinov3_feature_loss_kind != "cosine"
         ):
             raise ValueError(
@@ -715,7 +778,13 @@ class Config(Serialisable):
                 for rc in self.replay_buffers
             )
             replays = [
-                rc.rb_type(self.data_t, _arrow_n(rc), self.action_space, rc.rb_device)
+                rc.rb_type(
+                    self.data_t,
+                    _arrow_n(rc),
+                    self.action_space,
+                    rc.rb_device,
+                    store_task_ids=self.continual_method == "moe_arrow",
+                )
                 for rc in self.replay_buffers
             ]
             return MultiTypeReplay(*replays, sampling_weights=sampling_weights)

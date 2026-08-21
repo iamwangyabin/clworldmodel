@@ -25,7 +25,10 @@ class FrozenDinoV3Encoder(nn.Module):
         feature_mode: Literal["cls", "patch_grid"] = "cls",
         patch_pool_size: int = 4,
         patch_feature_dim: int = 384,
-        patch_projection: Literal["none", "task1_pca"] = "none",
+        patch_projection: Literal[
+            "none", "task1_pca", "fixed_orthogonal"
+        ] = "none",
+        patch_projection_seed: int = 0,
         backbone: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
@@ -39,12 +42,14 @@ class FrozenDinoV3Encoder(nn.Module):
             raise ValueError("DINOv3 patch pool size must be positive")
         if patch_feature_dim < 1 or patch_feature_dim > self.EXPECTED_FEATURES:
             raise ValueError("DINOv3 projected patch features must be in [1, 384]")
-        if patch_projection not in {"none", "task1_pca"}:
+        if patch_projection not in {"none", "task1_pca", "fixed_orthogonal"}:
             raise ValueError(
                 f"Unknown DINOv3 patch projection: {patch_projection!r}"
             )
         if feature_mode != "patch_grid" and patch_projection != "none":
             raise ValueError("DINOv3 patch projection requires patch-grid mode")
+        if patch_projection_seed < 0:
+            raise ValueError("DINOv3 patch projection seed must be non-negative")
 
         if backbone is None:
             if model_path is None:
@@ -105,7 +110,7 @@ class FrozenDinoV3Encoder(nn.Module):
                     )
             elif self.patch_feature_dim >= self.token_features:
                 raise ValueError(
-                    "Task-1 PCA must reduce the DINOv3 patch feature width"
+                    "DINOv3 patch projection must reduce the patch feature width"
                 )
         output_channels = (
             self.patch_feature_dim
@@ -125,11 +130,28 @@ class FrozenDinoV3Encoder(nn.Module):
                 dtype=torch.float32,
             )
             projection_mean = torch.zeros(self.token_features, dtype=torch.float32)
+        elif self.patch_projection_kind == "fixed_orthogonal":
+            generator = torch.Generator(device="cpu")
+            generator.manual_seed(patch_projection_seed)
+            matrix = torch.randn(
+                self.token_features,
+                self.patch_feature_dim,
+                generator=generator,
+                dtype=torch.float64,
+            )
+            projection = torch.linalg.qr(matrix, mode="reduced").Q
+            columns = torch.arange(self.patch_feature_dim)
+            pivots = projection.abs().argmax(0)
+            signs = projection[pivots, columns].sign()
+            signs = torch.where(signs == 0, torch.ones_like(signs), signs)
+            projection = (projection * signs).float()
         self.register_buffer("patch_projection", projection)
         self.register_buffer("patch_projection_mean", projection_mean)
         self.register_buffer(
             "patch_projection_fitted",
-            torch.tensor(self.patch_projection_kind == "none", dtype=torch.bool),
+            torch.tensor(
+                self.patch_projection_kind != "task1_pca", dtype=torch.bool
+            ),
         )
         self.register_buffer(
             "patch_projection_explained_variance",
@@ -213,6 +235,8 @@ class FrozenDinoV3Encoder(nn.Module):
             raise ValueError("DINOv3 patch features have an unexpected channel width")
         if self.patch_projection_kind == "none":
             return patch_features
+        if self.patch_projection_kind == "fixed_orthogonal":
+            return patch_features @ self.patch_projection
         if self.requires_projection_fit:
             raise RuntimeError(
                 "Fit the Task-1 DINOv3 patch projection before encoding observations"

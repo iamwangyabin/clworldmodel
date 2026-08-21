@@ -61,6 +61,9 @@ class EnvironmentSchedule:
     def is_new_env(self) -> bool:
         raise NotImplementedError
 
+    def current_task_index(self) -> int:
+        raise NotImplementedError
+
 
 class AllEnvironments(EnvironmentSchedule):
     def __init__(self, n_sync: int, templates: list[Callable[[], Any]]) -> None:
@@ -75,6 +78,9 @@ class AllEnvironments(EnvironmentSchedule):
     def is_new_env(self) -> bool:
         return self._step == 0
 
+    def current_task_index(self) -> int:
+        raise ValueError("AllEnvironments does not expose one homogeneous task id")
+
 
 class SequentialEnvironments(EnvironmentSchedule):
     def __init__(self, n_sync: int, templates: list[Callable[[], Any]], swap_sched: int) -> None:
@@ -82,7 +88,7 @@ class SequentialEnvironments(EnvironmentSchedule):
         self.swap_sched = swap_sched
 
     def funcs(self) -> list[Callable[[], Any]]:
-        i = (self._step // self.swap_sched) % len(self.templates)
+        i = self.current_task_index()
         return [self.templates[i] for _ in range(self.n_sync)]
 
     def is_new_env(self) -> bool:
@@ -90,6 +96,9 @@ class SequentialEnvironments(EnvironmentSchedule):
             self._step % self.swap_sched == 0
             and self._step < len(self.templates) * self.swap_sched
         )
+
+    def current_task_index(self) -> int:
+        return (self._step // self.swap_sched) % len(self.templates)
 
 
 class SyncVectorEnvAtHome:
@@ -144,6 +153,8 @@ def evaluate(
     env_repeat: int = 4,
     n_rollouts: int = 10,
     seed: Optional[int] = None,
+    task_id: Optional[int] = None,
+    deterministic_policy: bool = False,
 ) -> tuple[float, float]:
     _, _, rews, conts, resets = generate_trajectories(
         n_rollouts * 2**13 // n_sync,
@@ -155,6 +166,8 @@ def evaluate(
         n_rollouts,
         no_images=True,
         seed=seed,
+        task_id=task_id,
+        deterministic_policy=deterministic_policy,
     )
     terms = torch.where(conts == 0)[0]
     starts = torch.where(resets == 1)[0]
@@ -184,6 +197,8 @@ def generate_trajectories(
     target_terminals: Optional[int] = None,
     no_images: bool = False,
     seed: Optional[int] = None,
+    task_id: Optional[int] = None,
+    deterministic_policy: bool = False,
 ) -> tuple[ActionT, Optional[ImageT], RewardT, ContT, ResetT]:
     # Returns [ X ... ] packed as [ N*T ... ] (sort of)
     # To change to [ T N ... ], do reshape and swapaxes
@@ -256,17 +271,26 @@ def generate_trajectories(
                     act_t = torch.zeros(n_sync, 18, device=z.device)
                     act_t[:, 0] = 1  # Previous move would have been all 0s
                 # Follow a stochastic policy
+                rssm_kwargs = {}
+                if task_id is not None:
+                    rssm_kwargs["task_id"] = task_id
+                if deterministic_policy:
+                    rssm_kwargs["stochastic"] = False
                 _, z, h = wm.rssm(
                     z,
                     act_t,
                     h,
                     torch.from_numpy(obs / 255).float().permute(0, 3, 1, 2).to(z.device),
                     torch.from_numpy(reset).float().unsqueeze(-1).to(z.device),
+                    **rssm_kwargs,
                 )
                 ac_state = zh_to_ac_state(z, h)
                 act_prob = ac.actor(ac_state)
-                act_prob_dist = td.Categorical(logits=act_prob)
-                act = act_prob_dist.sample()
+                if deterministic_policy:
+                    act = act_prob.argmax(dim=-1)
+                else:
+                    act_prob_dist = td.Categorical(logits=act_prob)
+                    act = act_prob_dist.sample()
                 act_t = torch.nn.functional.one_hot(act, 18)
                 act = act.cpu().numpy()
 

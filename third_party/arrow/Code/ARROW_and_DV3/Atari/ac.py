@@ -550,7 +550,7 @@ def build_actor_critic_opt(
         residual_alpha=residual_alpha,
         residual_input_mode=residual_input_mode,
         residual_consolidation=residual_consolidation,
-    ).cuda()
+    ).to(next(wm.parameters()).device)
     if optimizer_name == "adam":
         opt = Adam(
             ac.parameters(),
@@ -592,6 +592,7 @@ def dream_rollout(
     target_value: Optional[ValueFunction] = None,
     corrected_terminal_bootstrap: bool = False,
     feature_cache: Optional[object] = None,
+    task_id: Optional[int] = None,
 ) -> tuple[AcStateT, ActionT, RewardT, ReturnT, ReplayValueBatch]:
     # Returns: (T=n_steps N=n_sync)
     # States [ T N n_dis n_cls ]
@@ -602,29 +603,33 @@ def dream_rollout(
     no_reset = torch.zeros(n_sync, 1, device=z.device)
     # Arbitrary (n_ctx_frames) context frames
     if feature_cache is None:
-        ctx_acts, ctx_images, ctx_rewards, ctx_conts, ctx_resets = data.minibatch(
-            n_ctx_frames, n_sync, mb_device=z.device
-        )
+        if task_id is None:
+            sample = data.minibatch(n_ctx_frames, n_sync, mb_device=z.device)
+        else:
+            sample = data.minibatch(
+                n_ctx_frames, n_sync, mb_device=z.device, task_id=task_id
+            )
+        ctx_acts, ctx_images, ctx_rewards, ctx_conts, ctx_resets = sample
         assert ctx_images.shape == (n_ctx_frames, n_sync, 3, 64, 64), ctx_images.shape
+        rssm_kwargs = {"temperature": temperature}
+        if task_id is not None:
+            rssm_kwargs["task_id"] = task_id
         _, context_z, context_h = wm.rssm(
-            z, ctx_acts, h, ctx_images, ctx_resets, temperature=temperature
+            z, ctx_acts, h, ctx_images, ctx_resets, **rssm_kwargs
         )
     else:
-        (
-            ctx_acts,
-            _,
-            ctx_features,
-            ctx_rewards,
-            ctx_conts,
-            ctx_resets,
-        ) = feature_cache.minibatch(n_ctx_frames, n_sync, mb_device=z.device)
+        feature_kwargs = {"mb_device": z.device}
+        if task_id is not None:
+            feature_kwargs["task_id"] = task_id
+        feature_sample = feature_cache.minibatch(
+            n_ctx_frames, n_sync, **feature_kwargs
+        )
+        ctx_acts, _, ctx_features, ctx_rewards, ctx_conts, ctx_resets = feature_sample
+        observe_kwargs = {"temperature": temperature}
+        if task_id is not None:
+            observe_kwargs["task_id"] = task_id
         _, context_z, context_h = wm.rssm.observe_embeddings(
-            z,
-            ctx_acts,
-            h,
-            ctx_features,
-            ctx_resets,
-            temperature=temperature,
+            z, ctx_acts, h, ctx_features, ctx_resets, **observe_kwargs
         )
     replay_value_batch = ReplayValueBatch(
         states=zh_to_ac_state(context_z, context_h),
@@ -642,17 +647,23 @@ def dream_rollout(
     for _ in range(n_steps):
         state = zh_to_ac_state(z, h)
         zh = wm.zh_transform(z, h)
-        reward_symlog = wm.reward_fc(zh)
-        reward_residual = getattr(wm, "reward_residual", None)
-        if reward_residual is not None:
-            reward_symlog = reward_symlog + reward_residual(zh)
-        reward = symexp(reward_symlog)
-        cont_logits = wm.continue_fc(zh)
-        continue_residual = getattr(wm, "continue_residual", None)
-        if continue_residual is not None:
-            cont = torch.sigmoid(cont_logits + continue_residual(zh))
+        if hasattr(wm, "predict_reward_symlog"):
+            reward_symlog = wm.predict_reward_symlog(zh, task_id)
         else:
-            cont = cont_logits
+            reward_symlog = wm.reward_fc(zh)
+            reward_residual = getattr(wm, "reward_residual", None)
+            if reward_residual is not None:
+                reward_symlog = reward_symlog + reward_residual(zh)
+        reward = symexp(reward_symlog)
+        if hasattr(wm, "predict_continue"):
+            cont = wm.predict_continue(zh, task_id)
+        else:
+            cont_logits = wm.continue_fc(zh)
+            continue_residual = getattr(wm, "continue_residual", None)
+            if continue_residual is not None:
+                cont = torch.sigmoid(cont_logits + continue_residual(zh))
+            else:
+                cont = cont_logits
         if target_value is None:
             action_log, returns_pred = ac(state)
             returns_preds.append(returns_pred)
@@ -666,7 +677,10 @@ def dream_rollout(
         rewards.append(reward)
         conts.append(cont)
 
-        _, z, h = wm.rssm(z, action, h, None, no_reset, temperature=temperature)
+        rssm_kwargs = {"temperature": temperature}
+        if task_id is not None:
+            rssm_kwargs["task_id"] = task_id
+        _, z, h = wm.rssm(z, action, h, None, no_reset, **rssm_kwargs)
 
     states = torch.stack(states)
     actions = torch.stack(actions)
@@ -749,6 +763,7 @@ def train_ac_from_wm(
     residual_consolidation: str = "none",
     protect_residual_updates: bool = False,
     feature_cache: Optional[object] = None,
+    task_id: Optional[int] = None,
 ) -> tuple[ActorCriticOpt, torch.Tensor, dict[str, float]]:
     if aco is None:
         aco = build_actor_critic_opt(
@@ -846,6 +861,7 @@ def train_ac_from_wm(
             target_value=target_value,
             corrected_terminal_bootstrap=corrected_imagination_bootstrap,
             feature_cache=feature_cache,
+            task_id=task_id,
         )
 
         scale = torch.quantile(lam_returns, 0.95) - torch.quantile(lam_returns, 0.05)

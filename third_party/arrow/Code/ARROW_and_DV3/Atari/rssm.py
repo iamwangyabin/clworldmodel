@@ -1,3 +1,4 @@
+import copy
 from typing import Optional, Type
 
 import torch
@@ -93,6 +94,8 @@ class Rssm(nn.Module):
         dinov3_patch_pool_size: int = 4,
         dinov3_patch_feature_dim: int = 384,
         dinov3_patch_projection: str = "none",
+        dinov3_patch_projection_seed: int = 0,
+        num_task_experts: int = 1,
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
         residual_grid_size: int = 8,
@@ -105,8 +108,15 @@ class Rssm(nn.Module):
         image_embedder: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
+        if num_task_experts < 1:
+            raise ValueError("num_task_experts must be positive")
+        if num_task_experts > 1 and residual_correction != "none":
+            raise ValueError(
+                "Task-routed RSSM experts do not compose with residual corrections"
+            )
         self.ls = ls
         self.h_dim = h_dim
+        self.num_task_experts = num_task_experts
 
         self.recurrent = Recurrent(
             ls,
@@ -124,6 +134,9 @@ class Rssm(nn.Module):
             residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
         )
+        self.recurrent_experts = nn.ModuleList(
+            copy.deepcopy(self.recurrent) for _ in range(num_task_experts - 1)
+        )
         if image_embedder is not None:
             self.image_embedder = image_embedder
         elif observation_encoder == "cnn":
@@ -139,6 +152,7 @@ class Rssm(nn.Module):
                 patch_pool_size=dinov3_patch_pool_size,
                 patch_feature_dim=dinov3_patch_feature_dim,
                 patch_projection=dinov3_patch_projection,
+                patch_projection_seed=dinov3_patch_projection_seed,
             )
         else:
             raise ValueError(f"Unknown observation encoder: {observation_encoder!r}")
@@ -177,13 +191,62 @@ class Rssm(nn.Module):
             residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
         )
+        self.transition_experts = nn.ModuleList(
+            copy.deepcopy(self.transition) for _ in range(num_task_experts - 1)
+        )
 
     def freeze_shared_core(self) -> None:
         """Freeze base RSSM functions while leaving residual adapters plastic."""
         self.image_embedder.requires_grad_(False)
         self.recurrent.freeze_shared_core()
+        for recurrent in self.recurrent_experts:
+            recurrent.freeze_shared_core()
         self.representation.freeze_shared_core()
         self.transition.freeze_shared_core()
+        for transition in self.transition_experts:
+            transition.freeze_shared_core()
+
+    def _task_index(self, task_id: Optional[int | torch.Tensor]) -> int:
+        if task_id is None:
+            if self.num_task_experts > 1:
+                raise ValueError("task_id is required by a task-routed RSSM")
+            return 0
+        if isinstance(task_id, torch.Tensor):
+            if task_id.numel() != 1:
+                raise ValueError(
+                    "task_id must be scalar; MoE-ARROW minibatches are task-homogeneous"
+                )
+            task_id = int(task_id.detach().item())
+        if not isinstance(task_id, int):
+            raise TypeError("task_id must be an integer or scalar tensor")
+        if task_id < 0 or task_id >= self.num_task_experts:
+            raise ValueError(
+                f"task_id {task_id} is outside [0, {self.num_task_experts})"
+            )
+        return task_id
+
+    def recurrent_for(self, task_id: Optional[int | torch.Tensor]) -> "Recurrent":
+        task_index = self._task_index(task_id)
+        return self.recurrent if task_index == 0 else self.recurrent_experts[task_index - 1]
+
+    def transition_for(self, task_id: Optional[int | torch.Tensor]) -> "Transition":
+        task_index = self._task_index(task_id)
+        return self.transition if task_index == 0 else self.transition_experts[task_index - 1]
+
+    def prior(
+        self, hidden: HiddenT, task_id: Optional[int | torch.Tensor] = None
+    ) -> LatentLogDistT:
+        return self.transition_for(task_id)(hidden)
+
+    def copy_task_expert(self, target_task_id: int, source_task_id: int) -> None:
+        if target_task_id == source_task_id:
+            return
+        self.recurrent_for(target_task_id).load_state_dict(
+            self.recurrent_for(source_task_id).state_dict()
+        )
+        self.transition_for(target_task_id).load_state_dict(
+            self.transition_for(source_task_id).state_dict()
+        )
 
     def __call__(
         self,
@@ -194,9 +257,17 @@ class Rssm(nn.Module):
         reset: ResetT,
         stochastic: bool = True,
         temperature: float = 1.0,
+        task_id: Optional[int | torch.Tensor] = None,
     ) -> tuple[LatentLogDistT, LatentT, HiddenT]:
         return super().__call__(
-            prev_z, prev_a, prev_h, x, reset, stochastic=stochastic, temperature=temperature
+            prev_z,
+            prev_a,
+            prev_h,
+            x,
+            reset,
+            stochastic=stochastic,
+            temperature=temperature,
+            task_id=task_id,
         )
 
     def forward(
@@ -208,18 +279,19 @@ class Rssm(nn.Module):
         reset: ResetT,
         stochastic: bool = True,
         temperature: float = 1.0,
+        task_id: Optional[int | torch.Tensor] = None,
     ) -> tuple[LatentLogDistT, LatentT, HiddenT]:
         if len(prev_a.shape) == 2:
             # Apply reset flags
             prev_z = prev_z * (1 - reset).unsqueeze(-1)  # Need to multiply againt dim [ N 1 1 ]
             prev_h = prev_h * (1 - reset)
             # No time dimension
-            h = self.recurrent(prev_z, prev_a, prev_h)
+            h = self.recurrent_for(task_id)(prev_z, prev_a, prev_h)
             if x is not None:
                 e = self.image_embedder(x)
                 z_log_dist = self.representation(e, h)
             else:
-                z_log_dist = self.transition(h)
+                z_log_dist = self.prior(h, task_id)
             z_logits, z_sample = straight_through_one_hot(
                 z_log_dist / temperature, stochastic
             )
@@ -230,7 +302,16 @@ class Rssm(nn.Module):
             z_samples = []
             hs = []
             for a, r in zip(prev_a, reset):
-                z_log_dist, z_sample, h = self(z_sample, a, h, None, r)
+                z_log_dist, z_sample, h = self(
+                    z_sample,
+                    a,
+                    h,
+                    None,
+                    r,
+                    stochastic=stochastic,
+                    temperature=temperature,
+                    task_id=task_id,
+                )
                 z_log_dists.append(z_log_dist)
                 z_samples.append(z_sample)
                 hs.append(h)
@@ -246,6 +327,7 @@ class Rssm(nn.Module):
                 reset,
                 stochastic=stochastic,
                 temperature=temperature,
+                task_id=task_id,
             )
         raise ValueError
 
@@ -268,6 +350,7 @@ class Rssm(nn.Module):
         reset: ResetT,
         stochastic: bool = True,
         temperature: float = 1.0,
+        task_id: Optional[int | torch.Tensor] = None,
     ) -> tuple[LatentLogDistT, LatentT, HiddenT]:
         """Run the posterior recurrence from precomputed [T, N, E] embeddings."""
         if len(prev_a.shape) != 3 or len(embeddings.shape) != 3:
@@ -280,7 +363,9 @@ class Rssm(nn.Module):
         z_samples = []
         z, h = prev_z, prev_h
         for e, a, r in zip(embeddings, prev_a, reset):
-            h = self.recurrent(z * (1 - r).unsqueeze(-1), a, h * (1 - r))
+            h = self.recurrent_for(task_id)(
+                z * (1 - r).unsqueeze(-1), a, h * (1 - r)
+            )
             z_log_dist = self.representation(e, h)
             _, z_sample = straight_through_one_hot(
                 z_log_dist / temperature, stochastic

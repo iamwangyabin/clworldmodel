@@ -28,6 +28,8 @@ ablations at different stages of evidence:
   fixed-checkpoint DINO/RSSM task-region audit;
 - the implementation-ready `KARROW-InputAligned-v4` path, whose KAN or matched
   MLP branches consume each corrected module's original input;
+- the implementation-ready task-aware `MoE-ARROW-v1` upper-bound path with
+  routed world-model experts and a per-task Actor-Critic bank;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -258,6 +260,33 @@ python scripts/run_karrow_input_aligned_ar50_atari.py \
 This is an untrained experimental protocol, not a performance claim. Its exact
 topology and matched controls are defined in
 `docs/protocols/karrow_input_aligned_v4_atari.md`.
+
+## Task-aware method: MoE-ARROW-v1
+
+`MoE-ARROW-50` replaces the fixed KAN capacity with one routed recurrent
+dynamics, latent prior, reward/continue head, and Actor-Critic per scheduled
+game. DINOv3 spatial features, the posterior representation, and feature head
+remain shared. ARROW stores task labels and supplies task-homogeneous replay;
+half of each fixed update budget targets the current game and half rehearses
+replay-available old games. No extra gradient or environment steps are added.
+
+The visual target uses a seeded fixed orthogonal 384-to-64 patch projection, so
+it keeps the `4 x 4 x 64` spatial target without fitting anything on Task 1.
+This protocol explicitly exposes scheduler task identity and spends parameters
+per task. It is therefore a task-aware upper bound, not a direct replacement
+for task-agnostic ARROW-50.
+
+```bash
+export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
+python scripts/run_moe_arrow_atari.py \
+  --seed 0 \
+  --task-prefix-length 2 \
+  --dry-run
+```
+
+The method is implemented but untrained. See
+`docs/protocols/moe_arrow_v1_atari.md` for routing equations, fixed budgets,
+storage accounting, evaluation, and claim limits.
 
 ## Task-2 snapshot acquisition diagnostic
 

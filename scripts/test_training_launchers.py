@@ -313,6 +313,39 @@ class TrainingLauncherTests(unittest.TestCase):
             str(libcuda_dir.resolve()),
         )
 
+    def test_moe_arrow_dry_run_records_task_routing_and_fixed_update_budgets(self) -> None:
+        launch, output_dir = self._karrow_dry_run(
+            "--task-prefix-length",
+            "2",
+            script="scripts/run_moe_arrow_atari.py",
+        )
+
+        self.assertEqual(launch["method"], "MoE-ARROW-50-T2Pilot")
+        self.assertEqual(launch["protocol"], "MoE-ARROW-v1-Atari-TaskAware")
+        self.assertEqual(launch["code_id"], "moe_arrow")
+        self.assertTrue(launch["task_identity"]["exposed_to_agent"])
+        self.assertEqual(launch["world_model"]["router"], "hard_task_id")
+        self.assertEqual(launch["world_model"]["allocated_experts"], 6)
+        self.assertEqual(
+            launch["world_model"]["expert_modules"],
+            ["recurrent_dynamics", "latent_prior", "reward_head", "continue_head"],
+        )
+        self.assertEqual(launch["actor_critic"]["topology"], "per_task_bank")
+        self.assertEqual(launch["actor_critic"]["current_task_update_fraction"], 0.5)
+        self.assertEqual(launch["observation"]["patch_projection"], "fixed_orthogonal")
+        self.assertEqual(launch["observation"]["patch_projection_frames"], 0)
+        self.assertFalse(launch["observation"]["pixel_decoder"])
+        self.assertEqual(launch["residual_correction"], "none")
+        self.assertEqual(launch["replay"]["storage_device"], "cpu")
+        self.assertEqual(
+            launch["training_scope"]["world_model_updates"], 180_000
+        )
+        self.assertEqual(
+            launch["training_scope"]["actor_critic_updates"], 144_000
+        )
+        self.assertEqual(launch["extra_gradient_updates"], 0)
+        self.assertFalse(output_dir.exists())
+
     def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:
         launch = self._arrow_dry_run("--actor-network", "relu_kan")
 

@@ -128,6 +128,22 @@ documented here, covered by focused parity tests, and followed by regenerating
     The default and v1-v3 `base_output` behavior remains unchanged. Focused
     tests cover configuration isolation, exact zero-init parity, residual input
     tensors, Task-1 trainability, and the v4 launcher contract.
+25. Add the opt-in, separately named `MoE-ARROW-v1-Atari-TaskAware` path. The
+    sequential scheduler's scalar task index hard-routes complete recurrent
+    dynamics, latent-prior, reward, and continuation experts and selects an
+    independent per-task Actor-Critic/optimizer. New task modules copy the
+    preceding task once and then remain independent. ARROW replay stores one
+    int64 task ID per trajectory slot and can condition its otherwise unchanged
+    uniform sequence sampling on a homogeneous task; FIFO/LTDM selection keeps
+    its configured weights whenever both contain that task and renormalizes only
+    over eligible sub-buffers otherwise. Fixed world-model and Actor-Critic
+    update totals are split 50 percent current task and 50 percent uniformly
+    across replay-available old tasks. A frozen, seeded orthogonal DINOv3 patch
+    projection replaces Task-1 PCA and no pixel decoder or residual correction
+    is used. Defaults remain one unlabelled RSSM, one Actor-Critic, and the exact
+    upstream replay RNG path. Focused tests cover config isolation, task-filtered
+    replay, selected-expert gradients, fixed-budget allocation, deterministic
+    projection, actor-bank warm starts, and launcher accounting.
 
 ## Known issues at import
 

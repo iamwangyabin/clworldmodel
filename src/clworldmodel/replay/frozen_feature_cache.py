@@ -101,6 +101,8 @@ class ArrowFrozenFeatureCache:
         mb_t: int,
         mb_n: int,
         mb_device: str | torch.device = "cuda",
+        *,
+        task_id: int | None = None,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
@@ -109,7 +111,17 @@ class ArrowFrozenFeatureCache:
         torch.Tensor,
         torch.Tensor,
     ]:
-        sample = self.replay.minibatch_with_metadata(mb_t, mb_n, str(mb_device))
+        if task_id is None:
+            sample = self.replay.minibatch_with_metadata(
+                mb_t, mb_n, str(mb_device)
+            )
+        else:
+            sample = self.replay.minibatch_with_metadata(
+                mb_t,
+                mb_n,
+                str(mb_device),
+                task_id=task_id,
+            )
         if len(sample) != 8:
             raise RuntimeError("Frozen feature cache requires ARROW MultiTypeReplay metadata")
         (
