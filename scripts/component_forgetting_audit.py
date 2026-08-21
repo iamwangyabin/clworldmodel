@@ -295,6 +295,7 @@ def _model_bundle(
             config.get("residual_rms_norm_epsilon", 1e-4)
         ),
         residual_alpha=float(config.get("residual_alpha", 0.1)),
+        residual_input_mode=str(config.get("residual_input_mode", "base_output")),
         residual_consolidation=str(config.get("residual_consolidation", "none")),
     ).to(device)
     _load_snapshot_state(world_model, spec.payload["world_model_state_dict"])
@@ -328,6 +329,7 @@ def _model_bundle(
             config.get("residual_rms_norm_epsilon", 1e-4)
         ),
         residual_alpha=float(config.get("residual_alpha", 0.1)),
+        residual_input_mode=str(config.get("residual_input_mode", "base_output")),
         residual_consolidation=str(config.get("residual_consolidation", "none")),
     ).to(device)
     _load_snapshot_state(actor_critic, spec.payload["actor_critic_state_dict"])

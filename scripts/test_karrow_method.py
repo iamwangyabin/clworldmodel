@@ -41,7 +41,7 @@ if torch is not None:
     from clworldmodel.replay import ArrowFrozenFeatureCache
     from config import Config
     from replay import FifoReplay, LongTermReplay, MultiTypeReplay
-    from rssm import Recurrent
+    from rssm import Recurrent, Representation, Transition
     from wm import WorldModel, batch_standardized_smooth_l1
 
 
@@ -101,6 +101,20 @@ class KarrowMethodTests(unittest.TestCase):
         invalid = self._karrow_config_data()
         invalid["fresh_ac"] = 10
         with self.assertRaisesRegex(ValueError, "persistent actor-critic"):
+            Config.from_dict(invalid)
+
+    def test_config_isolates_input_aligned_residual_topology(self) -> None:
+        aligned = self._karrow_config_data("kan")
+        aligned["residual_input_mode"] = "module_input"
+        config = Config.from_dict(aligned)
+        self.assertEqual(config.residual_input_mode, "module_input")
+
+        legacy = Config.from_dict(self._karrow_config_data("kan"))
+        self.assertEqual(legacy.residual_input_mode, "base_output")
+
+        invalid = aligned.copy()
+        invalid["residual_input_mode"] = "hidden_guess"
+        with self.assertRaisesRegex(ValueError, "residual input mode"):
             Config.from_dict(invalid)
 
     def test_config_isolates_spatial_patch_v2_from_completed_cls_v1(self) -> None:
@@ -313,28 +327,241 @@ class KarrowMethodTests(unittest.TestCase):
         }
         torch.manual_seed(17)
         baseline = Recurrent(**kwargs)
-        torch.manual_seed(17)
-        karrow = Recurrent(**kwargs, residual_correction="kan")
+        for input_mode in ("base_output", "module_input"):
+            with self.subTest(input_mode=input_mode):
+                torch.manual_seed(17)
+                karrow = Recurrent(
+                    **kwargs,
+                    residual_correction="kan",
+                    residual_input_mode=input_mode,
+                )
 
-        self.assertIsInstance(baseline.rnn, nn.GRUCell)
-        self.assertIsInstance(karrow.rnn, nn.GRUCell)
-        for name, parameter in baseline.named_parameters():
-            torch.testing.assert_close(parameter, dict(karrow.named_parameters())[name])
+                self.assertIsInstance(baseline.rnn, nn.GRUCell)
+                self.assertIsInstance(karrow.rnn, nn.GRUCell)
+                for name, parameter in baseline.named_parameters():
+                    torch.testing.assert_close(
+                        parameter, dict(karrow.named_parameters())[name]
+                    )
+                z = torch.randn(3, 2, 3)
+                actions = torch.randn(3, 4)
+                hidden = torch.randn(3, 5)
+                torch.testing.assert_close(
+                    baseline(z, actions, hidden), karrow(z, actions, hidden)
+                )
+
+    def test_input_aligned_rssm_residuals_receive_module_inputs(self) -> None:
         z = torch.randn(3, 2, 3)
         actions = torch.randn(3, 4)
         hidden = torch.randn(3, 5)
-        torch.testing.assert_close(baseline(z, actions, hidden), karrow(z, actions, hidden))
+        embeddings = torch.randn(3, 7)
+
+        recurrent = Recurrent(
+            (2, 3),
+            4,
+            5,
+            8,
+            2,
+            residual_correction="kan",
+            residual_input_mode="module_input",
+        )
+        representation = Representation(
+            (2, 3),
+            7,
+            5,
+            8,
+            2,
+            residual_correction="kan",
+            residual_input_mode="module_input",
+        )
+        transition = Transition(
+            (2, 3),
+            5,
+            8,
+            2,
+            residual_correction="kan",
+            residual_input_mode="module_input",
+        )
+
+        captured: dict[str, torch.Tensor] = {}
+        handles = [
+            recurrent.residual.register_forward_pre_hook(
+                lambda _module, args: captured.__setitem__("recurrent", args[0])
+            ),
+            representation.residual.register_forward_pre_hook(
+                lambda _module, args: captured.__setitem__("representation", args[0])
+            ),
+            transition.residual.register_forward_pre_hook(
+                lambda _module, args: captured.__setitem__("transition", args[0])
+            ),
+        ]
+        try:
+            recurrent(z, actions, hidden)
+            representation(embeddings, hidden)
+            transition(hidden)
+        finally:
+            for handle in handles:
+                handle.remove()
+
+        torch.testing.assert_close(
+            captured["recurrent"],
+            torch.cat((z.flatten(1), actions, hidden), dim=-1),
+        )
+        torch.testing.assert_close(
+            captured["representation"],
+            torch.cat((embeddings, hidden), dim=-1),
+        )
+        torch.testing.assert_close(captured["transition"], hidden)
 
     def test_zero_init_actor_critic_residuals_preserve_mlp_outputs(self) -> None:
         torch.manual_seed(23)
         baseline = ActorCritic(16, 4)
-        torch.manual_seed(23)
-        karrow = ActorCritic(16, 4, residual_correction="kan")
-        self.assertIsInstance(karrow.actor, ResidualCategoricalHead)
-        self.assertIsInstance(karrow.critic, ResidualCategoricalHead)
         state = torch.randn(5, 2, 16)
-        torch.testing.assert_close(baseline.actor(state), karrow.actor(state))
-        torch.testing.assert_close(baseline.critic(state), karrow.critic(state))
+        for input_mode in ("base_output", "module_input"):
+            with self.subTest(input_mode=input_mode):
+                torch.manual_seed(23)
+                karrow = ActorCritic(
+                    16,
+                    4,
+                    residual_correction="kan",
+                    residual_input_mode=input_mode,
+                )
+                self.assertIsInstance(karrow.actor, ResidualCategoricalHead)
+                self.assertIsInstance(karrow.critic, ResidualCategoricalHead)
+                torch.testing.assert_close(baseline.actor(state), karrow.actor(state))
+                torch.testing.assert_close(baseline.critic(state), karrow.critic(state))
+
+    def test_input_aligned_actor_critic_residuals_receive_model_state(self) -> None:
+        actor_critic = ActorCritic(
+            16,
+            4,
+            residual_correction="kan",
+            residual_input_mode="module_input",
+        )
+        state = torch.randn(5, 2, 16)
+        captured: dict[str, torch.Tensor] = {}
+        handles = [
+            actor_critic.actor.residual.register_forward_pre_hook(
+                lambda _module, args: captured.__setitem__("actor", args[0])
+            ),
+            actor_critic.critic.residual.register_forward_pre_hook(
+                lambda _module, args: captured.__setitem__("critic", args[0])
+            ),
+        ]
+        try:
+            actor_critic(state)
+        finally:
+            for handle in handles:
+                handle.remove()
+
+        torch.testing.assert_close(captured["actor"], state)
+        torch.testing.assert_close(captured["critic"], state)
+
+    def test_input_aligned_residual_construction_preserves_base_rng(self) -> None:
+        class FakeEmbedder(nn.Module):
+            output_size = 6
+
+            def forward(self, images: torch.Tensor) -> torch.Tensor:
+                return images.mean((2, 3)).repeat(1, 2)
+
+        world_model_kwargs = {
+            "img_channels": 3,
+            "ls": (2, 3),
+            "a_dim": 4,
+            "h_dim": 5,
+            "cnn_depth": 2,
+            "mlp_features": 8,
+            "mlp_layers": 2,
+            "observation_objective": "dinov3_next_feature",
+            "observation_encoder": "dinov3_vits16",
+        }
+        torch.manual_seed(29)
+        baseline = WorldModel(**world_model_kwargs, image_embedder=FakeEmbedder())
+        baseline_rng = torch.random.get_rng_state()
+        torch.manual_seed(29)
+        aligned = WorldModel(
+            **world_model_kwargs,
+            residual_correction="kan",
+            residual_input_mode="module_input",
+            image_embedder=FakeEmbedder(),
+        )
+
+        aligned_parameters = dict(aligned.named_parameters())
+        for name, parameter in baseline.named_parameters():
+            torch.testing.assert_close(parameter, aligned_parameters[name])
+        torch.testing.assert_close(baseline_rng, torch.random.get_rng_state())
+
+        torch.manual_seed(31)
+        baseline_ac = ActorCritic(11, 4)
+        baseline_ac_rng = torch.random.get_rng_state()
+        torch.manual_seed(31)
+        aligned_ac = ActorCritic(
+            11,
+            4,
+            residual_correction="kan",
+            residual_input_mode="module_input",
+        )
+        for baseline_head, aligned_head in (
+            (baseline_ac.actor, aligned_ac.actor),
+            (baseline_ac.critic, aligned_ac.critic),
+        ):
+            aligned_base_parameters = [
+                *aligned_head.trunk.parameters(),
+                *aligned_head.base_head.parameters(),
+            ]
+            for baseline_parameter, aligned_parameter in zip(
+                baseline_head.parameters(), aligned_base_parameters, strict=True
+            ):
+                torch.testing.assert_close(baseline_parameter, aligned_parameter)
+        torch.testing.assert_close(baseline_ac_rng, torch.random.get_rng_state())
+
+    def test_task_1_keeps_base_and_input_aligned_residuals_trainable(self) -> None:
+        recurrent = Recurrent(
+            (2, 3),
+            4,
+            5,
+            8,
+            2,
+            residual_correction="kan",
+            residual_input_mode="module_input",
+        )
+        actor_critic = ActorCritic(
+            11,
+            4,
+            residual_correction="kan",
+            residual_input_mode="module_input",
+        )
+
+        for module in (
+            recurrent.za_fcs,
+            recurrent.rnn,
+            recurrent.residual,
+            actor_critic.actor.trunk,
+            actor_critic.actor.base_head,
+            actor_critic.actor.residual,
+            actor_critic.critic.trunk,
+            actor_critic.critic.base_head,
+            actor_critic.critic.residual,
+        ):
+            self.assertTrue(
+                all(parameter.requires_grad for parameter in module.parameters())
+            )
+
+        optimizer = torch.optim.SGD(recurrent.parameters(), lr=1e-2)
+        z = torch.randn(3, 2, 3)
+        actions = torch.randn(3, 4)
+        hidden = torch.randn(3, 5)
+        recurrent(z, actions, hidden).square().mean().backward()
+        self.assertGreater(recurrent.rnn.weight_hh.grad.abs().sum().item(), 0)
+        self.assertGreater(recurrent.residual.up.weight.grad.abs().sum().item(), 0)
+
+        optimizer.step()
+        optimizer.zero_grad()
+        recurrent(z, actions, hidden).square().mean().backward()
+        self.assertIsInstance(recurrent.residual.core, LocalRBFKANCore)
+        self.assertGreater(
+            recurrent.residual.core.rbf_weight.grad.abs().sum().item(),
+            0,
+        )
 
     def test_freezing_keeps_only_residual_adapters_trainable(self) -> None:
         class FakeEmbedder(nn.Module):

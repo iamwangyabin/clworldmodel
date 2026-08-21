@@ -117,6 +117,17 @@ documented here, covered by focused parity tests, and followed by regenerating
     residual parameters plastic. A separately named `kan_plus_heads` diagnostic
     opens only the final latent, reward/continuation, actor, and critic
     readouts. The default continual trainer behavior remains unchanged.
+24. Add the separately named `KARROW-InputAligned-v4` residual topology. The
+    recurrent, posterior, prior, actor, and critic corrections consume their
+    corresponding module inputs rather than only a base output or frozen trunk
+    feature; reward, continuation, and feature corrections retain their
+    existing full-state inputs. Task 1 jointly optimizes unchanged bases and
+    zero-output residuals. Private RNG construction preserves the same-seed
+    base initialization and subsequent training stream. The existing
+    first-boundary freeze then leaves the complete residual branches plastic.
+    The default and v1-v3 `base_output` behavior remains unchanged. Focused
+    tests cover configuration isolation, exact zero-init parity, residual input
+    tensors, Task-1 trainability, and the v4 launcher contract.
 
 ## Known issues at import
 

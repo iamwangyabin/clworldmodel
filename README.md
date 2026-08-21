@@ -26,6 +26,8 @@ ablations at different stages of evidence:
   implementation-ready spatial-patch posterior correction in v2;
 - the experimental `KARROW-ReplayConsolidated-v3` incremental KAN path and its
   fixed-checkpoint DINO/RSSM task-region audit;
+- the implementation-ready `KARROW-InputAligned-v4` path, whose KAN or matched
+  MLP branches consume each corrected module's original input;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -227,6 +229,35 @@ reports held-out task decodability, normalized region separation, PCA
 artifacts, and per-module RBF support overlap. See
 `docs/protocols/karrow_replay_consolidated_v3_atari.md` for the equations,
 collection command, and claim limits.
+
+## Input-aligned method: KARROW-InputAligned-v4
+
+V4 fixes a plasticity problem in the earlier residual topology. The dynamics,
+posterior, prior, actor, and critic corrections no longer consume only the
+output of a frozen base trunk. Each correction is a parallel function of the
+same state variables as its base module and directly predicts that module's
+output residual. Reward, continuation, and feature prediction already followed
+this pattern through the full `[z,h]` model state.
+
+Task 1 includes both the original ARROW base and the residual branches in
+optimization. Every residual output projection starts at zero and its scale is
+`0.1`, so initialization is exactly the base model and the original path keeps
+a direct learning signal. Residual construction also preserves the matched
+base initialization and global training RNG state. At the first task boundary,
+the base is frozen and the same fixed-capacity residuals continue learning. V4
+adds no router, task ID, adapter expansion, or replay consolidation.
+
+```bash
+python scripts/run_karrow_input_aligned_ar50_atari.py \
+  --variant kan \
+  --task-prefix-length 2 \
+  --seed 0 \
+  --dry-run
+```
+
+This is an untrained experimental protocol, not a performance claim. Its exact
+topology and matched controls are defined in
+`docs/protocols/karrow_input_aligned_v4_atari.md`.
 
 ## Task-2 snapshot acquisition diagnostic
 

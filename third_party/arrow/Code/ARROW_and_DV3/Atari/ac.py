@@ -54,7 +54,9 @@ class ResidualCategoricalHead(nn.Module):
         self,
         base_layers: list[nn.Module],
         *,
+        module_input_features: int,
         residual_correction: str,
+        residual_input_mode: str,
         residual_bottleneck_features: int,
         residual_grid_size: int,
         residual_input_min: float,
@@ -66,13 +68,20 @@ class ResidualCategoricalHead(nn.Module):
         super().__init__()
         if not base_layers or not isinstance(base_layers[-1], nn.Linear):
             raise TypeError("Residual categorical head requires a final linear layer")
+        if residual_input_mode not in {"base_output", "module_input"}:
+            raise ValueError(f"Unknown residual input mode: {residual_input_mode!r}")
         self.trunk = nn.Sequential(*base_layers[:-1])
         self.base_head = base_layers[-1]
+        self.residual_input_mode = residual_input_mode
         from clworldmodel.models.residual_corrections import build_residual_correction
 
         self.residual = build_residual_correction(
             residual_correction,
-            self.base_head.in_features,
+            (
+                self.base_head.in_features
+                if residual_input_mode == "base_output"
+                else module_input_features
+            ),
             self.base_head.out_features,
             bottleneck_features=residual_bottleneck_features,
             grid_min=residual_input_min,
@@ -87,7 +96,10 @@ class ResidualCategoricalHead(nn.Module):
 
     def forward(self, state: AcStateT) -> torch.Tensor:
         features = self.trunk(state)
-        logits = self.base_head(features) + self.residual(features)
+        residual_input = (
+            features if self.residual_input_mode == "base_output" else state
+        )
+        logits = self.base_head(features) + self.residual(residual_input)
         return torch.log_softmax(logits, dim=-1)
 
 
@@ -227,6 +239,7 @@ class ActorCritic(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_input_mode: str = "base_output",
         residual_consolidation: str = "none",
     ) -> None:
         super().__init__()
@@ -254,13 +267,16 @@ class ActorCritic(nn.Module):
                 fastkan_actor_unimix=fastkan_actor_unimix,
             )
             critic_layers = None
+            residual_critic = None
         else:
             actor_layers = get_mlp_layers(in_dim, act_space, final_activation=None)
             critic_layers = get_mlp_layers(in_dim, N_CRITIC_BINS, final_activation=None)
             torch.nn.init.constant_(critic_layers[-1].weight, 0)
             torch.nn.init.constant_(critic_layers[-1].bias, 0)
             residual_kwargs = {
+                "module_input_features": in_dim,
                 "residual_correction": residual_correction,
+                "residual_input_mode": residual_input_mode,
                 "residual_bottleneck_features": residual_bottleneck_features,
                 "residual_grid_size": residual_grid_size,
                 "residual_input_min": residual_input_min,
@@ -269,7 +285,20 @@ class ActorCritic(nn.Module):
                 "residual_alpha": residual_alpha,
                 "residual_consolidation": residual_consolidation,
             }
-            self.actor = ResidualCategoricalHead(actor_layers, **residual_kwargs)
+            if residual_input_mode == "module_input":
+                # Keep base initialization and later training RNG paired with
+                # the no-residual control while initializing both branches
+                # independently inside the private stream.
+                with torch.random.fork_rng(devices=[]):
+                    self.actor = ResidualCategoricalHead(
+                        actor_layers, **residual_kwargs
+                    )
+                    residual_critic = ResidualCategoricalHead(
+                        critic_layers, **residual_kwargs
+                    )
+            else:
+                self.actor = ResidualCategoricalHead(actor_layers, **residual_kwargs)
+                residual_critic = None
         self.symlog_bins: torch.Tensor
         self.register_buffer(
             "symlog_bins", torch.linspace(-20, 20, N_CRITIC_BINS).float().unsqueeze(1)
@@ -287,7 +316,11 @@ class ActorCritic(nn.Module):
                 fastkan_rms_norm_epsilon=fastkan_rms_norm_epsilon,
             )
         else:
-            self.critic = ResidualCategoricalHead(critic_layers, **residual_kwargs)
+            self.critic = (
+                residual_critic
+                if residual_critic is not None
+                else ResidualCategoricalHead(critic_layers, **residual_kwargs)
+            )
 
     def freeze_shared_core(self) -> None:
         """Freeze MLP behavior heads while leaving their residual adapters plastic."""
@@ -480,6 +513,7 @@ def build_actor_critic_opt(
     residual_input_max: float = 2.0,
     residual_rms_norm_epsilon: float = 1e-4,
     residual_alpha: float = 0.1,
+    residual_input_mode: str = "base_output",
     residual_consolidation: str = "none",
 ) -> ActorCriticOpt:
     """Construct an actor-critic optimizer before the first update.
@@ -514,6 +548,7 @@ def build_actor_critic_opt(
         residual_input_max=residual_input_max,
         residual_rms_norm_epsilon=residual_rms_norm_epsilon,
         residual_alpha=residual_alpha,
+        residual_input_mode=residual_input_mode,
         residual_consolidation=residual_consolidation,
     ).cuda()
     if optimizer_name == "adam":
@@ -710,6 +745,7 @@ def train_ac_from_wm(
     residual_input_max: float = 2.0,
     residual_rms_norm_epsilon: float = 1e-4,
     residual_alpha: float = 0.1,
+    residual_input_mode: str = "base_output",
     residual_consolidation: str = "none",
     protect_residual_updates: bool = False,
     feature_cache: Optional[object] = None,
@@ -750,6 +786,7 @@ def train_ac_from_wm(
             residual_input_max=residual_input_max,
             residual_rms_norm_epsilon=residual_rms_norm_epsilon,
             residual_alpha=residual_alpha,
+            residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
         )
     ac, opt = aco.ac, aco.opt

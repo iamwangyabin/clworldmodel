@@ -56,6 +56,7 @@ RESIDUAL_CONSOLIDATION_ANCHOR_LOSS_SCALE = 1.0
 PROTOCOLS = {
     "v1": {
         "protocol": "KARROW-FrozenCore-v1-Atari",
+        "residual_input_mode": "base_output",
         "observation_objective": "dinov3_next_feature",
         "feature_mode": "cls",
         "patch_pool_size": DINOV3_PATCH_POOL_SIZE,
@@ -78,6 +79,7 @@ PROTOCOLS = {
     },
     "v2": {
         "protocol": "KARROW-SpatialFrozenCore-v2-Atari",
+        "residual_input_mode": "base_output",
         "observation_objective": "dinov3_posterior_feature",
         "feature_mode": "patch_grid",
         "patch_pool_size": DINOV3_PATCH_POOL_SIZE,
@@ -107,6 +109,7 @@ PROTOCOLS = {
     },
     "v3": {
         "protocol": "KARROW-ReplayConsolidated-v3-Atari",
+        "residual_input_mode": "base_output",
         "observation_objective": "dinov3_posterior_feature",
         "feature_mode": "patch_grid",
         "patch_pool_size": DINOV3_PATCH_POOL_SIZE,
@@ -138,6 +141,39 @@ PROTOCOLS = {
             ),
         },
     },
+    "v4": {
+        "protocol": "KARROW-InputAligned-v4-Atari",
+        "residual_input_mode": "module_input",
+        "observation_objective": "dinov3_posterior_feature",
+        "feature_mode": "patch_grid",
+        "patch_pool_size": DINOV3_PATCH_POOL_SIZE,
+        "patch_feature_dim": DINOV3_PATCH_FEATURE_DIM,
+        "patch_projection": "task1_pca",
+        "patch_projection_frames": DINOV3_PATCH_PROJECTION_FRAMES,
+        "feature_dim": (
+            DINOV3_PATCH_FEATURE_DIM * DINOV3_PATCH_POOL_SIZE**2
+        ),
+        "feature_loss_kind": "batch_standardized_smooth_l1",
+        "objective_description": (
+            "posterior-state batch-standardized projected spatial feature reconstruction"
+        ),
+        "prediction_state": "posterior",
+        "first_and_reset_steps_masked": False,
+        "variants": {
+            "dino": (
+                "ARROW-DINOSpatial-v4Control-50",
+                "arrow_dino_spatial_v4_control_ar50",
+            ),
+            "mlp": (
+                "ARROW-DINOSpatial-InputAligned-MLPRes-50",
+                "arrow_dino_spatial_input_aligned_mlp_residual_ar50",
+            ),
+            "kan": (
+                "KARROW-InputAligned-50",
+                "karrow_input_aligned_ar50",
+            ),
+        },
+    },
 }
 VARIANT_ROLES = {
     "dino": ("frozen-representation-control", "none"),
@@ -157,7 +193,8 @@ def _parser(*, default_visual_version: str = "v1") -> argparse.ArgumentParser:
         default=default_visual_version,
         help=(
             "v1 preserves the CLS pilot; v2 uses spatial patch features; "
-            "v3 adds replay-guided incremental KAN consolidation"
+            "v3 adds replay-guided incremental KAN consolidation; v4 feeds "
+            "each residual from its base module input"
         ),
     )
     parser.add_argument("--seed", type=int, choices=range(5), default=0)
@@ -345,6 +382,7 @@ def _resolved_config(
             "residual_input_max": RESIDUAL_INPUT_RANGE[1],
             "residual_rms_norm_epsilon": RESIDUAL_RMS_NORM_EPSILON,
             "residual_alpha": RESIDUAL_ALPHA,
+            "residual_input_mode": visual_protocol["residual_input_mode"],
             "residual_consolidation": (
                 "replay_functional" if uses_replay_consolidation else "none"
             ),
@@ -546,19 +584,33 @@ def main(*, default_visual_version: str = "v1") -> int:
         },
         "residuals": {
             "kind": residual_correction,
+            "input_mode": config["residual_input_mode"],
             "placements": (
                 []
                 if args.variant == "dino"
-                else [
-                    "post-GRU hidden",
-                    "posterior logits",
-                    "latent prior logits",
-                    "reward",
-                    "continue",
-                    "feature predictor",
-                    "actor logits",
-                    "critic logits",
-                ]
+                else (
+                    [
+                        "dynamics [z,a,h] -> hidden residual",
+                        "posterior [embedding,h] -> logits residual",
+                        "latent prior h -> logits residual",
+                        "reward [z,h] -> reward residual",
+                        "continue [z,h] -> continuation-logit residual",
+                        "feature predictor [z,h] -> feature residual",
+                        "actor [z,h] -> action-logit residual",
+                        "critic [z,h] -> value-logit residual",
+                    ]
+                    if config["residual_input_mode"] == "module_input"
+                    else [
+                        "post-GRU hidden",
+                        "posterior logits",
+                        "latent prior logits",
+                        "reward",
+                        "continue",
+                        "feature predictor",
+                        "actor logits",
+                        "critic logits",
+                    ]
+                )
             ),
             "independent_modules": True,
             "bottleneck_features": RESIDUAL_BOTTLENECK_FEATURES,
@@ -571,6 +623,17 @@ def main(*, default_visual_version: str = "v1") -> int:
             "grid_trainable": False if args.variant == "kan" else None,
             "alpha": RESIDUAL_ALPHA,
             "zero_initialized_output": True,
+            "trained_from_task_1": args.variant != "dino",
+            "task_1_optimization": (
+                "joint base-and-residual optimization"
+                if args.variant != "dino"
+                else None
+            ),
+            "task_1_base_priority": (
+                "zero residual output at initialization and alpha=0.1"
+                if args.variant != "dino"
+                else None
+            ),
             "matched_core_parameters": RESIDUAL_CORE_PARAMETERS,
             "task_specific_parameters": False,
             "task_id_or_router": False,
@@ -642,6 +705,8 @@ def main(*, default_visual_version: str = "v1") -> int:
         "shared_core": {
             "mode": config["shared_core_mode"],
             "freeze_after_completed_task": 1 if args.variant != "dino" else None,
+            "task_1_base_trainable": args.variant != "dino",
+            "task_1_residual_trainable": args.variant != "dino",
             "frozen_modules": (
                 [
                     "frozen DINOv3 encoder (frozen from initialization)",

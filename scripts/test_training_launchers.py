@@ -266,6 +266,33 @@ class TrainingLauncherTests(unittest.TestCase):
         )
         self.assertFalse(output_dir.exists())
 
+    def test_karrow_v4_uses_input_aligned_residuals_from_task_1(self) -> None:
+        launch, output_dir = self._karrow_dry_run(
+            "--variant",
+            "kan",
+            "--task-prefix-length",
+            "2",
+            script="scripts/run_karrow_input_aligned_ar50_atari.py",
+        )
+
+        self.assertEqual(launch["method"], "KARROW-InputAligned-50-T2Pilot")
+        self.assertEqual(launch["protocol"], "KARROW-InputAligned-v4-Atari")
+        self.assertEqual(launch["visual_version"], "v4")
+        residuals = launch["residuals"]
+        self.assertEqual(residuals["input_mode"], "module_input")
+        self.assertTrue(residuals["trained_from_task_1"])
+        self.assertEqual(
+            residuals["task_1_optimization"],
+            "joint base-and-residual optimization",
+        )
+        self.assertIn("dynamics [z,a,h]", " ".join(residuals["placements"]))
+        self.assertIn("actor [z,h]", " ".join(residuals["placements"]))
+        self.assertEqual(launch["residual_consolidation"]["mode"], "none")
+        self.assertTrue(launch["shared_core"]["task_1_base_trainable"])
+        self.assertTrue(launch["shared_core"]["task_1_residual_trainable"])
+        self.assertEqual(launch["shared_core"]["freeze_after_completed_task"], 1)
+        self.assertFalse(output_dir.exists())
+
     def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:
         launch = self._arrow_dry_run("--actor-network", "relu_kan")
 

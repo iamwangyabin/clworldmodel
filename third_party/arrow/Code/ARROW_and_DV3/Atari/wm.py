@@ -120,6 +120,7 @@ class WorldModel(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_input_mode: str = "base_output",
         residual_consolidation: str = "none",
         image_embedder: Optional[nn.Module] = None,
     ) -> None:
@@ -161,6 +162,7 @@ class WorldModel(nn.Module):
         self.dinov3_feature_loss_kind = dinov3_feature_loss_kind
         self.dinov3_feature_std_floor = dinov3_feature_std_floor
         self.residual_correction = residual_correction
+        self.residual_input_mode = residual_input_mode
 
         self.rssm = Rssm(
             img_channels,
@@ -186,6 +188,7 @@ class WorldModel(nn.Module):
             residual_input_max=residual_input_max,
             residual_rms_norm_epsilon=residual_rms_norm_epsilon,
             residual_alpha=residual_alpha,
+            residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
             image_embedder=image_embedder,
         )
@@ -234,6 +237,63 @@ class WorldModel(nn.Module):
                     layers=mlp_layers,
                 )
             )
+        elif residual_input_mode == "module_input":
+            from clworldmodel.models.residual_corrections import (
+                build_residual_correction,
+            )
+
+            self.continue_fc = nn.Sequential(
+                *get_mlp_layers(
+                    self.zh_transform.out_features,
+                    1,
+                    final_activation=None,
+                    hidden_features=mlp_features,
+                    layers=mlp_layers,
+                )
+            )
+            # Preserve the base initialization and global training RNG while
+            # giving the independent residual branches distinct parameters.
+            with torch.random.fork_rng(devices=[]):
+                self.reward_residual = build_residual_correction(
+                    residual_correction,
+                    self.zh_transform.out_features,
+                    1,
+                    bottleneck_features=residual_bottleneck_features,
+                    grid_min=residual_input_min,
+                    grid_max=residual_input_max,
+                    num_grids=residual_grid_size,
+                    rms_norm_epsilon=residual_rms_norm_epsilon,
+                    alpha=residual_alpha,
+                    consolidation_enabled=residual_consolidation != "none",
+                )
+                self.continue_residual = build_residual_correction(
+                    residual_correction,
+                    self.zh_transform.out_features,
+                    1,
+                    bottleneck_features=residual_bottleneck_features,
+                    grid_min=residual_input_min,
+                    grid_max=residual_input_max,
+                    num_grids=residual_grid_size,
+                    rms_norm_epsilon=residual_rms_norm_epsilon,
+                    alpha=residual_alpha,
+                    consolidation_enabled=residual_consolidation != "none",
+                )
+                if observation_objective in {
+                    "dinov3_next_feature",
+                    "dinov3_posterior_feature",
+                }:
+                    self.feature_predictor_residual = build_residual_correction(
+                        residual_correction,
+                        self.zh_transform.out_features,
+                        self.rssm.image_embedder.output_size,
+                        bottleneck_features=residual_bottleneck_features,
+                        grid_min=residual_input_min,
+                        grid_max=residual_input_max,
+                        num_grids=residual_grid_size,
+                        rms_norm_epsilon=residual_rms_norm_epsilon,
+                        alpha=residual_alpha,
+                        consolidation_enabled=residual_consolidation != "none",
+                    )
         else:
             from clworldmodel.models.residual_corrections import (
                 build_residual_correction,
@@ -276,6 +336,7 @@ class WorldModel(nn.Module):
             observation_objective
             in {"dinov3_next_feature", "dinov3_posterior_feature"}
             and residual_correction != "none"
+            and residual_input_mode == "base_output"
         ):
             from clworldmodel.models.residual_corrections import build_residual_correction
 

@@ -100,6 +100,7 @@ class Rssm(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_input_mode: str = "base_output",
         residual_consolidation: str = "none",
         image_embedder: Optional[nn.Module] = None,
     ) -> None:
@@ -120,6 +121,7 @@ class Rssm(nn.Module):
             residual_input_max=residual_input_max,
             residual_rms_norm_epsilon=residual_rms_norm_epsilon,
             residual_alpha=residual_alpha,
+            residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
         )
         if image_embedder is not None:
@@ -156,6 +158,7 @@ class Rssm(nn.Module):
             residual_input_max=residual_input_max,
             residual_rms_norm_epsilon=residual_rms_norm_epsilon,
             residual_alpha=residual_alpha,
+            residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
         )
         self.transition = Transition(
@@ -171,6 +174,7 @@ class Rssm(nn.Module):
             residual_input_max=residual_input_max,
             residual_rms_norm_epsilon=residual_rms_norm_epsilon,
             residual_alpha=residual_alpha,
+            residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
         )
 
@@ -311,10 +315,14 @@ class Recurrent(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_input_mode: str = "base_output",
         residual_consolidation: str = "none",
     ) -> None:
         super().__init__()
+        if residual_input_mode not in {"base_output", "module_input"}:
+            raise ValueError(f"Unknown residual input mode: {residual_input_mode!r}")
         z_dim = ls[0] * ls[1]
+        self.residual_input_mode = residual_input_mode
         self.za_fcs = nn.Sequential(
             *get_mlp_layers(
                 z_dim + a_dim,
@@ -335,7 +343,11 @@ class Recurrent(nn.Module):
             with torch.random.fork_rng(devices=[]):
                 self.residual = build_residual_correction(
                     residual_correction,
-                    h_dim,
+                    (
+                        h_dim
+                        if residual_input_mode == "base_output"
+                        else z_dim + a_dim + h_dim
+                    ),
                     h_dim,
                     bottleneck_features=residual_bottleneck_features,
                     grid_min=residual_input_min,
@@ -352,7 +364,12 @@ class Recurrent(nn.Module):
         za = torch.cat((prev_z.flatten(1), prev_a), dim=1)
         hidden = self.rnn(self.za_fcs(za), prev_h)
         if self.residual is not None:
-            hidden = hidden + self.residual(hidden)
+            residual_input = (
+                hidden
+                if self.residual_input_mode == "base_output"
+                else torch.cat((za, prev_h), dim=-1)
+            )
+            hidden = hidden + self.residual(residual_input)
         return hidden
 
     def freeze_shared_core(self) -> None:
@@ -381,11 +398,15 @@ class Representation(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_input_mode: str = "base_output",
         residual_consolidation: str = "none",
     ) -> None:
         super().__init__()
+        if residual_input_mode not in {"base_output", "module_input"}:
+            raise ValueError(f"Unknown residual input mode: {residual_input_mode!r}")
         self.ls = ls
         self.uniform = uniform
+        self.residual_input_mode = residual_input_mode
         n_dis, n_cls = ls
         self.eh_to_inter = nn.Sequential(
             *get_mlp_layers(
@@ -415,7 +436,11 @@ class Representation(nn.Module):
             with torch.random.fork_rng(devices=[]):
                 self.residual = build_residual_correction(
                     residual_correction,
-                    n_dis * n_cls,
+                    (
+                        n_dis * n_cls
+                        if residual_input_mode == "base_output"
+                        else embed_dim + h_dim
+                    ),
                     n_dis * n_cls,
                     bottleneck_features=residual_bottleneck_features,
                     grid_min=residual_input_min,
@@ -436,7 +461,8 @@ class Representation(nn.Module):
         if self.e_to_inter is not None:
             x1 = x1 + self.e_to_inter(e)
         if self.residual is not None:
-            x1 = x1 + self.residual(x1)
+            residual_input = x1 if self.residual_input_mode == "base_output" else eh
+            x1 = x1 + self.residual(residual_input)
         post_log_probs = self.inter_to_z_dist(x1)
         if self.uniform:
             # Use (1-u) of probs from logits + (u) of uniform
@@ -469,11 +495,15 @@ class Transition(nn.Module):
         residual_input_max: float = 2.0,
         residual_rms_norm_epsilon: float = 1e-4,
         residual_alpha: float = 0.1,
+        residual_input_mode: str = "base_output",
         residual_consolidation: str = "none",
     ) -> None:
         super().__init__()
+        if residual_input_mode not in {"base_output", "module_input"}:
+            raise ValueError(f"Unknown residual input mode: {residual_input_mode!r}")
         self.ls = ls
         self.uniform = uniform
+        self.residual_input_mode = residual_input_mode
 
         n_dis, n_cls = ls
         self.h_to_z_prior = nn.Sequential(
@@ -498,7 +528,7 @@ class Transition(nn.Module):
             with torch.random.fork_rng(devices=[]):
                 self.residual = build_residual_correction(
                     residual_correction,
-                    n_logits,
+                    n_logits if residual_input_mode == "base_output" else h_dim,
                     n_logits,
                     bottleneck_features=residual_bottleneck_features,
                     grid_min=residual_input_min,
@@ -513,7 +543,10 @@ class Transition(nn.Module):
         prior_log_probs = self.h_to_z_prior(h)
         if self.residual is not None:
             prior_logits = prior_log_probs.flatten(-2)
-            prior_logits = prior_logits + self.residual(prior_logits)
+            residual_input = (
+                prior_logits if self.residual_input_mode == "base_output" else h
+            )
+            prior_logits = prior_logits + self.residual(residual_input)
             prior_log_probs = torch.log_softmax(
                 prior_logits.unflatten(-1, self.ls), dim=-1
             )

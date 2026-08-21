@@ -25,6 +25,7 @@ DinoV3FeatureMode = Literal["cls", "patch_grid"]
 DinoV3FeatureLoss = Literal["cosine", "batch_standardized_smooth_l1"]
 DinoV3PatchProjection = Literal["none", "task1_pca"]
 ResidualCorrection = Literal["none", "mlp", "kan"]
+ResidualInputMode = Literal["base_output", "module_input"]
 ResidualConsolidation = Literal["none", "replay_functional"]
 SharedCoreMode = Literal[
     "trainable",
@@ -271,6 +272,7 @@ class Config(Serialisable):
     residual_input_max: float = 2.0
     residual_rms_norm_epsilon: float = 1e-4
     residual_alpha: float = 0.1
+    residual_input_mode: ResidualInputMode = "base_output"
     residual_consolidation: ResidualConsolidation = "none"
     residual_consolidation_batches: int = 16
     residual_consolidation_imagination_horizon: int = 8
@@ -416,6 +418,10 @@ class Config(Serialisable):
         if self.residual_correction not in {"none", "mlp", "kan"}:
             raise ValueError(
                 f"Unknown residual correction: {self.residual_correction!r}"
+            )
+        if self.residual_input_mode not in {"base_output", "module_input"}:
+            raise ValueError(
+                f"Unknown residual input mode: {self.residual_input_mode!r}"
             )
         if self.residual_consolidation not in {"none", "replay_functional"}:
             raise ValueError(

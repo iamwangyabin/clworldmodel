@@ -552,6 +552,7 @@ def _actor_critic_kwargs(
         "residual_input_max": config.residual_input_max,
         "residual_rms_norm_epsilon": config.residual_rms_norm_epsilon,
         "residual_alpha": config.residual_alpha,
+        "residual_input_mode": config.residual_input_mode,
         "residual_consolidation": config.residual_consolidation,
         "protect_residual_updates": protect_residual_updates,
         "feature_cache": feature_cache,
@@ -1078,6 +1079,7 @@ if __name__ == "__main__":
     print(f"World-model observation objective: {config.observation_objective}")
     print(f"Observation encoder: {config.observation_encoder}")
     print(f"Residual correction: {config.residual_correction}")
+    print(f"Residual input mode: {config.residual_input_mode}")
     print(f"Residual consolidation: {config.residual_consolidation}")
     print(f"Shared core mode: {config.shared_core_mode}")
     if resume_payload is not None:
@@ -1137,6 +1139,7 @@ if __name__ == "__main__":
         residual_input_max=config.residual_input_max,
         residual_rms_norm_epsilon=config.residual_rms_norm_epsilon,
         residual_alpha=config.residual_alpha,
+        residual_input_mode=config.residual_input_mode,
         residual_consolidation=config.residual_consolidation,
     ).cuda()
     resume_world_model_opened: list[str] = []
@@ -1620,6 +1623,7 @@ if __name__ == "__main__":
             "residual_input_max": config.residual_input_max,
             "residual_rms_norm_epsilon": config.residual_rms_norm_epsilon,
             "residual_alpha": config.residual_alpha,
+            "residual_input_mode": config.residual_input_mode,
             "residual_consolidation": config.residual_consolidation,
             "protect_residual_updates": (
                 shared_core_frozen
