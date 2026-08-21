@@ -425,16 +425,20 @@ def _load_snapshot_state(
         filtered_state[key] = value
     result = module.load_state_dict(filtered_state, strict=False)
     unexpected = list(result.unexpected_keys)
+    missing = list(result.missing_keys)
+    disallowed_missing = [
+        key for key in missing if "consolidation_" not in key
+    ]
     disallowed_unexpected = [
         key for key in unexpected if "consolidation_" not in key
     ]
-    if result.missing_keys or disallowed_unexpected:
+    if disallowed_missing or disallowed_unexpected:
         raise ValueError(
-            f"{label} snapshot incompatibility: missing={result.missing_keys} "
+            f"{label} snapshot incompatibility: missing={disallowed_missing} "
             f"unexpected={disallowed_unexpected}"
         )
     return {
-        "missing": list(result.missing_keys),
+        "missing": missing,
         "unexpected": [*unexpected, *ignored_stale_buffers],
     }
 
