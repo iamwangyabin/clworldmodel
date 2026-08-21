@@ -9,6 +9,7 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -292,6 +293,25 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertTrue(launch["shared_core"]["task_1_residual_trainable"])
         self.assertEqual(launch["shared_core"]["freeze_after_completed_task"], 1)
         self.assertFalse(output_dir.exists())
+
+    def test_karrow_records_triton_libcuda_override(self) -> None:
+        with TemporaryDirectory() as temporary:
+            libcuda_dir = Path(temporary)
+            (libcuda_dir / "libcuda.so").touch()
+            with mock.patch.dict(
+                os.environ,
+                {"TRITON_LIBCUDA_PATH": str(libcuda_dir)},
+            ):
+                launch, _ = self._karrow_dry_run(
+                    "--variant",
+                    "kan",
+                    script="scripts/run_karrow_input_aligned_ar50_atari.py",
+                )
+
+        self.assertEqual(
+            launch["environment"]["TRITON_LIBCUDA_PATH"],
+            str(libcuda_dir.resolve()),
+        )
 
     def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:
         launch = self._arrow_dry_run("--actor-network", "relu_kan")

@@ -473,6 +473,16 @@ def main(*, default_visual_version: str = "v1") -> int:
     if args.cpu_threads is not None:
         thread_env = {key: str(args.cpu_threads) for key in THREAD_ENV_KEYS}
         env.update(thread_env)
+    triton_libcuda_path = env.get("TRITON_LIBCUDA_PATH")
+    if triton_libcuda_path:
+        resolved_libcuda_path = Path(triton_libcuda_path).expanduser().resolve()
+        if not (resolved_libcuda_path / "libcuda.so").exists():
+            raise FileNotFoundError(
+                "TRITON_LIBCUDA_PATH must contain libcuda.so: "
+                f"{resolved_libcuda_path}"
+            )
+        env["TRITON_LIBCUDA_PATH"] = str(resolved_libcuda_path)
+        thread_env["TRITON_LIBCUDA_PATH"] = str(resolved_libcuda_path)
     # The ARROW subprocess runs from the vendored tree, so both the clean
     # package and the project-root namespace for vendored adapters are needed.
     project_pythonpath = os.pathsep.join((str(ROOT / "src"), str(ROOT)))
