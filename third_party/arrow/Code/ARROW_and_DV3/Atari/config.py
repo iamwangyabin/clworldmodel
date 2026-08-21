@@ -434,7 +434,10 @@ class Config(Serialisable):
             and self.shared_core_mode
             not in {"freeze_after_first_task", "snapshot_adaptation"}
         ):
-            raise ValueError("KARROW residuals require a stable shared-core mode")
+            raise ValueError(
+                "KARROW residuals require shared_core_mode="
+                "freeze_after_first_task or snapshot_adaptation"
+            )
         if self.shared_core_mode == "freeze_after_first_task":
             if self.residual_correction == "none":
                 raise ValueError(
