@@ -110,6 +110,13 @@ documented here, covered by focused parity tests, and followed by regenerating
     tests cover configuration isolation, importance persistence, coordinate
     freezing, value-preserving gradient scaling, launcher budgets, and offline
     latent-region metrics.
+23. Add an opt-in `snapshot_adaptation` shared-core mode and Task-2 acquisition
+    path initialized from a non-resumable Task-1 analysis snapshot. The trainer
+    can construct the loaded actor-critic before the first collection, reset
+    replay/optimizer/RNG state, freeze the shared core, and leave all KAN
+    residual parameters plastic. A separately named `kan_plus_heads` diagnostic
+    opens only the final latent, reward/continuation, actor, and critic
+    readouts. The default continual trainer behavior remains unchanged.
 
 ## Known issues at import
 

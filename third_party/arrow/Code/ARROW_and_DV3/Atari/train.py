@@ -5,6 +5,7 @@ import os
 import random
 import socket
 import time
+from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +18,12 @@ from tqdm import trange
 import ale_py
 import replay
 from replay import MultiTypeReplay
-from ac import ActorCriticOpt, train_ac_from_wm, zh_to_ac_state
+from ac import (
+    ActorCriticOpt,
+    build_actor_critic_opt,
+    train_ac_from_wm,
+    zh_to_ac_state,
+)
 from config import (
     Config,
     EnvConfig,
@@ -368,6 +374,210 @@ def _restrict_optimizer_to_trainable(
     for parameter_group in optimizer.param_groups:
         parameter_group["params"] = trainable
     return trainable
+
+
+RESUME_ADAPTATION_MODES = frozenset({"kan_only", "kan_plus_heads"})
+
+
+def _load_analysis_snapshot(path: Path) -> Mapping[str, object]:
+    """Load a portable boundary snapshot for a task-2 acquisition run."""
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"Analysis snapshot must contain a mapping: {path}")
+    required = {
+        "artifact_kind",
+        "resumable",
+        "world_model_state_dict",
+        "actor_critic_state_dict",
+    }
+    missing = sorted(required - set(payload))
+    if missing:
+        raise ValueError(f"Analysis snapshot is missing {missing}: {path}")
+    if payload["artifact_kind"] != "analysis_snapshot" or payload["resumable"]:
+        raise ValueError(f"Snapshot is not a non-resumable analysis snapshot: {path}")
+    if not isinstance(payload["world_model_state_dict"], Mapping):
+        raise ValueError(f"World-model state is not a mapping: {path}")
+    if not isinstance(payload["actor_critic_state_dict"], Mapping):
+        raise ValueError(f"Actor-critic state is not a mapping: {path}")
+    return payload
+
+
+def _load_snapshot_state(
+    module: torch.nn.Module,
+    state: Mapping[str, object],
+    *,
+    label: str,
+) -> dict[str, list[str]]:
+    """Load weights while allowing only stale consolidation buffers."""
+    target_state = module.state_dict()
+    filtered_state = {}
+    ignored_stale_buffers: list[str] = []
+    for key, value in state.items():
+        target = target_state.get(key)
+        if (
+            "consolidation_" in key
+            and target is not None
+            and hasattr(value, "shape")
+            and target.shape != value.shape
+        ):
+            ignored_stale_buffers.append(key)
+            continue
+        filtered_state[key] = value
+    result = module.load_state_dict(filtered_state, strict=False)
+    unexpected = list(result.unexpected_keys)
+    disallowed_unexpected = [
+        key for key in unexpected if "consolidation_" not in key
+    ]
+    if result.missing_keys or disallowed_unexpected:
+        raise ValueError(
+            f"{label} snapshot incompatibility: missing={result.missing_keys} "
+            f"unexpected={disallowed_unexpected}"
+        )
+    return {
+        "missing": list(result.missing_keys),
+        "unexpected": [*unexpected, *ignored_stale_buffers],
+    }
+
+
+def _last_linear(module: torch.nn.Module) -> tuple[str, torch.nn.Linear]:
+    candidates = [
+        (name, child)
+        for name, child in module.named_modules()
+        if isinstance(child, torch.nn.Linear)
+    ]
+    if not candidates:
+        raise ValueError(f"No linear readout found in {type(module).__name__}")
+    return candidates[-1]
+
+
+def _configure_resume_world_model(
+    wm: WorldModel,
+    mode: str,
+) -> list[str]:
+    """Freeze the shared model and optionally open a few task-2 readouts."""
+    if mode not in RESUME_ADAPTATION_MODES:
+        raise ValueError(f"Unknown resume adaptation mode: {mode!r}")
+    wm.freeze_shared_core()
+    opened: list[str] = []
+    if mode == "kan_plus_heads":
+        candidates = {
+            "world_model.rssm.representation.eh_to_inter": (
+                wm.rssm.representation.eh_to_inter
+            ),
+            "world_model.rssm.transition.h_to_z_prior": (
+                wm.rssm.transition.h_to_z_prior
+            ),
+            "world_model.reward_fc": wm.reward_fc,
+            "world_model.continue_fc": wm.continue_fc,
+        }
+        for name, module in candidates.items():
+            child_name, linear = _last_linear(module)
+            linear.requires_grad_(True)
+            opened.append(f"{name}.{child_name}")
+    return opened
+
+
+def _configure_resume_actor_critic(
+    aco: ActorCriticOpt,
+    mode: str,
+) -> list[str]:
+    """Freeze the MLP behavior core and optionally open its output heads."""
+    if mode not in RESUME_ADAPTATION_MODES:
+        raise ValueError(f"Unknown resume adaptation mode: {mode!r}")
+    aco.ac.freeze_shared_core()
+    if mode == "kan_only":
+        return []
+    opened: list[str] = []
+    for name in ("actor", "critic"):
+        head = getattr(aco.ac, name)
+        if not hasattr(head, "base_head"):
+            raise ValueError(
+                "Task-2 checkpoint adaptation requires residual MLP behavior heads"
+            )
+        head.base_head.requires_grad_(True)
+        opened.append(f"actor_critic.{name}.base_head")
+    return opened
+
+
+def _actor_critic_kwargs(
+    config: Config,
+    *,
+    feature_cache,
+    protect_residual_updates: bool,
+) -> dict[str, object]:
+    return {
+        "dream_steps": config.ac_dream_steps,
+        "actor_network": config.actor_network,
+        "actor_kan_hidden_features": config.actor_kan_hidden_features,
+        "actor_kan_grid_size": config.actor_kan_grid_size,
+        "actor_kan_spline_order": config.actor_kan_spline_order,
+        "actor_kan_input_min": config.actor_kan_input_min,
+        "actor_kan_input_max": config.actor_kan_input_max,
+        "actor_kan_normalize_recurrent_state": (
+            config.actor_kan_normalize_recurrent_state
+        ),
+        "fastkan_hidden_features": config.fastkan_hidden_features,
+        "fastkan_hidden_layers": config.fastkan_hidden_layers,
+        "fastkan_grid_size": config.fastkan_grid_size,
+        "fastkan_input_min": config.fastkan_input_min,
+        "fastkan_input_max": config.fastkan_input_max,
+        "fastkan_rms_norm_epsilon": config.fastkan_rms_norm_epsilon,
+        "fastkan_actor_output_scale": config.fastkan_actor_output_scale,
+        "fastkan_actor_unimix": config.fastkan_actor_unimix,
+        "optimizer_name": config.ac_optimizer,
+        "optimizer_eps": config.ac_optimizer_eps,
+        "optimizer_beta1": config.ac_optimizer_beta1,
+        "optimizer_beta2": config.ac_optimizer_beta2,
+        "optimizer_warmup_steps": config.ac_optimizer_warmup_steps,
+        "agc_clip": config.ac_agc_clip,
+        "grad_clip": config.ac_grad_clip,
+        "discount": config.ac_discount,
+        "lam": config.ac_lambda,
+        "entropy_scale": config.ac_entropy_scale,
+        "return_norm_decay": config.ac_return_norm_decay,
+        "persistent_return_norm": config.ac_persistent_return_norm,
+        "slow_critic_regularizer": config.ac_slow_critic_regularizer,
+        "slow_critic_decay": config.ac_slow_critic_decay,
+        "replay_critic_loss_scale": config.ac_replay_critic_loss_scale,
+        "use_slow_critic_targets": config.ac_use_slow_critic_targets,
+        "corrected_imagination_bootstrap": config.ac_corrected_imagination_bootstrap,
+        "residual_correction": config.residual_correction,
+        "residual_bottleneck_features": config.residual_bottleneck_features,
+        "residual_grid_size": config.residual_grid_size,
+        "residual_input_min": config.residual_input_min,
+        "residual_input_max": config.residual_input_max,
+        "residual_rms_norm_epsilon": config.residual_rms_norm_epsilon,
+        "residual_alpha": config.residual_alpha,
+        "residual_consolidation": config.residual_consolidation,
+        "protect_residual_updates": protect_residual_updates,
+        "feature_cache": feature_cache,
+    }
+
+
+def _actor_critic_constructor_kwargs(
+    config: Config,
+) -> dict[str, object]:
+    kwargs = _actor_critic_kwargs(
+        config,
+        feature_cache=None,
+        protect_residual_updates=False,
+    )
+    for key in (
+        "dream_steps",
+        "grad_clip",
+        "discount",
+        "lam",
+        "entropy_scale",
+        "return_norm_decay",
+        "persistent_return_norm",
+        "replay_critic_loss_scale",
+        "use_slow_critic_targets",
+        "corrected_imagination_bootstrap",
+        "protect_residual_updates",
+        "feature_cache",
+    ):
+        kwargs.pop(key)
+    return kwargs
 
 
 @torch.no_grad()
@@ -745,6 +955,23 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--init-analysis-snapshot",
+        type=Path,
+        help=(
+            "Initialize a task-acquisition run from a non-resumable analysis "
+            "snapshot. Replay, optimizer, RNG, and schedule state are reset."
+        ),
+    )
+    parser.add_argument(
+        "--resume-adaptation-mode",
+        choices=sorted(RESUME_ADAPTATION_MODES),
+        default=None,
+        help=(
+            "When initializing from a snapshot, train only KAN residuals or "
+            "also open the small latent/behavior readout heads."
+        ),
+    )
+    parser.add_argument(
         "--milestone-completed-epoch",
         action="append",
         type=int,
@@ -813,6 +1040,35 @@ if __name__ == "__main__":
             f"{invalid_milestones}"
         )
 
+    resume_payload = None
+    resume_mode = args.resume_adaptation_mode
+    if args.init_analysis_snapshot is not None:
+        if resume_mode is None:
+            resume_mode = "kan_only"
+        resume_payload = _load_analysis_snapshot(
+            args.init_analysis_snapshot.expanduser().resolve()
+        )
+        if config.residual_correction != "kan":
+            raise ValueError(
+                "Snapshot adaptation currently requires residual_correction='kan'"
+            )
+        if config.fresh_ac:
+            raise ValueError(
+                "Snapshot adaptation requires fresh_ac=False so the loaded actor "
+                "is preserved"
+            )
+        if config.shared_core_mode != "snapshot_adaptation":
+            raise ValueError(
+                "Snapshot initialization requires shared_core_mode="
+                "snapshot_adaptation"
+            )
+    elif resume_mode is not None:
+        raise ValueError("--resume-adaptation-mode requires --init-analysis-snapshot")
+    elif config.shared_core_mode == "snapshot_adaptation":
+        raise ValueError(
+            "shared_core_mode=snapshot_adaptation requires --init-analysis-snapshot"
+        )
+
     if config.algorithm == "arrow":
         print(f"ARROW FIFO/LTDM capacity ratio: {config.arrow_replay_capacity_ratio}")
     print(f"World-model observation objective: {config.observation_objective}")
@@ -820,6 +1076,11 @@ if __name__ == "__main__":
     print(f"Residual correction: {config.residual_correction}")
     print(f"Residual consolidation: {config.residual_consolidation}")
     print(f"Shared core mode: {config.shared_core_mode}")
+    if resume_payload is not None:
+        print(
+            "Initializing from analysis snapshot: "
+            f"{args.init_analysis_snapshot} mode={resume_mode}"
+        )
     print(f"Actor network: {config.actor_network}")
     print(
         "Actor-critic training: "
@@ -874,6 +1135,22 @@ if __name__ == "__main__":
         residual_alpha=config.residual_alpha,
         residual_consolidation=config.residual_consolidation,
     ).cuda()
+    resume_world_model_opened: list[str] = []
+    resume_state_report: dict[str, dict[str, list[str]]] = {}
+    if resume_payload is not None:
+        resume_state_report["world_model"] = _load_snapshot_state(
+            wm,
+            resume_payload["world_model_state_dict"],
+            label="World-model",
+        )
+        resume_world_model_opened = _configure_resume_world_model(
+            wm,
+            str(resume_mode),
+        )
+        print(
+            "Loaded world-model weights; KAN residuals are plastic. "
+            f"Opened shared readouts: {resume_world_model_opened or 'none'}"
+        )
     trainable_world_model_parameters = [
         parameter for parameter in wm.parameters() if parameter.requires_grad
     ]
@@ -908,8 +1185,30 @@ if __name__ == "__main__":
         )
     _print_replay_buffer_debug(config, replay)
 
-    # OPTIONAL: Load from existing
+    # Optional snapshot initialization. The loaded actor must exist before the
+    # first Task-2 collection; otherwise the first epoch would silently use a
+    # random policy and would not test acquisition from Task 1.
     aco: Optional[ActorCriticOpt] = None
+    resume_actor_critic_opened: list[str] = []
+    if resume_payload is not None:
+        aco = build_actor_critic_opt(
+            wm,
+            lr=config.ac_lr,
+            **_actor_critic_constructor_kwargs(config),
+        )
+        resume_state_report["actor_critic"] = _load_snapshot_state(
+            aco.ac,
+            resume_payload["actor_critic_state_dict"],
+            label="Actor-critic",
+        )
+        resume_actor_critic_opened = _configure_resume_actor_critic(
+            aco,
+            str(resume_mode),
+        )
+        print(
+            "Loaded actor-critic weights; KAN residuals are plastic. "
+            f"Opened behavior readouts: {resume_actor_critic_opened or 'none'}"
+        )
 
     if log_dir is None:
         current_time = datetime.now().strftime("%b%d_%H-%M-%S")
@@ -950,6 +1249,26 @@ if __name__ == "__main__":
     writer = SummaryWriter(log_dir=log_dir)
     log_dir = Path(log_dir)
     config.save(log_dir / "config.json")
+    if resume_payload is not None:
+        resume_metadata = {
+            "schema_version": 1,
+            "artifact_kind": "task_acquisition_from_analysis_snapshot",
+            "initial_snapshot": str(args.init_analysis_snapshot.expanduser().resolve()),
+            "initial_snapshot_epoch": resume_payload.get("epoch"),
+            "initial_snapshot_task": resume_payload.get("task"),
+            "adaptation_mode": resume_mode,
+            "replay_state": "reset_empty",
+            "optimizer_state": "reset_new_optimizer",
+            "rng_state": "reset_from_config_seed",
+            "collection_policy": "loaded_actor_from_snapshot",
+            "world_model_opened_modules": resume_world_model_opened,
+            "actor_critic_opened_modules": resume_actor_critic_opened,
+            "snapshot_state_report": resume_state_report,
+        }
+        (log_dir / "resume_initialization.json").write_text(
+            json.dumps(resume_metadata, indent=2) + "\n",
+            encoding="utf-8",
+        )
     if feature_cache is not None:
         feature_accounting_path = log_dir / "feature_cache_storage_accounting.json"
         temporary_feature_accounting_path = feature_accounting_path.with_suffix(
@@ -974,7 +1293,7 @@ if __name__ == "__main__":
 
     best_rews_mean = float("-inf")
     global_step = 0            # gradient updates so far  training iterations
-    shared_core_frozen = False
+    shared_core_frozen = resume_payload is not None
     capture_kan_parameter_values = None
     protect_kan_parameter_updates = None
     if config.residual_consolidation == "replay_functional":
@@ -1032,7 +1351,9 @@ if __name__ == "__main__":
         collect_started = _stage_clock(args.profile_stages)
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
-        if config.random_policy == "first":
+        if resume_payload is not None:
+            random_policy = False
+        elif config.random_policy == "first":
             random_policy = epoch == 0
         elif config.random_policy == "new":
             random_policy = envs.is_new_env()
@@ -1296,7 +1617,10 @@ if __name__ == "__main__":
             "residual_rms_norm_epsilon": config.residual_rms_norm_epsilon,
             "residual_alpha": config.residual_alpha,
             "residual_consolidation": config.residual_consolidation,
-            "protect_residual_updates": shared_core_frozen,
+            "protect_residual_updates": (
+                shared_core_frozen
+                and config.residual_consolidation == "replay_functional"
+            ),
             "feature_cache": feature_cache,
         }
 

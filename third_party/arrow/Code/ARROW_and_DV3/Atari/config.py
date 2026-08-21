@@ -26,7 +26,11 @@ DinoV3FeatureLoss = Literal["cosine", "batch_standardized_smooth_l1"]
 DinoV3PatchProjection = Literal["none", "task1_pca"]
 ResidualCorrection = Literal["none", "mlp", "kan"]
 ResidualConsolidation = Literal["none", "replay_functional"]
-SharedCoreMode = Literal["trainable", "freeze_after_first_task"]
+SharedCoreMode = Literal[
+    "trainable",
+    "freeze_after_first_task",
+    "snapshot_adaptation",
+]
 ActorNetwork = Literal[
     "mlp",
     "relu_kan",
@@ -417,17 +421,20 @@ class Config(Serialisable):
             raise ValueError(
                 f"Unknown residual consolidation: {self.residual_consolidation!r}"
             )
-        if self.shared_core_mode not in {"trainable", "freeze_after_first_task"}:
+        if self.shared_core_mode not in {
+            "trainable",
+            "freeze_after_first_task",
+            "snapshot_adaptation",
+        }:
             raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
         if self.residual_correction != "none" and not uses_dinov3:
             raise ValueError("KARROW residuals require the frozen DINOv3 protocol")
         if (
             self.residual_correction != "none"
-            and self.shared_core_mode != "freeze_after_first_task"
+            and self.shared_core_mode
+            not in {"freeze_after_first_task", "snapshot_adaptation"}
         ):
-            raise ValueError(
-                "KARROW residuals require shared_core_mode=freeze_after_first_task"
-            )
+            raise ValueError("KARROW residuals require a stable shared-core mode")
         if self.shared_core_mode == "freeze_after_first_task":
             if self.residual_correction == "none":
                 raise ValueError(
@@ -448,6 +455,23 @@ class Config(Serialisable):
             if len(self.esc.env_configs) < 2:
                 raise ValueError(
                     "Frozen shared core requires at least two scheduled tasks"
+                )
+        if self.shared_core_mode == "snapshot_adaptation":
+            if self.residual_correction == "none":
+                raise ValueError(
+                    "Snapshot adaptation requires a plastic residual correction"
+                )
+            if not uses_dinov3:
+                raise ValueError(
+                    "Snapshot adaptation is only defined for the DINOv3 protocol"
+                )
+            if self.fresh_ac is not False:
+                raise ValueError(
+                    "Snapshot adaptation requires one persistent actor-critic"
+                )
+            if self.esc.env_schedule_type is not SequentialEnvironments:
+                raise ValueError(
+                    "Snapshot adaptation requires a sequential task schedule"
                 )
         if self.residual_bottleneck_features != 64:
             raise ValueError("KARROW Frozen-Core fixes the residual bottleneck at 64")

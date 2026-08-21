@@ -228,6 +228,26 @@ artifacts, and per-module RBF support overlap. See
 `docs/protocols/karrow_replay_consolidated_v3_atari.md` for the equations,
 collection command, and claim limits.
 
+## Task-2 snapshot acquisition diagnostic
+
+The Task-2 snapshot protocol starts from the completed Task-1 analysis
+snapshot and runs Boxing alone for the matched 90-epoch budget. The primary
+`kan_only` arm freezes the original shared core but leaves the complete KAN
+residual modules plastic. The `kan_plus_heads` arm additionally opens only
+small latent and behavior readouts. Replay, optimizer, RNG, and schedule state
+are reset, so this is a trainability diagnostic rather than a resumable
+continual run:
+
+```bash
+python scripts/run_karrow_task2_from_snapshot.py \
+  --snapshot /path/to/boundary_01_task_00_epoch_0089.pt \
+  --adaptation-mode kan_only \
+  --dry-run
+```
+
+See `docs/protocols/karrow_task2_snapshot_acquisition_atari.md` for the
+adaptation arms and reporting contract.
+
 ## Actor ablation: ARROW-KANActor-50
 
 The direct `ARROW-KANActor-50` pilot exposed an out-of-support second KAN layer

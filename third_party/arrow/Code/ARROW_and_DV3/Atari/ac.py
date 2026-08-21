@@ -446,6 +446,103 @@ class ActorCriticOpt:
     return_mean_ema: Optional[torch.Tensor] = None
 
 
+def build_actor_critic_opt(
+    wm: WorldModel,
+    *,
+    lr: float,
+    actor_network: str = "mlp",
+    actor_kan_hidden_features: int = 64,
+    actor_kan_grid_size: int = 5,
+    actor_kan_spline_order: int = 3,
+    actor_kan_input_min: float = 0.0,
+    actor_kan_input_max: float = 1.0,
+    actor_kan_normalize_recurrent_state: bool = True,
+    fastkan_hidden_features: int = 34,
+    fastkan_hidden_layers: int = 3,
+    fastkan_grid_size: int = 8,
+    fastkan_input_min: float = -2.0,
+    fastkan_input_max: float = 2.0,
+    fastkan_rms_norm_epsilon: float = 1e-4,
+    fastkan_actor_output_scale: float = 0.01,
+    fastkan_actor_unimix: float = 0.01,
+    optimizer_name: str = "adam",
+    optimizer_eps: float = 1e-8,
+    optimizer_beta1: float = 0.9,
+    optimizer_beta2: float = 0.999,
+    optimizer_warmup_steps: int = 0,
+    agc_clip: float = 0.0,
+    slow_critic_regularizer: float = 0.0,
+    slow_critic_decay: float = 0.98,
+    residual_correction: str = "none",
+    residual_bottleneck_features: int = 64,
+    residual_grid_size: int = 8,
+    residual_input_min: float = -2.0,
+    residual_input_max: float = 2.0,
+    residual_rms_norm_epsilon: float = 1e-4,
+    residual_alpha: float = 0.1,
+    residual_consolidation: str = "none",
+) -> ActorCriticOpt:
+    """Construct an actor-critic optimizer before the first update.
+
+    Resume experiments need the loaded actor during their first environment
+    collection. Keeping construction here avoids a dummy update just to
+    materialize the actor-critic wrapper.
+    """
+    ac = ActorCritic(
+        np.prod(wm.ls) + wm.h_dim,
+        wm.a_dim,
+        actor_network=actor_network,
+        h_dim=wm.h_dim,
+        kan_hidden_features=actor_kan_hidden_features,
+        kan_grid_size=actor_kan_grid_size,
+        kan_spline_order=actor_kan_spline_order,
+        kan_input_min=actor_kan_input_min,
+        kan_input_max=actor_kan_input_max,
+        kan_normalize_recurrent_state=actor_kan_normalize_recurrent_state,
+        fastkan_hidden_features=fastkan_hidden_features,
+        fastkan_hidden_layers=fastkan_hidden_layers,
+        fastkan_grid_size=fastkan_grid_size,
+        fastkan_input_min=fastkan_input_min,
+        fastkan_input_max=fastkan_input_max,
+        fastkan_rms_norm_epsilon=fastkan_rms_norm_epsilon,
+        fastkan_actor_output_scale=fastkan_actor_output_scale,
+        fastkan_actor_unimix=fastkan_actor_unimix,
+        residual_correction=residual_correction,
+        residual_bottleneck_features=residual_bottleneck_features,
+        residual_grid_size=residual_grid_size,
+        residual_input_min=residual_input_min,
+        residual_input_max=residual_input_max,
+        residual_rms_norm_epsilon=residual_rms_norm_epsilon,
+        residual_alpha=residual_alpha,
+        residual_consolidation=residual_consolidation,
+    ).cuda()
+    if optimizer_name == "adam":
+        opt = Adam(
+            ac.parameters(),
+            lr=lr,
+            betas=(optimizer_beta1, optimizer_beta2),
+            eps=optimizer_eps,
+        )
+    elif optimizer_name == "laprop":
+        from clworldmodel.optim import LaProp
+
+        opt = LaProp(
+            ac.parameters(),
+            lr=lr,
+            betas=(optimizer_beta1, optimizer_beta2),
+            eps=optimizer_eps,
+            agc_clip=agc_clip,
+            warmup_steps=optimizer_warmup_steps,
+        )
+    else:
+        raise ValueError(f"Unknown actor-critic optimizer: {optimizer_name!r}")
+    slow_critic = None
+    if slow_critic_regularizer:
+        slow_critic = copy.deepcopy(ac.critic).eval()
+        slow_critic.requires_grad_(False)
+    return ActorCriticOpt(ac, opt, slow_critic=slow_critic)
+
+
 @torch.no_grad()
 def dream_rollout(
     wm: WorldModel,
@@ -618,17 +715,16 @@ def train_ac_from_wm(
     feature_cache: Optional[object] = None,
 ) -> tuple[ActorCriticOpt, torch.Tensor, dict[str, float]]:
     if aco is None:
-        ac = ActorCritic(
-            np.prod(wm.ls) + wm.h_dim,
-            wm.a_dim,
+        aco = build_actor_critic_opt(
+            wm,
+            lr=lr,
             actor_network=actor_network,
-            h_dim=wm.h_dim,
-            kan_hidden_features=actor_kan_hidden_features,
-            kan_grid_size=actor_kan_grid_size,
-            kan_spline_order=actor_kan_spline_order,
-            kan_input_min=actor_kan_input_min,
-            kan_input_max=actor_kan_input_max,
-            kan_normalize_recurrent_state=actor_kan_normalize_recurrent_state,
+            actor_kan_hidden_features=actor_kan_hidden_features,
+            actor_kan_grid_size=actor_kan_grid_size,
+            actor_kan_spline_order=actor_kan_spline_order,
+            actor_kan_input_min=actor_kan_input_min,
+            actor_kan_input_max=actor_kan_input_max,
+            actor_kan_normalize_recurrent_state=actor_kan_normalize_recurrent_state,
             fastkan_hidden_features=fastkan_hidden_features,
             fastkan_hidden_layers=fastkan_hidden_layers,
             fastkan_grid_size=fastkan_grid_size,
@@ -637,6 +733,16 @@ def train_ac_from_wm(
             fastkan_rms_norm_epsilon=fastkan_rms_norm_epsilon,
             fastkan_actor_output_scale=fastkan_actor_output_scale,
             fastkan_actor_unimix=fastkan_actor_unimix,
+            optimizer_name=optimizer_name,
+            optimizer_eps=optimizer_eps,
+            optimizer_beta1=optimizer_beta1,
+            optimizer_beta2=optimizer_beta2,
+            optimizer_warmup_steps=optimizer_warmup_steps,
+            agc_clip=agc_clip,
+            slow_critic_regularizer=(
+                slow_critic_regularizer or use_slow_critic_targets
+            ),
+            slow_critic_decay=slow_critic_decay,
             residual_correction=residual_correction,
             residual_bottleneck_features=residual_bottleneck_features,
             residual_grid_size=residual_grid_size,
@@ -645,32 +751,7 @@ def train_ac_from_wm(
             residual_rms_norm_epsilon=residual_rms_norm_epsilon,
             residual_alpha=residual_alpha,
             residual_consolidation=residual_consolidation,
-        ).cuda()
-        if optimizer_name == "adam":
-            opt = Adam(
-                ac.parameters(),
-                lr=lr,
-                betas=(optimizer_beta1, optimizer_beta2),
-                eps=optimizer_eps,
-            )
-        elif optimizer_name == "laprop":
-            from clworldmodel.optim import LaProp
-
-            opt = LaProp(
-                ac.parameters(),
-                lr=lr,
-                betas=(optimizer_beta1, optimizer_beta2),
-                eps=optimizer_eps,
-                agc_clip=agc_clip,
-                warmup_steps=optimizer_warmup_steps,
-            )
-        else:
-            raise ValueError(f"Unknown actor-critic optimizer: {optimizer_name!r}")
-        slow_critic = None
-        if slow_critic_regularizer or use_slow_critic_targets:
-            slow_critic = copy.deepcopy(ac.critic).eval()
-            slow_critic.requires_grad_(False)
-        aco = ActorCriticOpt(ac, opt, slow_critic=slow_critic)
+        )
     ac, opt = aco.ac, aco.opt
     trainable_parameters = [
         parameter for parameter in ac.parameters() if parameter.requires_grad
