@@ -12,7 +12,7 @@ contains experiment-facing code.
 - `train_r2dreamer_arrow_atari.py`: native R2-Dreamer training implementation used by the launcher.
 - `run_karrow_ar50_atari.py`: all KARROW visual versions and `dino`/`mlp`/`kan` arms.
 - `run_karrow_task2_from_snapshot.py`: isolated Task-2 acquisition diagnostic.
-- `run_moe_arrow_atari.py`: task-aware MoE, DINO-FullBank, and DINO-PatchBank launchers.
+- `run_moe_arrow_atari.py`: task-aware MoE, DINO-FullBank, DINO-PatchBank, and DINO-ConvBank launchers.
 - `verify_arrow_environment.py`: pinned dependency, CUDA, and Atari registration check.
 
 The former version-specific KARROW and DINO wrapper files were removed. Use
@@ -22,6 +22,7 @@ explicit selectors instead:
 python scripts/run_karrow_ar50_atari.py --visual-version v3 ...
 python scripts/run_moe_arrow_atari.py --method dino-fullbank ...
 python scripts/run_moe_arrow_atari.py --method dino-patchbank ...
+python scripts/run_moe_arrow_atari.py --method dino-convbank ...
 ```
 
 ## Audits And Reporting

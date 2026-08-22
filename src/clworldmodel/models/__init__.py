@@ -8,6 +8,7 @@ from .fast_kan import (
     FixedGaussianRBF,
     RMSNorm,
 )
+from .dinov3_adapter import ChannelLayerNorm, DinoPatchConvAdapter
 from .frozen_dinov3 import FrozenDinoV3Encoder
 from .residual_corrections import (
     LocalRBFKANCore,
@@ -31,6 +32,8 @@ __all__ = [
     "FastKANActor",
     "FastKANCritic",
     "FastKANLayer",
+    "ChannelLayerNorm",
+    "DinoPatchConvAdapter",
     "FrozenDinoV3Encoder",
     "FixedGaussianRBF",
     "FixedGridReLUKAN",

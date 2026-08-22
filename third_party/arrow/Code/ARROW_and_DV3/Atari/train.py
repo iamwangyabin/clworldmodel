@@ -339,6 +339,11 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         "world_model": _parameter_accounting(wm),
         "world_model_parameter_and_buffer_state": _module_state_accounting(wm),
         "observation_encoder": _parameter_accounting(wm.rssm.image_embedder),
+        "observation_adapter_kind": wm.rssm.observation_adapter_kind,
+        "observation_adapter": _parameter_accounting(
+            wm.rssm.observation_adapter
+        ),
+        "posterior_embedding_size": wm.rssm.observation_embedding_size,
         "observation_head_name": observation_head_name,
         "observation_head": _parameter_accounting(observation_head),
         "accounting_scope": (
@@ -688,7 +693,7 @@ def _observe_replay_for_kan_importance(
             initial_z,
             actions,
             initial_h,
-            features,
+            wm.rssm.adapt_observation_embeddings(features),
             resets,
             stochastic=False,
         )
@@ -1168,6 +1173,16 @@ if __name__ == "__main__":
             "observation=pixels "
             f"current_fraction={config.dino_fullbank_current_task_fraction}"
         )
+    elif config.continual_method == "dino_convbank_arrow":
+        print(
+            "DINO-ConvBank-ARROW routing: "
+            f"experts={config.rssm_num_experts} actor_bank=per_task "
+            "world_model_warm_start=previous_task_once actor_init=fresh "
+            "visual_input=complete_16x16x384_patches "
+            "shared_adapter=conv3x3_stride2_384to64 "
+            "posterior_embedding=8x8x64 observation=pixels "
+            f"current_fraction={config.dino_fullbank_current_task_fraction}"
+        )
     if resume_payload is not None:
         print(
             "Initializing from analysis snapshot: "
@@ -1217,6 +1232,7 @@ if __name__ == "__main__":
         dinov3_patch_feature_dim=config.dinov3_patch_feature_dim,
         dinov3_patch_projection=config.dinov3_patch_projection,
         dinov3_patch_projection_seed=config.dinov3_patch_projection_seed,
+        dinov3_patch_adapter=config.dinov3_patch_adapter,
         dinov3_feature_loss_kind=config.dinov3_feature_loss_kind,
         dinov3_feature_std_floor=config.dinov3_feature_std_floor,
         residual_correction=config.residual_correction,
@@ -1263,10 +1279,13 @@ if __name__ == "__main__":
 
     envs = config.get_env_schedule()
     replay_storage_directory = None
-    if config.continual_method == "dino_patchbank_arrow":
+    if config.continual_method in {
+        "dino_patchbank_arrow",
+        "dino_convbank_arrow",
+    }:
         if log_dir is None:
             raise ValueError(
-                "DINO-PatchBank-ARROW requires --log-dir for mapped observation replay"
+                "DINO patch task banks require --log-dir for mapped observation replay"
             )
         mmap_root = log_dir / "mmap_replay"
         replay_storage_directory = mmap_root / "observations"
@@ -1332,6 +1351,10 @@ if __name__ == "__main__":
         if config.continual_method == "dino_patchbank_arrow":
             actor_bank_artifact_kind = (
                 "dino_patchbank_arrow_actor_critic_bank_inference_state"
+            )
+        elif config.continual_method == "dino_convbank_arrow":
+            actor_bank_artifact_kind = (
+                "dino_convbank_arrow_actor_critic_bank_inference_state"
             )
         elif config.uses_full_task_experts:
             actor_bank_artifact_kind = (
@@ -1699,6 +1722,8 @@ if __name__ == "__main__":
                     (
                         f"DINOPatchBankArrow/world_model_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
+                        else f"DINOConvBankArrow/world_model_updates_task_{task_id}"
+                        if config.continual_method == "dino_convbank_arrow"
                         else f"DINOFullBankArrow/world_model_updates_task_{task_id}"
                         if config.uses_full_task_experts
                         else f"MoEArrow/world_model_updates_task_{task_id}"
@@ -1900,6 +1925,8 @@ if __name__ == "__main__":
                     (
                         f"DINOPatchBankArrow/actor_critic_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
+                        else f"DINOConvBankArrow/actor_critic_updates_task_{task_id}"
+                        if config.continual_method == "dino_convbank_arrow"
                         else f"DINOFullBankArrow/actor_critic_updates_task_{task_id}"
                         if config.uses_full_task_experts
                         else f"MoEArrow/actor_critic_updates_task_{task_id}"

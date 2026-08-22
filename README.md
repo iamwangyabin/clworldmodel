@@ -32,6 +32,9 @@ ablations at different stages of evidence:
   a failed acquisition result;
 - the implementation-ready `DINO-FullBank-ARROW-v2` correction with complete
   per-task world models and Actor-Critics;
+- the stopped negative/inconclusive `DINO-PatchBank-ARROW-v3` Task-1 pilot and
+  the implementation-ready `DINO-ConvBank-ARROW-v4` lightweight posterior
+  interface;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -352,7 +355,44 @@ python scripts/run_moe_arrow_atari.py \
 ```
 
 See `docs/protocols/dino_patchbank_arrow_v3_atari.md` for the fixed protocol,
-paper-derived motivation, and claim limits.
+paper-derived motivation, stopped seed-0 pilot, and claim limits. That pilot
+reached a raw MsPacman return of `511.25 +/- 123.89` at epoch 10 and was stopped
+after epoch 14 rather than being presented as a completed seed result.
+
+## Lightweight full-patch method: DINO-ConvBank-ARROW-v4
+
+`DINO-ConvBank-ARROW-50` keeps V3's frozen complete `16 x 16 x 384` DINO grid
+and original Dreamer pixel/KL/reward objectives, but replaces the direct
+98,304-coordinate posterior input with one shared learned adapter:
+
+```text
+Conv2d(384,64,kernel=3,stride=2,padding=1)
+  -> ChannelLayerNorm
+  -> SiLU
+  -> 8 x 8 x 64
+  -> flatten 4096
+```
+
+The adapter has 221,376 parameters and is shared across task routes. Each task
+still owns its posterior, recurrent dynamics, prior, decoder, reward/continue
+heads, and Actor-Critic. Under the fixed Atari RSSM shape, the posterior drops
+from 151,784,960 parameters per task in V3 to 7,081,472 in V4. Sharing the
+trainable adapter is intentionally not strict task isolation; later tasks can
+move the visual coordinates consumed by frozen old experts, so retention must
+be measured rather than assumed.
+
+```bash
+export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
+python scripts/run_moe_arrow_atari.py \
+  --method dino-convbank \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+```
+
+This protocol is implemented but untrained. See
+`docs/protocols/dino_convbank_arrow_v4_atari.md` for the exact gradient path,
+resource accounting, routing semantics, and acquisition gates.
 
 ## Task-2 snapshot acquisition diagnostic
 

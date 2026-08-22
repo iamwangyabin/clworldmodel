@@ -33,7 +33,7 @@ if torch is not None:
     from ac import train_ac_from_wm
     from config import Config
     from replay import FifoReplay, MultiTypeReplay
-    from rssm import Rssm
+    from rssm import Representation, Rssm
     from wm import WorldModel
 
 
@@ -115,6 +115,18 @@ class MoeArrowMethodTests(unittest.TestCase):
             replay_config["rb_device"] = "cpu"
         return data
 
+    @classmethod
+    def _convbank_config_data(cls) -> dict:
+        data = cls._patchbank_config_data()
+        data.update(
+            {
+                "continual_method": "dino_convbank_arrow",
+                "dinov3_patch_adapter": "conv_3x3_stride2",
+                "shared_core_mode": "task_banked_shared_adapter",
+            }
+        )
+        return data
+
     def test_config_requires_the_complete_named_task_aware_protocol(self) -> None:
         config = Config.from_dict(self._method_config_data())
         self.assertEqual(config.continual_method, "moe_arrow")
@@ -173,7 +185,13 @@ class MoeArrowMethodTests(unittest.TestCase):
         self.assertEqual(config.dinov3_patch_feature_dim, 384)
         self.assertEqual(config.dinov3_patch_projection, "none")
         self.assertEqual(config.dinov3_replay_feature_mode, "on_the_fly")
+        self.assertEqual(config.dinov3_patch_adapter, "none")
         self.assertTrue(config.uses_full_task_experts)
+
+        invalid = self._patchbank_config_data()
+        invalid["dinov3_patch_adapter"] = "conv_3x3_stride2"
+        with self.assertRaisesRegex(ValueError, "Only DINO-ConvBank-ARROW"):
+            Config.from_dict(invalid)
 
         invalid = self._patchbank_config_data()
         invalid["dinov3_replay_feature_mode"] = "cached"
@@ -204,6 +222,33 @@ class MoeArrowMethodTests(unittest.TestCase):
         invalid["replay_buffers"][0]["rb_device"] = "cuda"
         with self.assertRaisesRegex(ValueError, "CPU-addressable mapped observation"):
             Config.from_dict(invalid)
+
+    def test_convbank_config_pins_the_shared_single_convolution_adapter(self) -> None:
+        config = Config.from_dict(self._convbank_config_data())
+        self.assertEqual(config.continual_method, "dino_convbank_arrow")
+        self.assertEqual(config.dinov3_patch_adapter, "conv_3x3_stride2")
+        self.assertEqual(config.shared_core_mode, "task_banked_shared_adapter")
+        self.assertEqual(config.task_update_fraction, 1.0)
+        self.assertTrue(config.uses_full_task_experts)
+
+        invalid = self._convbank_config_data()
+        invalid["dinov3_patch_adapter"] = "none"
+        with self.assertRaisesRegex(ValueError, "shared 3x3 stride-2 adapter"):
+            Config.from_dict(invalid)
+
+        invalid = self._convbank_config_data()
+        invalid["shared_core_mode"] = "task_isolated"
+        with self.assertRaisesRegex(ValueError, "task_banked_shared_adapter"):
+            Config.from_dict(invalid)
+
+    def test_convbank_posterior_has_the_recorded_parameter_count(self) -> None:
+        posterior = Representation((32, 32), 4_096, 512, 512, 2)
+
+        self.assertEqual(posterior.eh_to_inter[0].in_features, 4_096 + 512)
+        self.assertEqual(
+            sum(parameter.numel() for parameter in posterior.parameters()),
+            7_081_472,
+        )
 
     def test_fifo_and_mixed_replay_filter_homogeneous_task_minibatches(self) -> None:
         def values(marker: float, sequences: int = 2):
@@ -748,6 +793,87 @@ class MoeArrowMethodTests(unittest.TestCase):
             any(
                 p.grad is not None
                 for p in world_model.rssm.representation_for(1).parameters()
+            )
+        )
+
+    def test_convbank_trains_one_shared_adapter_before_task_posterior(self) -> None:
+        class FullPatchEmbedder(nn.Module):
+            output_size = 98_304
+
+            def forward(self, images: torch.Tensor) -> torch.Tensor:
+                return images.new_zeros(images.shape[0], self.output_size)
+
+        torch.manual_seed(31)
+        world_model = WorldModel(
+            3,
+            (2, 3),
+            4,
+            5,
+            cnn_depth=4,
+            mlp_features=8,
+            mlp_layers=2,
+            observation_objective="reconstruction",
+            dinov3_patch_pool_size=16,
+            dinov3_patch_feature_dim=384,
+            dinov3_patch_adapter="conv_3x3_stride2",
+            num_task_experts=2,
+            full_task_experts=True,
+            image_embedder=FullPatchEmbedder(),
+        )
+        adapter = world_model.rssm.observation_adapter
+        self.assertEqual(world_model.rssm.observation_embedding_size, 4_096)
+        self.assertEqual(
+            world_model.rssm.representation.eh_to_inter[0].in_features,
+            4_096 + 5,
+        )
+        self.assertFalse(hasattr(world_model.rssm, "observation_adapter_experts"))
+        adapter_before_warm_start = {
+            name: value.detach().clone() for name, value in adapter.state_dict().items()
+        }
+
+        world_model.activate_task_expert(0)
+        self.assertTrue(world_model.initialize_task_expert(1, 0))
+        for name, value in adapter.state_dict().items():
+            torch.testing.assert_close(
+                value, adapter_before_warm_start[name], rtol=0, atol=0
+            )
+        world_model.activate_task_expert(1)
+        self.assertTrue(all(parameter.requires_grad for parameter in adapter.parameters()))
+
+        actions = torch.nn.functional.one_hot(
+            torch.tensor([[0, 1], [2, 3], [1, 0]]), num_classes=4
+        ).float()
+        observations = torch.rand(3, 2, 3, 64, 64)
+        raw_features = torch.randn(3, 2, 98_304, requires_grad=True)
+        rewards = torch.randn(3, 2, 1)
+        continues = torch.ones(3, 2, 1)
+        resets = torch.zeros(3, 2, 1)
+
+        loss, metrics = world_model.compute_loss(
+            actions,
+            observations,
+            rewards,
+            continues,
+            resets,
+            observation_features=raw_features,
+            task_id=1,
+        )
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIn("Loss/recon", metrics)
+        self.assertIsNone(raw_features.grad)
+        self.assertGreater(adapter.adapter[0].weight.grad.abs().sum().item(), 0)
+        self.assertTrue(
+            all(
+                parameter.grad is None
+                for parameter in world_model.rssm.representation_for(0).parameters()
+            )
+        )
+        self.assertTrue(
+            any(
+                parameter.grad is not None
+                for parameter in world_model.rssm.representation_for(1).parameters()
             )
         )
 

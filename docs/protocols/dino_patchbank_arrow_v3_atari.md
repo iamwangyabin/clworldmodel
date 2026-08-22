@@ -7,6 +7,11 @@ ARROW-50 name is `DINO-PatchBank-ARROW-50`. It is a task-aware, high-memory
 research method, not a published ARROW reproduction and not a storage-matched
 replacement for ARROW-50.
 
+The seed-0 Task-1 pilot from commit `6e9c2b8` was stopped after logged epoch 14
+had completed and epoch 15 had started. It is retained as a negative/interrupted
+acquisition result; V3 remains selectable but is no longer the next training
+route.
+
 The acquisition hypothesis is that DINO-FullBank-v2 discarded control-relevant
 information before the RSSM by reducing `16 x 16 x 384` frozen patch tokens to
 `4 x 4 x 64` with fixed average pooling and an orthogonal channel projection.
@@ -94,6 +99,17 @@ by mmap major faults once the active FIFO/LTDM feature working set exceeded the
 container memory limit. That interrupted run is a runtime failure, not a method
 performance result.
 
+## Seed-0 Task-1 pilot record
+
+The on-the-fly, observation-only implementation at commit `6e9c2b8` ran on
+MsPacman through the first formal epoch-10 evaluation. Its deterministic raw
+return was `511.25 +/- 123.89`. This did not establish acquisition. The final
+completed epoch before the stop took `962.458` seconds (about 16.0 minutes),
+with throughput worsening as replay filled. The operator then stopped the run
+to test the separately named learned-convolution interface in V4. Because the
+90-epoch Task-1 budget was not completed, this record is not a final seed result
+and says nothing about continual retention.
+
 All environment interactions, world-model updates, Actor-Critic updates,
 evaluation points, action repeat, reward transformation, and per-task duration
 remain inherited from the resolved published ARROW configuration. New-task
@@ -101,7 +117,7 @@ random pretraining collections are explicitly recorded as extra interactions.
 
 ## Execution and gates
 
-The first run is the seed-0, one-task, 90-epoch MsPacman pilot:
+The preserved command for the stopped seed-0 one-task pilot is:
 
 ```bash
 python scripts/run_moe_arrow_atari.py \

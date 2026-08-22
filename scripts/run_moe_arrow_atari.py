@@ -48,6 +48,9 @@ PATCH_PROJECTION = "fixed_orthogonal"
 PATCH_PROJECTION_SEED = 0
 FULL_PATCH_POOL_SIZE = DINOV3_INPUT_SIZE // 16
 FULL_PATCH_FEATURE_DIM = 384
+CONV_ADAPTER_OUTPUT_CHANNELS = 64
+CONV_ADAPTER_OUTPUT_GRID_SIZE = 8
+RSSM_LATENT_SHAPE = (32, 32)
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,7 @@ class LaunchVariant:
     patch_projection: str
     patch_projection_seed: int
     replay_feature_mode: str
+    patch_adapter: str
     pixel_decoder: bool
     observation_description: str
 
@@ -89,6 +93,7 @@ MOE_ARROW_VARIANT = LaunchVariant(
     patch_projection=PATCH_PROJECTION,
     patch_projection_seed=PATCH_PROJECTION_SEED,
     replay_feature_mode="cached",
+    patch_adapter="none",
     pixel_decoder=False,
     observation_description="one-step prior prediction of stopped spatial features",
 )
@@ -110,6 +115,7 @@ DINO_FULLBANK_VARIANT = LaunchVariant(
     patch_projection=PATCH_PROJECTION,
     patch_projection_seed=PATCH_PROJECTION_SEED,
     replay_feature_mode="cached",
+    patch_adapter="none",
     pixel_decoder=False,
     observation_description="current posterior reconstruction of stopped spatial features",
 )
@@ -131,15 +137,67 @@ DINO_PATCHBANK_VARIANT = LaunchVariant(
     patch_projection="none",
     patch_projection_seed=0,
     replay_feature_mode="on_the_fly",
+    patch_adapter="none",
     pixel_decoder=True,
     observation_description="DreamerV3 pixel reconstruction from full DINOv3 patches",
+)
+
+DINO_CONVBANK_VARIANT = LaunchVariant(
+    method="DINO-ConvBank-ARROW-50",
+    code_id="dino_convbank_arrow",
+    protocol="DINO-ConvBank-ARROW-v4-Atari-TaskAware",
+    role="shared-conv-adapter-dino-dreamerv3-task-aware-method",
+    output_prefix="dino_convbank_arrow_ar50",
+    current_task_fraction=1.0,
+    observation_objective="reconstruction",
+    feature_loss="cosine",
+    random_policy="new",
+    shared_core_mode="task_banked_shared_adapter",
+    full_task_experts=True,
+    patch_pool_size=FULL_PATCH_POOL_SIZE,
+    patch_feature_dim=FULL_PATCH_FEATURE_DIM,
+    patch_projection="none",
+    patch_projection_seed=0,
+    replay_feature_mode="on_the_fly",
+    patch_adapter="conv_3x3_stride2",
+    pixel_decoder=True,
+    observation_description=(
+        "DreamerV3 pixel reconstruction from a shared learned 8x8x64 DINO adapter"
+    ),
 )
 
 LAUNCH_VARIANTS = {
     "moe": MOE_ARROW_VARIANT,
     "dino-fullbank": DINO_FULLBANK_VARIANT,
     "dino-patchbank": DINO_PATCHBANK_VARIANT,
+    "dino-convbank": DINO_CONVBANK_VARIANT,
 }
+
+
+def _posterior_parameter_count(
+    *,
+    embedding_features: int,
+    hidden_features: int,
+    mlp_features: int,
+    mlp_layers: int,
+) -> int:
+    """Match the vendored RSSM Representation parameterization."""
+    if mlp_layers < 1:
+        raise ValueError("posterior MLP must contain at least one layer")
+    latent_features = RSSM_LATENT_SHAPE[0] * RSSM_LATENT_SHAPE[1]
+    sizes = (
+        [embedding_features + hidden_features]
+        + [mlp_features] * (mlp_layers - 1)
+        + [latent_features]
+    )
+    parameters = sum(
+        input_features * output_features + output_features
+        for input_features, output_features in zip(sizes[:-1], sizes[1:])
+    )
+    parameters += sum(2 * output_features for output_features in sizes[1:-1])
+    if mlp_layers > 1:
+        parameters += embedding_features * latent_features + latent_features
+    return parameters
 
 
 def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
@@ -151,8 +209,8 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         choices=tuple(LAUNCH_VARIANTS),
         default=default_method,
         help=(
-            "moe is the original partial-expert route; dino-fullbank and "
-            "dino-patchbank select the corrected full-bank protocols"
+            "moe is the original partial-expert route; dino-fullbank, "
+            "dino-patchbank, and dino-convbank select named task-bank protocols"
         ),
     )
     parser.add_argument("--seed", type=int, choices=range(5), default=0)
@@ -212,6 +270,7 @@ def _resolved_config(
             "dinov3_patch_projection": variant.patch_projection,
             "dinov3_patch_projection_frames": 0,
             "dinov3_patch_projection_seed": variant.patch_projection_seed,
+            "dinov3_patch_adapter": variant.patch_adapter,
             "dinov3_feature_loss_kind": variant.feature_loss,
             "dinov3_feature_std_floor": DINOV3_FEATURE_STD_FLOOR,
             "actor_network": "mlp",
@@ -345,6 +404,66 @@ def main(*, default_method: str = "moe") -> int:
         * source_config["env_repeat"]
     )
     feature_dim = variant.patch_feature_dim * variant.patch_pool_size**2
+    posterior_embedding_dim = (
+        CONV_ADAPTER_OUTPUT_CHANNELS * CONV_ADAPTER_OUTPUT_GRID_SIZE**2
+        if variant.patch_adapter == "conv_3x3_stride2"
+        else feature_dim
+    )
+    posterior_mlp_layers = (
+        1
+        if source_config["wall_time_optimisation"]
+        else source_config["mlp_layers"]
+    )
+    posterior_parameters_per_task = _posterior_parameter_count(
+        embedding_features=posterior_embedding_dim,
+        hidden_features=source_config["gru_units"],
+        mlp_features=source_config["mlp_features"],
+        mlp_layers=posterior_mlp_layers,
+    )
+    unadapted_posterior_parameters_per_task = _posterior_parameter_count(
+        embedding_features=feature_dim,
+        hidden_features=source_config["gru_units"],
+        mlp_features=source_config["mlp_features"],
+        mlp_layers=posterior_mlp_layers,
+    )
+    patch_adapter = {
+        "kind": variant.patch_adapter,
+        "shared_across_tasks": variant.patch_adapter != "none",
+        "trainable": variant.patch_adapter != "none",
+        "input_layout": (
+            [variant.patch_pool_size] * 2 + [variant.patch_feature_dim]
+            if variant.patch_adapter != "none"
+            else None
+        ),
+        "output_layout": (
+            [CONV_ADAPTER_OUTPUT_GRID_SIZE] * 2
+            + [CONV_ADAPTER_OUTPUT_CHANNELS]
+            if variant.patch_adapter != "none"
+            else None
+        ),
+        "kernel_size": 3 if variant.patch_adapter != "none" else None,
+        "stride": 2 if variant.patch_adapter != "none" else None,
+        "padding": 1 if variant.patch_adapter != "none" else None,
+        "normalization": (
+            "channel_layer_norm_eps_1e-3"
+            if variant.patch_adapter != "none"
+            else None
+        ),
+        "activation": "silu" if variant.patch_adapter != "none" else None,
+        "output_features": (
+            posterior_embedding_dim if variant.patch_adapter != "none" else None
+        ),
+        "trainable_parameters": (
+            FULL_PATCH_FEATURE_DIM
+            * CONV_ADAPTER_OUTPUT_CHANNELS
+            * 3
+            * 3
+            + CONV_ADAPTER_OUTPUT_CHANNELS
+            + 2 * CONV_ADAPTER_OUTPUT_CHANNELS
+            if variant.patch_adapter != "none"
+            else 0
+        ),
+    }
     if variant.replay_feature_mode == "cached":
         feature_cache = _feature_cache_budget(
             config,
@@ -368,7 +487,10 @@ def main(*, default_method: str = "moe") -> int:
             ),
         }
     base_replay_storage = _arrow_replay_storage_budget(config)
-    if variant.code_id == "dino_patchbank_arrow":
+    if variant.code_id in {
+        "dino_patchbank_arrow",
+        "dino_convbank_arrow",
+    }:
         base_replay_storage["observation_storage_backend"] = "file_mmap"
         base_replay_storage["anonymous_cpu_tensor_bytes"] = (
             base_replay_storage["allocated_tensor_bytes"]
@@ -443,7 +565,14 @@ def main(*, default_method: str = "moe") -> int:
                 ]
             ),
             "shared_modules": (
-                ["frozen DINOv3 encoder"]
+                (
+                    [
+                        "frozen DINOv3 encoder",
+                        "trainable shared DINO patch convolution adapter",
+                    ]
+                    if variant.patch_adapter != "none"
+                    else ["frozen DINOv3 encoder"]
+                )
                 if variant.full_task_experts
                 else [
                     "frozen DINOv3 encoder",
@@ -456,7 +585,16 @@ def main(*, default_method: str = "moe") -> int:
                 if variant.full_task_experts
                 else "copy previous task expert once"
             ),
-            "old_task_parameters_frozen": variant.full_task_experts,
+            "old_task_expert_parameters_frozen": variant.full_task_experts,
+            "old_task_parameters_frozen": (
+                variant.full_task_experts and variant.patch_adapter == "none"
+            ),
+            "old_task_functionally_isolated": (
+                variant.full_task_experts and variant.patch_adapter == "none"
+            ),
+            "shared_adapter_plastic_across_tasks": (
+                variant.patch_adapter != "none"
+            ),
             "pixel_decoder": variant.pixel_decoder,
         },
         "actor_critic": {
@@ -489,6 +627,12 @@ def main(*, default_method: str = "moe") -> int:
             "patch_projection_seed": variant.patch_projection_seed,
             "patch_projection_frames": 0,
             "feature_dim": feature_dim,
+            "posterior_embedding_dim": posterior_embedding_dim,
+            "posterior_parameters_per_task": posterior_parameters_per_task,
+            "unadapted_posterior_parameters_per_task": (
+                unadapted_posterior_parameters_per_task
+            ),
+            "patch_adapter": patch_adapter,
             "replay_feature_mode": variant.replay_feature_mode,
             "objective": variant.observation_description,
             "feature_loss": (
@@ -509,7 +653,8 @@ def main(*, default_method: str = "moe") -> int:
             "capacity_and_sampling": "ARROW-50 base allocation unchanged",
             "storage_device": (
                 "cpu_addressable_file_mmap"
-                if variant.code_id == "dino_patchbank_arrow"
+                if variant.code_id
+                in {"dino_patchbank_arrow", "dino_convbank_arrow"}
                 else "cpu"
             ),
             "base_storage": base_replay_storage,

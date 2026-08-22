@@ -430,6 +430,14 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(observation["patch_feature_dim"], 384)
         self.assertEqual(observation["patch_projection"], "none")
         self.assertEqual(observation["feature_dim"], 98_304)
+        self.assertEqual(observation["posterior_embedding_dim"], 98_304)
+        self.assertEqual(
+            observation["posterior_parameters_per_task"], 151_784_960
+        )
+        self.assertEqual(observation["patch_adapter"]["kind"], "none")
+        self.assertEqual(
+            observation["patch_adapter"]["trainable_parameters"], 0
+        )
         self.assertEqual(observation["replay_feature_mode"], "on_the_fly")
         self.assertEqual(observation["feature_loss"], "not_applicable")
         self.assertTrue(observation["pixel_decoder"])
@@ -458,6 +466,75 @@ class TrainingLauncherTests(unittest.TestCase):
             44_040_192,
         )
         self.assertEqual(launch["actor_critic"]["current_task_update_fraction"], 1.0)
+        self.assertFalse(output_dir.exists())
+
+    def test_dino_convbank_dry_run_records_shared_4096_adapter(self) -> None:
+        launch, output_dir = self._karrow_dry_run(
+            "--task-prefix-length",
+            "1",
+            "--method",
+            "dino-convbank",
+            script="scripts/run_moe_arrow_atari.py",
+        )
+
+        self.assertEqual(launch["method"], "DINO-ConvBank-ARROW-50-T1Pilot")
+        self.assertEqual(
+            launch["protocol"], "DINO-ConvBank-ARROW-v4-Atari-TaskAware"
+        )
+        self.assertEqual(launch["code_id"], "dino_convbank_arrow")
+        self.assertEqual(
+            launch["world_model"]["shared_modules"],
+            [
+                "frozen DINOv3 encoder",
+                "trainable shared DINO patch convolution adapter",
+            ],
+        )
+        self.assertTrue(
+            launch["world_model"]["shared_adapter_plastic_across_tasks"]
+        )
+        self.assertTrue(
+            launch["world_model"]["old_task_expert_parameters_frozen"]
+        )
+        self.assertFalse(launch["world_model"]["old_task_parameters_frozen"])
+        self.assertFalse(launch["world_model"]["old_task_functionally_isolated"])
+        self.assertEqual(
+            launch["world_model"]["expert_modules"],
+            [
+                "posterior_representation",
+                "recurrent_dynamics",
+                "latent_prior",
+                "pixel_decoder",
+                "reward_head",
+                "continue_head",
+            ],
+        )
+
+        observation = launch["observation"]
+        self.assertEqual(observation["feature_dim"], 98_304)
+        self.assertEqual(observation["posterior_embedding_dim"], 4_096)
+        self.assertEqual(observation["posterior_parameters_per_task"], 7_081_472)
+        self.assertEqual(
+            observation["unadapted_posterior_parameters_per_task"],
+            151_784_960,
+        )
+        adapter = observation["patch_adapter"]
+        self.assertEqual(adapter["kind"], "conv_3x3_stride2")
+        self.assertEqual(adapter["input_layout"], [16, 16, 384])
+        self.assertEqual(adapter["output_layout"], [8, 8, 64])
+        self.assertEqual(adapter["kernel_size"], 3)
+        self.assertEqual(adapter["stride"], 2)
+        self.assertEqual(adapter["padding"], 1)
+        self.assertEqual(adapter["normalization"], "channel_layer_norm_eps_1e-3")
+        self.assertEqual(adapter["activation"], "silu")
+        self.assertEqual(adapter["output_features"], 4_096)
+        self.assertEqual(adapter["trainable_parameters"], 221_376)
+        self.assertTrue(adapter["shared_across_tasks"])
+        self.assertTrue(adapter["trainable"])
+        self.assertEqual(
+            launch["replay"]["storage_device"],
+            "cpu_addressable_file_mmap",
+        )
+        self.assertEqual(launch["replay"]["feature_cache"]["storage_bytes"], 0)
         self.assertFalse(output_dir.exists())
 
     def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:

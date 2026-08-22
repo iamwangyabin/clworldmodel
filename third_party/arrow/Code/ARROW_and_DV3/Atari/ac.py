@@ -629,7 +629,12 @@ def dream_rollout(
         if task_id is not None:
             observe_kwargs["task_id"] = task_id
         _, context_z, context_h = wm.rssm.observe_embeddings(
-            z, ctx_acts, h, ctx_features, ctx_resets, **observe_kwargs
+            z,
+            ctx_acts,
+            h,
+            wm.rssm.adapt_observation_embeddings(ctx_features),
+            ctx_resets,
+            **observe_kwargs,
         )
     replay_value_batch = ReplayValueBatch(
         states=zh_to_ac_state(context_z, context_h),

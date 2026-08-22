@@ -186,6 +186,20 @@ documented here, covered by focused parity tests, and followed by regenerating
     to float32 RSSM input, matching the superseded sidecar's numeric interface.
     Focused tests compare cached and on-the-fly samples under identical replay
     RNG state and verify the launch manifest reports zero feature-storage bytes.
+30. Add the opt-in, separately named
+    `DINO-ConvBank-ARROW-v4-Atari-TaskAware` path without changing V3. A single
+    project-owned trainable adapter reshapes each detached full
+    `16 x 16 x 384` DINO patch grid, applies standard
+    `Conv2d(384,64,3,2,1)`, channel-only LayerNorm, and SiLU, then supplies the
+    flattened `8 x 8 x 64` result to the existing posterior. The 4,096-wide
+    interface restores the original Dreamer CNN embedding width while retaining
+    the V3 pixel decoder, KL, reward/continue, replay, and Actor-Critic losses.
+    The adapter is one shared plastic module across task-banked RSSMs; DINO and
+    old task experts remain frozen, so shared-adapter drift is an explicit
+    retention risk rather than hidden task isolation. Focused tests cover exact
+    shape/layer/parameter contracts, stopped DINO gradients, adapter and active
+    expert gradients, frozen old experts, config isolation, and launch resource
+    accounting.
 
 ## Known issues at import
 

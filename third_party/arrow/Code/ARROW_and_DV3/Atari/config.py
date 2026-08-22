@@ -25,11 +25,13 @@ DinoV3FeatureMode = Literal["cls", "patch_grid"]
 DinoV3FeatureLoss = Literal["cosine", "batch_standardized_smooth_l1"]
 DinoV3PatchProjection = Literal["none", "task1_pca", "fixed_orthogonal"]
 DinoV3ReplayFeatureMode = Literal["cached", "on_the_fly"]
+DinoV3PatchAdapter = Literal["none", "conv_3x3_stride2"]
 ContinualMethod = Literal[
     "none",
     "moe_arrow",
     "dino_fullbank_arrow",
     "dino_patchbank_arrow",
+    "dino_convbank_arrow",
 ]
 ResidualCorrection = Literal["none", "mlp", "kan"]
 ResidualInputMode = Literal["base_output", "module_input"]
@@ -39,6 +41,7 @@ SharedCoreMode = Literal[
     "freeze_after_first_task",
     "snapshot_adaptation",
     "task_isolated",
+    "task_banked_shared_adapter",
 ]
 ActorNetwork = Literal[
     "mlp",
@@ -277,6 +280,7 @@ class Config(Serialisable):
     dinov3_patch_projection: DinoV3PatchProjection = "none"
     dinov3_patch_projection_frames: int = 0
     dinov3_patch_projection_seed: int = 0
+    dinov3_patch_adapter: DinoV3PatchAdapter = "none"
     dinov3_feature_loss_kind: DinoV3FeatureLoss = "cosine"
     dinov3_feature_std_floor: float = 0.05
 
@@ -319,12 +323,15 @@ class Config(Serialisable):
             "moe_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
+            "dino_convbank_arrow",
         }:
             raise ValueError(f"Unknown continual method: {self.continual_method!r}")
         is_moe_arrow = self.continual_method == "moe_arrow"
         is_dino_fullbank = self.continual_method == "dino_fullbank_arrow"
         is_dino_patchbank = self.continual_method == "dino_patchbank_arrow"
-        uses_task_experts = is_moe_arrow or is_dino_fullbank or is_dino_patchbank
+        is_dino_convbank = self.continual_method == "dino_convbank_arrow"
+        is_dino_pixelbank = is_dino_patchbank or is_dino_convbank
+        uses_task_experts = is_moe_arrow or is_dino_fullbank or is_dino_pixelbank
         if uses_task_experts:
             if self.algorithm != "arrow":
                 raise ValueError("Task-aware expert methods require ARROW mixed replay")
@@ -357,25 +364,31 @@ class Config(Serialisable):
                 raise ValueError(
                     "MoE-ARROW predicts frozen DINOv3 features from the RSSM prior"
                 )
-        elif is_dino_fullbank or is_dino_patchbank:
+        elif is_dino_fullbank or is_dino_pixelbank:
             if self.dino_fullbank_current_task_fraction != 1.0:
                 raise ValueError(
                     "DINO task banks assign all updates to the current task"
                 )
-            if self.shared_core_mode != "task_isolated":
+            expected_shared_core_mode = (
+                "task_banked_shared_adapter"
+                if is_dino_convbank
+                else "task_isolated"
+            )
+            if self.shared_core_mode != expected_shared_core_mode:
                 raise ValueError(
-                    "DINO task banks require shared_core_mode='task_isolated'"
+                    "The selected DINO task bank requires shared_core_mode="
+                    f"'{expected_shared_core_mode}'"
                 )
             expected_objective = (
                 "reconstruction"
-                if is_dino_patchbank
+                if is_dino_pixelbank
                 else "dinov3_posterior_feature"
             )
             if self.observation_objective != expected_objective:
                 raise ValueError(
                     (
-                        "DINO-PatchBank-ARROW keeps DreamerV3 pixel reconstruction"
-                        if is_dino_patchbank
+                        "DINO patch task banks keep DreamerV3 pixel reconstruction"
+                        if is_dino_pixelbank
                         else "DINO-FullBank-ARROW reconstructs posterior DINOv3 features"
                     )
                 )
@@ -383,12 +396,12 @@ class Config(Serialisable):
                 raise ValueError(
                     "DINO task banks require a random collection for each new task"
                 )
-            if is_dino_patchbank and any(
+            if is_dino_pixelbank and any(
                 replay_config.rb_device.split(":", 1)[0] != "cpu"
                 for replay_config in self.replay_buffers
             ):
                 raise ValueError(
-                    "DINO-PatchBank-ARROW requires CPU-addressable mapped observation replay"
+                    "DINO patch task banks require CPU-addressable mapped observation replay"
                 )
         if self.observation_objective not in {
             "reconstruction",
@@ -429,15 +442,15 @@ class Config(Serialisable):
                 raise ValueError("Unknown DINOv3 feature cache dtype")
             if self.dinov3_replay_feature_mode not in {"cached", "on_the_fly"}:
                 raise ValueError("Unknown DINOv3 replay feature mode")
-            if is_dino_patchbank:
+            if is_dino_pixelbank:
                 if self.dinov3_replay_feature_mode != "on_the_fly":
                     raise ValueError(
-                        "DINO-PatchBank-ARROW recomputes frozen DINOv3 patches "
+                        "A DINO patch task bank recomputes frozen DINOv3 patches "
                         "from sampled replay observations"
                     )
             elif self.dinov3_replay_feature_mode != "cached":
                 raise ValueError(
-                    "Only DINO-PatchBank-ARROW supports on-the-fly replay features"
+                    "Only DINO patch task banks support on-the-fly replay features"
                 )
             if self.dinov3_feature_loss_scale <= 0:
                 raise ValueError("dinov3_feature_loss_scale must be positive")
@@ -457,6 +470,20 @@ class Config(Serialisable):
                 raise ValueError("dinov3_patch_projection_frames must be non-negative")
             if self.dinov3_patch_projection_seed < 0:
                 raise ValueError("dinov3_patch_projection_seed must be non-negative")
+            if self.dinov3_patch_adapter not in {
+                "none",
+                "conv_3x3_stride2",
+            }:
+                raise ValueError("Unknown DINOv3 patch adapter")
+            if is_dino_convbank:
+                if self.dinov3_patch_adapter != "conv_3x3_stride2":
+                    raise ValueError(
+                        "DINO-ConvBank-ARROW requires the shared 3x3 stride-2 adapter"
+                    )
+            elif self.dinov3_patch_adapter != "none":
+                raise ValueError(
+                    "Only DINO-ConvBank-ARROW uses a trainable patch adapter"
+                )
             if self.dinov3_feature_loss_kind not in {
                 "cosine",
                 "batch_standardized_smooth_l1",
@@ -544,34 +571,34 @@ class Config(Serialisable):
                         "Posterior DINOv3 objectives require batch-standardized SmoothL1"
                     )
             elif self.observation_objective == "reconstruction":
-                if not is_dino_patchbank:
+                if not is_dino_pixelbank:
                     raise ValueError(
                         "DINOv3 pixel reconstruction is reserved for "
-                        "DINO-PatchBank-ARROW"
+                        "named DINO patch task banks"
                     )
                 if self.dinov3_feature_mode != "patch_grid":
                     raise ValueError(
-                        "DINO-PatchBank-ARROW requires spatial DINOv3 patch tokens"
+                        "DINO patch task banks require spatial DINOv3 patch tokens"
                     )
                 if self.dinov3_patch_pool_size != 16:
                     raise ValueError(
-                        "DINO-PatchBank-ARROW retains the complete 16x16 patch grid"
+                        "DINO patch task banks retain the complete 16x16 patch grid"
                     )
                 if self.dinov3_patch_feature_dim != 384:
                     raise ValueError(
-                        "DINO-PatchBank-ARROW retains all 384 patch channels"
+                        "DINO patch task banks retain all 384 patch channels"
                     )
                 if self.dinov3_patch_projection != "none":
                     raise ValueError(
-                        "DINO-PatchBank-ARROW does not project frozen patch features"
+                        "DINO patch task banks do not project frozen patch features"
                     )
                 if self.dinov3_patch_projection_frames != 0:
                     raise ValueError(
-                        "DINO-PatchBank-ARROW does not fit a patch projection"
+                        "DINO patch task banks do not fit a patch projection"
                     )
                 if self.dinov3_patch_projection_seed != 0:
                     raise ValueError(
-                        "DINO-PatchBank-ARROW has no patch-projection RNG"
+                        "DINO patch task banks have no patch-projection RNG"
                     )
             else:
                 raise ValueError(
@@ -595,6 +622,7 @@ class Config(Serialisable):
             or self.dinov3_patch_projection != "none"
             or self.dinov3_patch_projection_frames != 0
             or self.dinov3_patch_projection_seed != 0
+            or self.dinov3_patch_adapter != "none"
             or self.dinov3_feature_loss_kind != "cosine"
         ):
             raise ValueError(
@@ -618,6 +646,7 @@ class Config(Serialisable):
             "freeze_after_first_task",
             "snapshot_adaptation",
             "task_isolated",
+            "task_banked_shared_adapter",
         }:
             raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
         if self.shared_core_mode == "task_isolated" and not (
@@ -625,6 +654,14 @@ class Config(Serialisable):
         ):
             raise ValueError(
                 "shared_core_mode='task_isolated' is reserved for DINO task banks"
+            )
+        if (
+            self.shared_core_mode == "task_banked_shared_adapter"
+            and not is_dino_convbank
+        ):
+            raise ValueError(
+                "shared_core_mode='task_banked_shared_adapter' is reserved for "
+                "DINO-ConvBank-ARROW"
             )
         if self.residual_correction != "none" and not uses_dinov3:
             raise ValueError("KARROW residuals require the frozen DINOv3 protocol")
@@ -887,6 +924,7 @@ class Config(Serialisable):
             "moe_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
+            "dino_convbank_arrow",
         }
 
     @property
@@ -894,6 +932,7 @@ class Config(Serialisable):
         return self.continual_method in {
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
+            "dino_convbank_arrow",
         }
 
     @property
@@ -903,6 +942,7 @@ class Config(Serialisable):
         if self.continual_method in {
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
+            "dino_convbank_arrow",
         }:
             return self.dino_fullbank_current_task_fraction
         raise ValueError("Task update fractions require a task-aware expert method")

@@ -95,6 +95,7 @@ class Rssm(nn.Module):
         dinov3_patch_feature_dim: int = 384,
         dinov3_patch_projection: str = "none",
         dinov3_patch_projection_seed: int = 0,
+        dinov3_patch_adapter: str = "none",
         num_task_experts: int = 1,
         full_task_experts: bool = False,
         residual_correction: str = "none",
@@ -162,9 +163,31 @@ class Rssm(nn.Module):
             raise ValueError(f"Unknown observation encoder: {observation_encoder!r}")
         if not hasattr(self.image_embedder, "output_size"):
             raise TypeError("Image embedder must declare output_size")
+        self.observation_adapter_kind = dinov3_patch_adapter
+        self.observation_adapter: nn.Module = nn.Identity()
+        self.observation_embedding_size = self.image_embedder.output_size
+        if dinov3_patch_adapter == "conv_3x3_stride2":
+            from clworldmodel.models.dinov3_adapter import DinoPatchConvAdapter
+
+            adapter = DinoPatchConvAdapter(
+                patch_grid_size=dinov3_patch_pool_size,
+                in_channels=dinov3_patch_feature_dim,
+                out_channels=64,
+            )
+            if adapter.input_size != self.image_embedder.output_size:
+                raise ValueError(
+                    "DINO patch adapter input does not match the image embedder: "
+                    f"{adapter.input_size} != {self.image_embedder.output_size}"
+                )
+            self.observation_adapter = adapter
+            self.observation_embedding_size = adapter.output_size
+        elif dinov3_patch_adapter != "none":
+            raise ValueError(
+                f"Unknown DINOv3 patch adapter: {dinov3_patch_adapter!r}"
+            )
         self.representation = Representation(
             ls,
-            self.image_embedder.output_size,
+            self.observation_embedding_size,
             h_dim,
             mlp_features,
             mlp_layers if not wto else 1,
@@ -206,6 +229,7 @@ class Rssm(nn.Module):
     def freeze_shared_core(self) -> None:
         """Freeze base RSSM functions while leaving residual adapters plastic."""
         self.image_embedder.requires_grad_(False)
+        self.observation_adapter.requires_grad_(False)
         self.recurrent.freeze_shared_core()
         for recurrent in self.recurrent_experts:
             recurrent.freeze_shared_core()
@@ -310,7 +334,7 @@ class Rssm(nn.Module):
             # No time dimension
             h = self.recurrent_for(task_id)(prev_z, prev_a, prev_h)
             if x is not None:
-                e = self.image_embedder(x)
+                e = self.adapt_observation_embeddings(self.image_embedder(x))
                 z_log_dist = self.representation_for(task_id)(e, h)
             else:
                 z_log_dist = self.prior(h, task_id)
@@ -361,7 +385,26 @@ class Rssm(nn.Module):
                 f"got {tuple(x.shape)}"
             )
         t, n = x.shape[:2]
-        return self.image_embedder(x.reshape(-1, *x.shape[-3:])).view(t, n, -1)
+        raw_embeddings = self.image_embedder(x.reshape(-1, *x.shape[-3:]))
+        return self.adapt_observation_embeddings(raw_embeddings).view(t, n, -1)
+
+    def adapt_observation_embeddings(self, embeddings: EmbedT) -> EmbedT:
+        """Map frozen encoder outputs to the posterior's embedding interface."""
+        if embeddings.ndim < 2:
+            raise ValueError("Observation embeddings must include a feature axis")
+        if embeddings.shape[-1] != self.image_embedder.output_size:
+            raise ValueError(
+                "Raw observation embeddings have an unexpected width: "
+                f"expected {self.image_embedder.output_size}, "
+                f"got {embeddings.shape[-1]}"
+            )
+        leading_shape = embeddings.shape[:-1]
+        adapted = self.observation_adapter(
+            embeddings.reshape(-1, embeddings.shape[-1])
+        )
+        if adapted.shape[-1] != self.observation_embedding_size:
+            raise RuntimeError("Observation adapter returned an unexpected width")
+        return adapted.reshape(*leading_shape, self.observation_embedding_size)
 
     def observe_embeddings(
         self,
@@ -379,6 +422,12 @@ class Rssm(nn.Module):
             raise ValueError("Actions and embeddings must include time and batch dimensions")
         if prev_a.shape[:2] != embeddings.shape[:2] or reset.shape[:2] != prev_a.shape[:2]:
             raise ValueError("Actions, embeddings, and resets must share [T, N] dimensions")
+        if embeddings.shape[-1] != self.observation_embedding_size:
+            raise ValueError(
+                "Posterior embeddings have an unexpected width: "
+                f"expected {self.observation_embedding_size}, "
+                f"got {embeddings.shape[-1]}"
+            )
 
         hs = []
         z_log_dists = []

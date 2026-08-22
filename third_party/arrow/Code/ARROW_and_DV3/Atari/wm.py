@@ -113,6 +113,7 @@ class WorldModel(nn.Module):
         dinov3_patch_feature_dim: int = 384,
         dinov3_patch_projection: str = "none",
         dinov3_patch_projection_seed: int = 0,
+        dinov3_patch_adapter: str = "none",
         dinov3_feature_loss_kind: str = "cosine",
         dinov3_feature_std_floor: float = 0.05,
         residual_correction: str = "none",
@@ -194,6 +195,7 @@ class WorldModel(nn.Module):
             dinov3_patch_feature_dim=dinov3_patch_feature_dim,
             dinov3_patch_projection=dinov3_patch_projection,
             dinov3_patch_projection_seed=dinov3_patch_projection_seed,
+            dinov3_patch_adapter=dinov3_patch_adapter,
             num_task_experts=num_task_experts,
             full_task_experts=full_task_experts,
             residual_correction=residual_correction,
@@ -468,6 +470,9 @@ class WorldModel(nn.Module):
             raise ValueError(f"Task expert {task_index} has not been initialized")
 
         self.rssm.image_embedder.requires_grad_(False)
+        self.rssm.observation_adapter.requires_grad_(
+            self.rssm.observation_adapter_kind != "none"
+        )
         for index in range(self.rssm.num_task_experts):
             is_active = index == task_index
             self.rssm.recurrent_for(index).requires_grad_(is_active)
@@ -507,7 +512,7 @@ class WorldModel(nn.Module):
         return prediction
 
     def freeze_shared_core(self) -> None:
-        """Freeze base world-model functions while leaving adapters trainable."""
+        """Freeze base functions while leaving residual adapters trainable."""
         if self.residual_correction == "none":
             raise ValueError("Frozen shared core requires plastic residual adapters")
         self.rssm.freeze_shared_core()
@@ -574,18 +579,24 @@ class WorldModel(nn.Module):
             "dinov3_next_feature",
             "dinov3_posterior_feature",
         }:
-            embeddings = (
+            raw_or_adapted = (
                 self.rssm.embed_observations(xs)
                 if observation_features is None
                 else observation_features
             )
-            if embeddings.shape[:2] != actions.shape[:2]:
+            if raw_or_adapted.shape[:2] != actions.shape[:2]:
                 raise ValueError(
                     "Observation features and actions must share time/batch axes"
                 )
-            if embeddings.shape[-1] != self.rssm.image_embedder.output_size:
-                raise ValueError("Observation features have an unexpected width")
-            if observation_features is not None or self.observation_objective in {
+            if observation_features is not None:
+                embeddings = self.rssm.adapt_observation_embeddings(
+                    observation_features.detach()
+                )
+            else:
+                embeddings = raw_or_adapted
+            if embeddings.shape[-1] != self.rssm.observation_embedding_size:
+                raise ValueError("Adapted observation features have an unexpected width")
+            if observation_features is None and self.observation_objective in {
                 "dinov3_next_feature",
                 "dinov3_posterior_feature",
             }:
