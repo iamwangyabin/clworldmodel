@@ -96,6 +96,7 @@ class Rssm(nn.Module):
         dinov3_patch_projection: str = "none",
         dinov3_patch_projection_seed: int = 0,
         num_task_experts: int = 1,
+        full_task_experts: bool = False,
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
         residual_grid_size: int = 8,
@@ -110,6 +111,8 @@ class Rssm(nn.Module):
         super().__init__()
         if num_task_experts < 1:
             raise ValueError("num_task_experts must be positive")
+        if full_task_experts and num_task_experts < 2:
+            raise ValueError("Full task experts require at least two task routes")
         if num_task_experts > 1 and residual_correction != "none":
             raise ValueError(
                 "Task-routed RSSM experts do not compose with residual corrections"
@@ -117,6 +120,7 @@ class Rssm(nn.Module):
         self.ls = ls
         self.h_dim = h_dim
         self.num_task_experts = num_task_experts
+        self.full_task_experts = full_task_experts
 
         self.recurrent = Recurrent(
             ls,
@@ -175,6 +179,10 @@ class Rssm(nn.Module):
             residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
         )
+        self.representation_experts = nn.ModuleList(
+            copy.deepcopy(self.representation)
+            for _ in range(num_task_experts - 1 if full_task_experts else 0)
+        )
         self.transition = Transition(
             ls,
             h_dim,
@@ -202,6 +210,8 @@ class Rssm(nn.Module):
         for recurrent in self.recurrent_experts:
             recurrent.freeze_shared_core()
         self.representation.freeze_shared_core()
+        for representation in self.representation_experts:
+            representation.freeze_shared_core()
         self.transition.freeze_shared_core()
         for transition in self.transition_experts:
             transition.freeze_shared_core()
@@ -214,7 +224,7 @@ class Rssm(nn.Module):
         if isinstance(task_id, torch.Tensor):
             if task_id.numel() != 1:
                 raise ValueError(
-                    "task_id must be scalar; MoE-ARROW minibatches are task-homogeneous"
+                    "task_id must be scalar; task-routed minibatches are task-homogeneous"
                 )
             task_id = int(task_id.detach().item())
         if not isinstance(task_id, int):
@@ -233,6 +243,14 @@ class Rssm(nn.Module):
         task_index = self._task_index(task_id)
         return self.transition if task_index == 0 else self.transition_experts[task_index - 1]
 
+    def representation_for(
+        self, task_id: Optional[int | torch.Tensor]
+    ) -> "Representation":
+        task_index = self._task_index(task_id)
+        if task_index == 0 or not self.full_task_experts:
+            return self.representation
+        return self.representation_experts[task_index - 1]
+
     def prior(
         self, hidden: HiddenT, task_id: Optional[int | torch.Tensor] = None
     ) -> LatentLogDistT:
@@ -247,6 +265,10 @@ class Rssm(nn.Module):
         self.transition_for(target_task_id).load_state_dict(
             self.transition_for(source_task_id).state_dict()
         )
+        if self.full_task_experts:
+            self.representation_for(target_task_id).load_state_dict(
+                self.representation_for(source_task_id).state_dict()
+            )
 
     def __call__(
         self,
@@ -289,7 +311,7 @@ class Rssm(nn.Module):
             h = self.recurrent_for(task_id)(prev_z, prev_a, prev_h)
             if x is not None:
                 e = self.image_embedder(x)
-                z_log_dist = self.representation(e, h)
+                z_log_dist = self.representation_for(task_id)(e, h)
             else:
                 z_log_dist = self.prior(h, task_id)
             z_logits, z_sample = straight_through_one_hot(
@@ -366,7 +388,7 @@ class Rssm(nn.Module):
             h = self.recurrent_for(task_id)(
                 z * (1 - r).unsqueeze(-1), a, h * (1 - r)
             )
-            z_log_dist = self.representation(e, h)
+            z_log_dist = self.representation_for(task_id)(e, h)
             _, z_sample = straight_through_one_hot(
                 z_log_dist / temperature, stochastic
             )

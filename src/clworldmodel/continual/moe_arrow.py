@@ -72,6 +72,7 @@ def shuffled_task_schedule(
 class ActorCriticBank(Generic[T]):
     """Own independent actor-critic/optimizer bundles keyed by task identity."""
 
+    artifact_kind: str = "moe_arrow_actor_critic_bank_inference_state"
     _entries: dict[int, T] = field(default_factory=dict)
 
     def __contains__(self, task_id: int) -> bool:
@@ -124,6 +125,16 @@ class ActorCriticBank(Generic[T]):
         self._entries[task_id] = entry
         return entry
 
+    def activate(self, task_id: int) -> None:
+        """Make one actor-critic plastic while preserving frozen old policies."""
+        self.get(task_id)
+        for entry_task_id, entry in self._entries.items():
+            is_active = entry_task_id == task_id
+            getattr(entry, "ac").requires_grad_(is_active)
+            slow_critic = getattr(entry, "slow_critic", None)
+            if slow_critic is not None:
+                slow_critic.requires_grad_(is_active)
+
     def inference_state_dict(self) -> dict[str, object]:
         """Return CPU actor states without pretending optimizer/replay are resumable."""
         tasks: dict[str, dict[str, torch.Tensor]] = {}
@@ -135,7 +146,7 @@ class ActorCriticBank(Generic[T]):
             }
         return {
             "schema_version": 1,
-            "artifact_kind": "moe_arrow_actor_critic_bank_inference_state",
+            "artifact_kind": self.artifact_kind,
             "resumable": False,
             "tasks": tasks,
         }

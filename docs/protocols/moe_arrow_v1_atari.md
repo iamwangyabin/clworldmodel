@@ -2,10 +2,10 @@
 
 ## Status and claim boundary
 
-`MoE-ARROW-v1-Atari-TaskAware` is implemented but untrained. It is a
-storage-unconstrained, task-aware continual DreamerV3 method built on ARROW-50
-replay. A smoke run establishes only execution correctness. No performance or
-reproduction claim exists until matched multi-seed experiments finish.
+`MoE-ARROW-v1-Atari-TaskAware` completed one seed-0 two-task pilot on
+2026-08-22. The pilot is negative and is retained as a failed acquisition
+result, not a reproduction or a multi-seed performance claim. V1 remains
+reproducible but is not the next experimental main line.
 
 The code identifier is `moe_arrow`; the reported method name is
 `MoE-ARROW-50`. Because the scheduler exposes task identity to the model and
@@ -144,7 +144,32 @@ smoke before any pilot or official campaign.
 Report at least ARROW-50, the shared-DINO ARROW control, and MoE-ARROW under
 matched environment and update budgets. Parameter count, optimizer state,
 replay bytes, feature-cache bytes, task-ID privilege, current-task return,
-final average return, and forgetting must all be shown. Per-task RSSM plus
-per-task Actor-Critic is the storage-unconstrained reference; smaller expert
-sharing or learned routing is evaluated against this v1 reference, not silently
-folded into it.
+final average return, and forgetting must all be shown. V1 is a partial-expert
+ablation, not the complete per-task RSSM reference. The separately named
+DINO-FullBank-ARROW-v2 protocol defines that storage-unconstrained reference.
+
+## Completed pilot result
+
+The pilot used project commit `c685acc`, the original-order MsPacman-to-Boxing
+prefix, 180 epochs, 2,949,120 agent decisions, 11,796,480 raw frames, 180,000
+world-model updates, and 144,000 Actor-Critic updates. Its final deterministic
+raw returns over 16 rollouts were:
+
+| Task | MoE-ARROW-v1 | Historical ARROW-50 diagnostic |
+| --- | ---: | ---: |
+| MsPacman | 700.0 | 1,643.75 at the same 180-epoch checkpoint |
+| Boxing | 9.4375 | 85.4375 |
+
+The epoch-89 stochastic collection return on MsPacman was only about 620.65,
+so the failure was already present on Task 1 and is not explained by final
+deterministic evaluation. The DINO feature loss fell from 0.991319 to 0.002497
+while the combined KL fell from 2.563 to 0.601044, effectively its 0.6
+free-bits floor. This is consistent with the shared posterior ignoring the
+current DINO target while the shared prior feature head exploits an easy cosine
+direction. It is diagnostic evidence, not a proof of a unique failure cause.
+
+The corrected, separately named `DINO-FullBank-ARROW-v2-Atari-TaskAware`
+protocol routes the posterior and feature head too, grounds each posterior in
+the current stopped spatial feature, gives all updates to the current expert,
+and initializes each task Actor-Critic independently. See
+`docs/protocols/dino_fullbank_arrow_v2_atari.md`.

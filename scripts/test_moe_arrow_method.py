@@ -79,6 +79,21 @@ class MoeArrowMethodTests(unittest.TestCase):
         )
         return data
 
+    @classmethod
+    def _fullbank_config_data(cls) -> dict:
+        data = cls._method_config_data()
+        data.update(
+            {
+                "continual_method": "dino_fullbank_arrow",
+                "dino_fullbank_current_task_fraction": 1.0,
+                "observation_objective": "dinov3_posterior_feature",
+                "dinov3_feature_loss_kind": "batch_standardized_smooth_l1",
+                "random_policy": "new",
+                "shared_core_mode": "task_isolated",
+            }
+        )
+        return data
+
     def test_config_requires_the_complete_named_task_aware_protocol(self) -> None:
         config = Config.from_dict(self._method_config_data())
         self.assertEqual(config.continual_method, "moe_arrow")
@@ -99,6 +114,34 @@ class MoeArrowMethodTests(unittest.TestCase):
         invalid["dinov3_patch_projection"] = "task1_pca"
         invalid["dinov3_patch_projection_frames"] = 512
         with self.assertRaisesRegex(ValueError, "task-independent fixed projection"):
+            Config.from_dict(invalid)
+
+    def test_fullbank_config_is_a_separate_fixed_protocol(self) -> None:
+        config = Config.from_dict(self._fullbank_config_data())
+        self.assertEqual(config.continual_method, "dino_fullbank_arrow")
+        self.assertTrue(config.uses_task_experts)
+        self.assertTrue(config.uses_full_task_experts)
+        self.assertEqual(config.task_update_fraction, 1.0)
+
+        invalid = self._fullbank_config_data()
+        invalid["dino_fullbank_current_task_fraction"] = 0.5
+        with self.assertRaisesRegex(ValueError, "all updates to the current task"):
+            Config.from_dict(invalid)
+
+        invalid = self._fullbank_config_data()
+        invalid["observation_objective"] = "dinov3_next_feature"
+        invalid["dinov3_feature_loss_kind"] = "cosine"
+        with self.assertRaisesRegex(ValueError, "posterior DINOv3 features"):
+            Config.from_dict(invalid)
+
+        invalid = self._fullbank_config_data()
+        invalid["random_policy"] = "first"
+        with self.assertRaisesRegex(ValueError, "random collection for each new task"):
+            Config.from_dict(invalid)
+
+        invalid = self._fullbank_config_data()
+        invalid["shared_core_mode"] = "trainable"
+        with self.assertRaisesRegex(ValueError, "task_isolated"):
             Config.from_dict(invalid)
 
     def test_fifo_and_mixed_replay_filter_homogeneous_task_minibatches(self) -> None:
@@ -158,6 +201,8 @@ class MoeArrowMethodTests(unittest.TestCase):
             image_embedder=Embedder(),
             num_task_experts=2,
         )
+        self.assertIs(rssm.representation_for(0), rssm.representation_for(1))
+        self.assertEqual(len(rssm.representation_experts), 0)
         with torch.no_grad():
             rssm.recurrent_experts[0].rnn.bias_ih[0].add_(0.5)
 
@@ -228,6 +273,16 @@ class MoeArrowMethodTests(unittest.TestCase):
             current_task_fraction=0.5,
         )
         self.assertEqual(first_task, {0: 800})
+
+        current_only = allocate_task_updates(
+            800,
+            current_task_id=2,
+            available_task_ids=(0, 1, 2),
+            current_task_fraction=1.0,
+        )
+        self.assertEqual(current_only[2], 800)
+        self.assertEqual(current_only[0], 0)
+        self.assertEqual(current_only[1], 0)
 
     def test_fixed_patch_projection_is_task_independent_and_rng_isolated(self) -> None:
         class Backbone(nn.Module):
@@ -303,6 +358,150 @@ class MoeArrowMethodTests(unittest.TestCase):
         self.assertIsNot(target.opt, source.opt)
         self.assertEqual(target.opt.state, {})
         self.assertEqual(target.return_scale_ema.item(), 0.0)
+
+    def test_actor_bank_can_create_a_fresh_task_and_freeze_old_actors(self) -> None:
+        def factory(task_id: int):
+            actor_critic = nn.Linear(3, 2)
+            optimizer = torch.optim.Adam(actor_critic.parameters(), lr=1e-3)
+            return SimpleNamespace(
+                ac=actor_critic,
+                opt=optimizer,
+                slow_critic=None,
+                return_scale_ema=torch.tensor(float(task_id)),
+                return_mean_ema=None,
+            )
+
+        torch.manual_seed(13)
+        bank = ActorCriticBank()
+        source = bank.ensure(0, factory)
+        with torch.no_grad():
+            source.ac.weight.fill_(3.0)
+        target = bank.ensure(1, factory)
+
+        self.assertFalse(torch.equal(target.ac.weight, source.ac.weight))
+        bank.activate(1)
+        self.assertFalse(any(parameter.requires_grad for parameter in source.ac.parameters()))
+        self.assertTrue(all(parameter.requires_grad for parameter in target.ac.parameters()))
+
+    def test_fullbank_routes_and_trains_the_complete_selected_world_model(self) -> None:
+        class Embedder(nn.Module):
+            output_size = 6
+
+            def forward(self, images: torch.Tensor) -> torch.Tensor:
+                return images.mean((-2, -1)).repeat(1, 2)
+
+        torch.manual_seed(19)
+        world_model = WorldModel(
+            3,
+            (2, 3),
+            4,
+            5,
+            cnn_depth=4,
+            mlp_features=8,
+            mlp_layers=2,
+            observation_objective="dinov3_posterior_feature",
+            dinov3_feature_loss_kind="batch_standardized_smooth_l1",
+            num_task_experts=2,
+            full_task_experts=True,
+            image_embedder=Embedder(),
+        )
+        optimizer = torch.optim.Adam(world_model.parameters(), lr=1e-3)
+
+        world_model.activate_task_expert(0)
+        self.assertIsNot(
+            world_model.rssm.representation_for(0),
+            world_model.rssm.representation_for(1),
+        )
+        self.assertTrue(
+            all(parameter.requires_grad for parameter in world_model.rssm.representation.parameters())
+        )
+        self.assertFalse(
+            any(
+                parameter.requires_grad
+                for parameter in world_model.rssm.representation_experts[0].parameters()
+            )
+        )
+        self.assertTrue(world_model.initialize_task_expert(1, 0))
+        torch.testing.assert_close(
+            world_model.feature_predictor_for(1).weight,
+            world_model.feature_predictor_for(0).weight,
+        )
+
+        world_model.activate_task_expert(1)
+        self.assertFalse(
+            any(parameter.requires_grad for parameter in world_model.rssm.representation.parameters())
+        )
+        self.assertTrue(
+            all(
+                parameter.requires_grad
+                for parameter in world_model.rssm.representation_experts[0].parameters()
+            )
+        )
+        self.assertFalse(
+            any(parameter.requires_grad for parameter in world_model.feature_predictor.parameters())
+        )
+        self.assertTrue(
+            all(
+                parameter.requires_grad
+                for parameter in world_model.feature_predictor_experts[0].parameters()
+            )
+        )
+        frozen_representation = {
+            name: value.detach().clone()
+            for name, value in world_model.rssm.representation.state_dict().items()
+        }
+        selected_feature_weight = (
+            world_model.feature_predictor_experts[0].weight.detach().clone()
+        )
+
+        actions = torch.nn.functional.one_hot(
+            torch.tensor([[0, 1], [2, 3], [1, 0]]), num_classes=4
+        ).float()
+        observations = torch.zeros(3, 2, 3, 64, 64)
+        features = torch.randn(3, 2, 6, requires_grad=True)
+        rewards = torch.randn(3, 2, 1)
+        continues = torch.ones(3, 2, 1)
+        resets = torch.zeros(3, 2, 1)
+
+        loss, metrics = world_model.compute_loss(
+            actions,
+            observations,
+            rewards,
+            continues,
+            resets,
+            observation_features=features,
+            task_id=1,
+        )
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIn("Metric/dinov3_constant_feature_loss", metrics)
+        self.assertIsNone(features.grad)
+        self.assertTrue(
+            all(parameter.grad is None for parameter in world_model.rssm.representation.parameters())
+        )
+        self.assertTrue(
+            any(
+                parameter.grad is not None
+                for parameter in world_model.rssm.representation_experts[0].parameters()
+            )
+        )
+        self.assertTrue(
+            all(parameter.grad is None for parameter in world_model.feature_predictor.parameters())
+        )
+        self.assertGreater(
+            world_model.feature_predictor_experts[0].weight.grad.abs().sum().item(),
+            0,
+        )
+        optimizer.step()
+        for name, value in world_model.rssm.representation.state_dict().items():
+            torch.testing.assert_close(value, frozen_representation[name], rtol=0, atol=0)
+        self.assertFalse(
+            torch.equal(
+                world_model.feature_predictor_experts[0].weight,
+                selected_feature_weight,
+            )
+        )
 
     def test_tiny_task_routed_world_model_and_actor_update(self) -> None:
         class Embedder(nn.Module):

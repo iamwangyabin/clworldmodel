@@ -28,8 +28,10 @@ ablations at different stages of evidence:
   fixed-checkpoint DINO/RSSM task-region audit;
 - the implementation-ready `KARROW-InputAligned-v4` path, whose KAN or matched
   MLP branches consume each corrected module's original input;
-- the implementation-ready task-aware `MoE-ARROW-v1` upper-bound path with
-  routed world-model experts and a per-task Actor-Critic bank;
+- the completed negative task-aware `MoE-ARROW-v1` two-task pilot, preserved as
+  a failed acquisition result;
+- the implementation-ready `DINO-FullBank-ARROW-v2` correction with complete
+  per-task world models and Actor-Critics;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -284,9 +286,41 @@ python scripts/run_moe_arrow_atari.py \
   --dry-run
 ```
 
-The method is implemented but untrained. See
+The completed seed-0 two-task pilot was negative: final deterministic raw
+returns were 700.0 on MsPacman and 9.4375 on Boxing. Its prior cosine feature
+loss collapsed while KL reached the free-bits floor, and Task 1 itself remained
+weak. See
 `docs/protocols/moe_arrow_v1_atari.md` for routing equations, fixed budgets,
-storage accounting, evaluation, and claim limits.
+storage accounting, the pilot record, and claim limits.
+
+## Corrected task-aware method: DINO-FullBank-ARROW-v2
+
+`DINO-FullBank-ARROW-50` keeps frozen DINOv3 but removes the remaining shared
+trainable bottlenecks. Every task owns its posterior representation, recurrent
+dynamics, latent prior, posterior feature head, reward/continue heads, and a
+fresh independent MLP Actor-Critic. Task 1 activates only expert 0. At a later
+boundary the complete previous world-model expert is copied once, all old
+parameters are frozen, and every fixed update goes to the current task.
+
+The observation target is the current stopped `4 x 4 x 64` DINO patch feature.
+It is reconstructed from the current posterior with batch-standardized
+SmoothL1, including first and reset observations. This directly grounds the
+posterior and logs a constant-prediction baseline instead of relying on the
+failed prior cosine objective. The first collection on each new task is random;
+the new Actor-Critic does not inherit the preceding game's policy.
+
+```bash
+export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
+python scripts/run_dino_fullbank_arrow_atari.py \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+```
+
+This is a task-aware, storage-expanding reference and is currently untrained.
+Its first gate is MsPacman acquisition, not continual retention. See
+`docs/protocols/dino_fullbank_arrow_v2_atari.md` for the exact routing,
+resource accounting, and execution order.
 
 ## Task-2 snapshot acquisition diagnostic
 

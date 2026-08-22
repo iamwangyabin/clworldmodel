@@ -24,7 +24,7 @@ ObservationEncoder = Literal["cnn", "dinov3_vits16"]
 DinoV3FeatureMode = Literal["cls", "patch_grid"]
 DinoV3FeatureLoss = Literal["cosine", "batch_standardized_smooth_l1"]
 DinoV3PatchProjection = Literal["none", "task1_pca", "fixed_orthogonal"]
-ContinualMethod = Literal["none", "moe_arrow"]
+ContinualMethod = Literal["none", "moe_arrow", "dino_fullbank_arrow"]
 ResidualCorrection = Literal["none", "mlp", "kan"]
 ResidualInputMode = Literal["base_output", "module_input"]
 ResidualConsolidation = Literal["none", "replay_functional"]
@@ -32,6 +32,7 @@ SharedCoreMode = Literal[
     "trainable",
     "freeze_after_first_task",
     "snapshot_adaptation",
+    "task_isolated",
 ]
 ActorNetwork = Literal[
     "mlp",
@@ -189,6 +190,7 @@ class Config(Serialisable):
     continual_method: ContinualMethod = "none"
     rssm_num_experts: int = 1
     moe_arrow_current_task_fraction: float = 0.5
+    dino_fullbank_current_task_fraction: float = 1.0
 
     n_sync: int = 2
     gen_seq_len: int = 4096
@@ -305,35 +307,64 @@ class Config(Serialisable):
         assert self.n_sync * self.gen_seq_len == self.data_n * self.data_t
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
-        if self.continual_method not in {"none", "moe_arrow"}:
+        if self.continual_method not in {
+            "none",
+            "moe_arrow",
+            "dino_fullbank_arrow",
+        }:
             raise ValueError(f"Unknown continual method: {self.continual_method!r}")
         is_moe_arrow = self.continual_method == "moe_arrow"
-        if is_moe_arrow:
+        is_dino_fullbank = self.continual_method == "dino_fullbank_arrow"
+        uses_task_experts = is_moe_arrow or is_dino_fullbank
+        if uses_task_experts:
             if self.algorithm != "arrow":
-                raise ValueError("MoE-ARROW requires ARROW mixed replay")
+                raise ValueError("Task-aware expert methods require ARROW mixed replay")
             if self.esc.env_schedule_type is not SequentialEnvironments:
-                raise ValueError("MoE-ARROW requires a sequential task schedule")
+                raise ValueError("Task-aware expert methods require a sequential task schedule")
             if len(self.esc.env_configs) < 2:
-                raise ValueError("MoE-ARROW requires at least two scheduled tasks")
+                raise ValueError("Task-aware expert methods require at least two scheduled tasks")
             if self.rssm_num_experts != len(self.esc.env_configs):
                 raise ValueError(
-                    "MoE-ARROW v1 requires one RSSM expert per scheduled task"
+                    "Task-aware expert methods require one RSSM expert per scheduled task"
                 )
+            if self.residual_correction != "none":
+                raise ValueError(
+                    "A task-aware expert method does not use residual corrections"
+                )
+        else:
+            if self.rssm_num_experts != 1:
+                raise ValueError(
+                    "RSSM experts require a task-aware continual_method"
+                )
+
+        if is_moe_arrow:
             if not 0 < self.moe_arrow_current_task_fraction < 1:
                 raise ValueError(
                     "MoE-ARROW current-task update fraction must lie in (0, 1)"
                 )
-            if self.residual_correction != "none":
-                raise ValueError("MoE-ARROW does not use residual corrections")
             if self.shared_core_mode != "trainable":
                 raise ValueError("MoE-ARROW keeps shared modules trainable")
             if self.observation_objective != "dinov3_next_feature":
                 raise ValueError(
                     "MoE-ARROW predicts frozen DINOv3 features from the RSSM prior"
                 )
-        else:
-            if self.rssm_num_experts != 1:
-                raise ValueError("RSSM experts require continual_method='moe_arrow'")
+        elif is_dino_fullbank:
+            if self.dino_fullbank_current_task_fraction != 1.0:
+                raise ValueError(
+                    "DINO-FullBank-ARROW assigns all updates to the current task"
+                )
+            if self.shared_core_mode != "task_isolated":
+                raise ValueError(
+                    "DINO-FullBank-ARROW requires shared_core_mode='task_isolated'"
+                )
+            if self.observation_objective != "dinov3_posterior_feature":
+                raise ValueError(
+                    "DINO-FullBank-ARROW reconstructs posterior DINOv3 features"
+                )
+            if self.random_policy != "new":
+                raise ValueError(
+                    "DINO-FullBank-ARROW requires a random collection for each new task"
+                )
         if self.observation_objective not in {
             "reconstruction",
             "r2",
@@ -432,37 +463,55 @@ class Config(Serialisable):
                         raise ValueError("KARROW v1 does not fit a patch projection")
             else:
                 if self.dinov3_feature_mode != "patch_grid":
+                    if is_dino_fullbank:
+                        raise ValueError(
+                            "DINO-FullBank-ARROW requires pooled DINOv3 patch tokens"
+                        )
                     raise ValueError(
                         "KARROW spatial v2 requires pooled DINOv3 patch tokens"
                     )
                 if self.dinov3_patch_pool_size != 4:
-                    raise ValueError("KARROW spatial v2 fixes a 4x4 patch grid")
+                    raise ValueError("Posterior DINOv3 objectives fix a 4x4 patch grid")
                 if self.dinov3_patch_feature_dim != 64:
                     raise ValueError(
-                        "KARROW spatial v2 fixes each patch feature at 64 dimensions"
+                        "Posterior DINOv3 objectives fix each patch feature at 64 dimensions"
                     )
-                if self.dinov3_patch_projection != "task1_pca":
-                    raise ValueError(
-                        "KARROW spatial v2 learns a Task-1 PCA patch projection"
-                    )
-                if self.dinov3_patch_projection_frames != 512:
-                    raise ValueError(
-                        "KARROW spatial v2 fits PCA on 512 initial Task-1 frames"
-                    )
-                if self.random_policy != "first":
-                    raise ValueError(
-                        "KARROW spatial v2 requires an initial random Task-1 collection"
-                    )
+                if is_dino_fullbank:
+                    if self.dinov3_patch_projection != "fixed_orthogonal":
+                        raise ValueError(
+                            "DINO-FullBank-ARROW requires a task-independent fixed projection"
+                        )
+                    if self.dinov3_patch_projection_frames != 0:
+                        raise ValueError(
+                            "DINO-FullBank-ARROW never fits a task-specific projection"
+                        )
+                else:
+                    if self.dinov3_patch_projection != "task1_pca":
+                        raise ValueError(
+                            "KARROW spatial v2 learns a Task-1 PCA patch projection"
+                        )
+                    if self.dinov3_patch_projection_frames != 512:
+                        raise ValueError(
+                            "KARROW spatial v2 fits PCA on 512 initial Task-1 frames"
+                        )
+                    if self.random_policy != "first":
+                        raise ValueError(
+                            "KARROW spatial v2 requires an initial random Task-1 collection"
+                        )
                 if (
                     self.dinov3_feature_loss_kind
                     != "batch_standardized_smooth_l1"
                 ):
                     raise ValueError(
-                        "KARROW spatial v2 requires batch-standardized SmoothL1"
+                        "Posterior DINOv3 objectives require batch-standardized SmoothL1"
                     )
             if self.actor_network != "mlp":
                 raise ValueError("KARROW keeps the original MLP actor and critic")
             if self.fresh_ac is not False:
+                if uses_task_experts:
+                    raise ValueError(
+                        "Task-aware expert methods manage persistent per-task actor-critics"
+                    )
                 raise ValueError("KARROW requires one persistent actor-critic across tasks")
         elif (
             self.observation_encoder != "cnn"
@@ -494,8 +543,13 @@ class Config(Serialisable):
             "trainable",
             "freeze_after_first_task",
             "snapshot_adaptation",
+            "task_isolated",
         }:
             raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
+        if self.shared_core_mode == "task_isolated" and not is_dino_fullbank:
+            raise ValueError(
+                "shared_core_mode='task_isolated' is reserved for DINO-FullBank-ARROW"
+            )
         if self.residual_correction != "none" and not uses_dinov3:
             raise ValueError("KARROW residuals require the frozen DINOv3 protocol")
         if (
@@ -751,6 +805,22 @@ class Config(Serialisable):
         data["replay_buffers"] = [c.to_dict() for c in self.replay_buffers]
         return data
 
+    @property
+    def uses_task_experts(self) -> bool:
+        return self.continual_method in {"moe_arrow", "dino_fullbank_arrow"}
+
+    @property
+    def uses_full_task_experts(self) -> bool:
+        return self.continual_method == "dino_fullbank_arrow"
+
+    @property
+    def task_update_fraction(self) -> float:
+        if self.continual_method == "moe_arrow":
+            return self.moe_arrow_current_task_fraction
+        if self.continual_method == "dino_fullbank_arrow":
+            return self.dino_fullbank_current_task_fraction
+        raise ValueError("Task update fractions require a task-aware expert method")
+
     def get_env_schedule(self) -> EnvironmentSchedule:
         return self.esc.env_schedule_type(
             self.n_sync, [e.get_function() for e in self.esc.env_configs], **self.esc.kwargs
@@ -783,7 +853,7 @@ class Config(Serialisable):
                     _arrow_n(rc),
                     self.action_space,
                     rc.rb_device,
-                    store_task_ids=self.continual_method == "moe_arrow",
+                    store_task_ids=self.uses_task_experts,
                 )
                 for rc in self.replay_buffers
             ]

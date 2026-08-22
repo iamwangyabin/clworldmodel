@@ -346,6 +346,53 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(launch["extra_gradient_updates"], 0)
         self.assertFalse(output_dir.exists())
 
+    def test_dino_fullbank_dry_run_records_the_corrected_protocol(self) -> None:
+        launch, output_dir = self._karrow_dry_run(
+            "--task-prefix-length",
+            "2",
+            script="scripts/run_dino_fullbank_arrow_atari.py",
+        )
+
+        self.assertEqual(launch["method"], "DINO-FullBank-ARROW-50-T2Pilot")
+        self.assertEqual(
+            launch["protocol"], "DINO-FullBank-ARROW-v2-Atari-TaskAware"
+        )
+        self.assertEqual(launch["code_id"], "dino_fullbank_arrow")
+        self.assertEqual(
+            launch["world_model"]["expert_modules"],
+            [
+                "posterior_representation",
+                "recurrent_dynamics",
+                "latent_prior",
+                "feature_predictor",
+                "reward_head",
+                "continue_head",
+            ],
+        )
+        self.assertEqual(
+            launch["world_model"]["shared_modules"], ["frozen DINOv3 encoder"]
+        )
+        self.assertEqual(
+            launch["world_model"]["new_task_initialization"],
+            "copy previous complete world-model expert once",
+        )
+        self.assertEqual(
+            launch["actor_critic"]["new_task_initialization"], "fresh independent weights"
+        )
+        self.assertEqual(launch["actor_critic"]["current_task_update_fraction"], 1.0)
+        self.assertEqual(launch["actor_critic"]["old_task_allocation"], "zero")
+        self.assertEqual(
+            launch["observation"]["objective"],
+            "current posterior reconstruction of stopped spatial features",
+        )
+        self.assertEqual(
+            launch["observation"]["feature_loss"],
+            "batch_standardized_smooth_l1",
+        )
+        self.assertEqual(launch["collection"]["new_task_first_epoch_policy"], "random")
+        self.assertEqual(launch["extra_gradient_updates"], 0)
+        self.assertFalse(output_dir.exists())
+
     def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:
         launch = self._arrow_dry_run("--actor-network", "relu_kan")
 

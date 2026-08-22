@@ -125,6 +125,7 @@ class WorldModel(nn.Module):
         residual_input_mode: str = "base_output",
         residual_consolidation: str = "none",
         num_task_experts: int = 1,
+        full_task_experts: bool = False,
         image_embedder: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
@@ -153,6 +154,10 @@ class WorldModel(nn.Module):
                 raise ValueError(
                     "DINOv3 posterior features require batch-standardized SmoothL1"
                 )
+        if full_task_experts and observation_objective != "dinov3_posterior_feature":
+            raise ValueError(
+                "Full task experts require the DINOv3 posterior-feature objective"
+            )
 
         self.ls = ls
         self.a_dim = a_dim
@@ -166,6 +171,7 @@ class WorldModel(nn.Module):
         self.dinov3_feature_std_floor = dinov3_feature_std_floor
         self.residual_correction = residual_correction
         self.residual_input_mode = residual_input_mode
+        self.full_task_experts = full_task_experts
 
         self.rssm = Rssm(
             img_channels,
@@ -186,6 +192,7 @@ class WorldModel(nn.Module):
             dinov3_patch_projection=dinov3_patch_projection,
             dinov3_patch_projection_seed=dinov3_patch_projection_seed,
             num_task_experts=num_task_experts,
+            full_task_experts=full_task_experts,
             residual_correction=residual_correction,
             residual_bottleneck_features=residual_bottleneck_features,
             residual_grid_size=residual_grid_size,
@@ -201,6 +208,7 @@ class WorldModel(nn.Module):
         # Shared feature consumed by observation, reward, and continuation heads.
         self.zh_transform = ZhToModelState(ls, h_dim)
         self.feature_predictor_residual = None
+        self.feature_predictor_experts = nn.ModuleList()
 
         if observation_objective == "reconstruction":
             self.decoder = Decoder(img_channels, self.zh_transform.out_features, cnn_depth)
@@ -220,6 +228,11 @@ class WorldModel(nn.Module):
                 self.zh_transform.out_features,
                 self.rssm.image_embedder.output_size,
             )
+            if full_task_experts:
+                self.feature_predictor_experts.extend(
+                    copy.deepcopy(self.feature_predictor)
+                    for _ in range(num_task_experts - 1)
+                )
         # NOTE: Weight init here may be 0 init
         self.reward_fc = nn.Sequential(
             *get_mlp_layers(
@@ -379,6 +392,16 @@ class WorldModel(nn.Module):
         task_index = self.rssm._task_index(task_id)
         return base if task_index == 0 else experts[task_index - 1]
 
+    def feature_predictor_for(
+        self, task_id: Optional[int | torch.Tensor]
+    ) -> nn.Module:
+        if not hasattr(self, "feature_predictor"):
+            raise RuntimeError("The configured observation objective has no feature predictor")
+        task_index = self.rssm._task_index(task_id)
+        if task_index == 0 or not self.full_task_experts:
+            return self.feature_predictor
+        return self.feature_predictor_experts[task_index - 1]
+
     def initialize_task_expert(
         self, target_task_id: int, source_task_id: int
     ) -> bool:
@@ -407,8 +430,36 @@ class WorldModel(nn.Module):
                 self.continue_fc, self.continue_experts, source_index
             ).state_dict()
         )
+        if self.full_task_experts:
+            self.feature_predictor_for(target_index).load_state_dict(
+                self.feature_predictor_for(source_index).state_dict()
+            )
         self.task_expert_initialized[target_index] = True
         return True
+
+    def activate_task_expert(self, task_id: int) -> None:
+        """Make exactly one complete task expert plastic and freeze all others."""
+        if not self.full_task_experts:
+            raise ValueError("Complete task activation requires full_task_experts=True")
+        task_index = self.rssm._task_index(task_id)
+        if self.task_expert_initialized is None or not bool(
+            self.task_expert_initialized[task_index].item()
+        ):
+            raise ValueError(f"Task expert {task_index} has not been initialized")
+
+        self.rssm.image_embedder.requires_grad_(False)
+        for index in range(self.rssm.num_task_experts):
+            is_active = index == task_index
+            self.rssm.recurrent_for(index).requires_grad_(is_active)
+            self.rssm.representation_for(index).requires_grad_(is_active)
+            self.rssm.transition_for(index).requires_grad_(is_active)
+            self._head_for(self.reward_fc, self.reward_experts, index).requires_grad_(
+                is_active
+            )
+            self._head_for(
+                self.continue_fc, self.continue_experts, index
+            ).requires_grad_(is_active)
+            self.feature_predictor_for(index).requires_grad_(is_active)
 
     def predict_reward_symlog(
         self, model_state: torch.Tensor, task_id: Optional[int | torch.Tensor] = None
@@ -449,6 +500,8 @@ class WorldModel(nn.Module):
             self.r2_projector.requires_grad_(False)
         if hasattr(self, "feature_predictor"):
             self.feature_predictor.requires_grad_(False)
+        for feature_predictor in self.feature_predictor_experts:
+            feature_predictor.requires_grad_(False)
         if self.feature_predictor_residual is not None:
             self.feature_predictor_residual.requires_grad_(True)
         if self.reward_residual is not None:
@@ -570,7 +623,7 @@ class WorldModel(nn.Module):
             if embeddings is None:
                 raise RuntimeError("DINOv3 objective requires frozen observation features")
             prior_states = self.zh_transform(z_priors.exp(), hiddens)
-            predicted_features = self.feature_predictor(prior_states)
+            predicted_features = self.feature_predictor_for(task_id)(prior_states)
             if self.feature_predictor_residual is not None:
                 predicted_features = predicted_features + self.feature_predictor_residual(
                     prior_states
@@ -599,7 +652,7 @@ class WorldModel(nn.Module):
         else:
             if embeddings is None:
                 raise RuntimeError("DINOv3 objective requires frozen observation features")
-            predicted_features = self.feature_predictor(zhs)
+            predicted_features = self.feature_predictor_for(task_id)(zhs)
             if self.feature_predictor_residual is not None:
                 predicted_features = predicted_features + self.feature_predictor_residual(
                     zhs

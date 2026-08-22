@@ -3,7 +3,10 @@
 ## Status
 
 Accepted for the separately named `MoE-ARROW-v1-Atari-TaskAware` experimental
-protocol. This does not replace ARROW-50 as the repository baseline.
+protocol. The completed seed-0 two-task pilot was negative and V1 is preserved
+as a failed partial-expert acquisition result. It does not replace ARROW-50 as
+the repository baseline. Decision 0012 defines the separately named corrected
+full-bank protocol.
 
 ## Context
 

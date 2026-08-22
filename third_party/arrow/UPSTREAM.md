@@ -144,6 +144,21 @@ documented here, covered by focused parity tests, and followed by regenerating
     upstream replay RNG path. Focused tests cover config isolation, task-filtered
     replay, selected-expert gradients, fixed-budget allocation, deterministic
     projection, actor-bank warm starts, and launcher accounting.
+26. Add the opt-in, separately named
+    `DINO-FullBank-ARROW-v2-Atari-TaskAware` correction without changing V1.
+    The hard task route now owns the posterior representation and DINO feature
+    predictor in addition to recurrent dynamics, prior, reward, and
+    continuation modules. The selected posterior reconstructs the current
+    stopped spatial DINO feature with batch-standardized SmoothL1 and logs the
+    constant-prediction baseline. On each task boundary the complete prior
+    world-model expert is copied once with fresh parameter optimizer state,
+    while the new Actor-Critic uses fresh deterministic weights. Old experts
+    and policies are frozen, and 100 percent of the unchanged world-model and
+    Actor-Critic update totals go to the current task. Every new task starts
+    with random collection; the launcher accounts for interactions under the
+    source pretrain setting. Focused tests cover protocol rejection,
+    posterior/feature-head routing and gradients, frozen old parameters, fresh
+    actors, current-only allocation, and launch-manifest semantics.
 
 ## Known issues at import
 
