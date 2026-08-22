@@ -334,7 +334,9 @@ imagination, and MLP Actor-Critic training retain their existing algorithms.
 The frozen features are cached as a float16 ARROW sidecar. Under the published
 Atari replay geometry this deliberately spends 103,079,215,104 bytes in
 addition to the base replay, so it is a high-memory diagnostic rather than a
-matched-storage baseline.
+matched-storage baseline. The full feature sidecar and unchanged float32 replay
+observations use run-local file-backed mmap tensors, keeping their numeric and
+sampling semantics without requiring the whole 122.9 GiB working set in RAM.
 
 ```bash
 export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m

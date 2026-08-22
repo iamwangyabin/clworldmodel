@@ -329,6 +329,20 @@ def main(variant: LaunchVariant = MOE_ARROW_VARIANT) -> int:
         dtype=DINOV3_CACHE_DTYPE,
         feature_dim=feature_dim,
     )
+    base_replay_storage = _arrow_replay_storage_budget(config)
+    if variant.code_id == "dino_patchbank_arrow":
+        base_replay_storage["observation_storage_backend"] = "file_mmap"
+        base_replay_storage["anonymous_cpu_tensor_bytes"] = (
+            base_replay_storage["allocated_tensor_bytes"]
+            - base_replay_storage["observation_bytes"]
+        )
+        base_replay_storage["mmap_directory"] = "mmap_replay/observations"
+        for buffer in base_replay_storage["buffers"].values():
+            buffer["observation_storage_backend"] = "file_mmap"
+        feature_cache["storage_backend"] = "file_mmap"
+        feature_cache["mmap_directory"] = "mmap_replay/features"
+        for buffer in feature_cache["buffers"].values():
+            buffer["storage_backend"] = "file_mmap"
     task_id_storage_bytes = 2 * source_config["data_n_max"] * 8
 
     launch = {
@@ -458,8 +472,12 @@ def main(variant: LaunchVariant = MOE_ARROW_VARIANT) -> int:
         },
         "replay": {
             "capacity_and_sampling": "ARROW-50 base allocation unchanged",
-            "storage_device": "cpu",
-            "base_storage": _arrow_replay_storage_budget(config),
+            "storage_device": (
+                "cpu_addressable_file_mmap"
+                if variant.code_id == "dino_patchbank_arrow"
+                else "cpu"
+            ),
+            "base_storage": base_replay_storage,
             "feature_cache": feature_cache,
             "task_id_storage_bytes": task_id_storage_bytes,
             "task_sampling": (

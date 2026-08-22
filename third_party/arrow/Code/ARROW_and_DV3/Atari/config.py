@@ -381,6 +381,13 @@ class Config(Serialisable):
                 raise ValueError(
                     "DINO task banks require a random collection for each new task"
                 )
+            if is_dino_patchbank and any(
+                replay_config.rb_device.split(":", 1)[0] != "cpu"
+                for replay_config in self.replay_buffers
+            ):
+                raise ValueError(
+                    "DINO-PatchBank-ARROW requires CPU-addressable mmap replay"
+                )
         if self.observation_objective not in {
             "reconstruction",
             "r2",
@@ -891,7 +898,10 @@ class Config(Serialisable):
             self.n_sync, [e.get_function() for e in self.esc.env_configs], **self.esc.kwargs
         )
 
-    def get_replay_buffer(self) -> Replay:
+    def get_replay_buffer(
+        self,
+        storage_directory: Optional[str | Path] = None,
+    ) -> Replay:
         if self.algorithm == "arrow":
             total_slots = 2 * self.data_n_max
             n_fifo, n_ltdm = _arrow_fifo_ltdm_capacity_ns(
@@ -912,16 +922,31 @@ class Config(Serialisable):
                 w_fifo if rc.rb_type is FifoReplay else w_ltdm
                 for rc in self.replay_buffers
             )
-            replays = [
-                rc.rb_type(
-                    self.data_t,
-                    _arrow_n(rc),
-                    self.action_space,
-                    rc.rb_device,
-                    store_task_ids=self.uses_task_experts,
+            storage_root = (
+                None
+                if storage_directory is None
+                else Path(storage_directory).expanduser().resolve()
+            )
+            if storage_root is not None:
+                storage_root.mkdir(parents=True, exist_ok=True)
+            replays = []
+            for index, rc in enumerate(self.replay_buffers):
+                observation_storage_path = (
+                    None
+                    if storage_root is None
+                    else storage_root
+                    / f"{index}_{rc.rb_type.__name__}_observations.float32.mmap"
                 )
-                for rc in self.replay_buffers
-            ]
+                replays.append(
+                    rc.rb_type(
+                        self.data_t,
+                        _arrow_n(rc),
+                        self.action_space,
+                        rc.rb_device,
+                        store_task_ids=self.uses_task_experts,
+                        observation_storage_path=observation_storage_path,
+                    )
+                )
             return MultiTypeReplay(*replays, sampling_weights=sampling_weights)
         if self.algorithm == "dv3" or self.algorithm == "sac":
             rc = self.replay_buffers[0]

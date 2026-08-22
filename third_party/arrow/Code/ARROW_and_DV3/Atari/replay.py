@@ -1,4 +1,5 @@
 import random
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -129,6 +130,26 @@ def _validated_task_id(
     return task_id
 
 
+def _observation_storage(
+    t: int,
+    n: int,
+    store_device: str,
+    storage_path: Optional[str | Path],
+) -> ImageT:
+    shape = (t, n, 3, 64, 64)
+    if storage_path is None:
+        return torch.zeros(*shape).to(store_device)
+    if torch.device(store_device).type != "cpu":
+        raise ValueError("Mapped replay observations require CPU storage")
+    from clworldmodel.replay.mapped_tensor import create_file_backed_tensor
+
+    return create_file_backed_tensor(
+        storage_path,
+        shape,
+        dtype=torch.float32,
+    )
+
+
 class FifoReplay(Replay):
     def __init__(
         self,
@@ -138,6 +159,7 @@ class FifoReplay(Replay):
         store_device: str = "cpu",
         *,
         store_task_ids: bool = False,
+        observation_storage_path: Optional[str | Path] = None,
     ) -> None:
         super().__init__()
 
@@ -146,7 +168,17 @@ class FifoReplay(Replay):
         self.n_idx = 0
         self.n_valid = 0
         self.acts: ActionT = torch.zeros(t, n, n_acts).to(store_device)
-        self.obss: ImageT = torch.zeros(t, n, 3, 64, 64).to(store_device)
+        self.obss: ImageT = _observation_storage(
+            t,
+            n,
+            store_device,
+            observation_storage_path,
+        )
+        self.observation_storage_path = (
+            None
+            if observation_storage_path is None
+            else Path(observation_storage_path).expanduser().resolve()
+        )
         self.rews: RewardT = torch.zeros(t, n, 1).to(store_device)
         self.conts: ContT = torch.zeros(t, n, 1).to(store_device)
         self.resets: ResetT = torch.zeros(t, n, 1).to(store_device)
@@ -215,13 +247,24 @@ class LongTermReplay(Replay):
         store_device: str = "cpu",
         *,
         store_task_ids: bool = False,
+        observation_storage_path: Optional[str | Path] = None,
     ) -> None:
         super().__init__()
 
         self.t = t
         self.n = n
         self.acts: ActionT = torch.zeros(t, n, n_acts).to(store_device)
-        self.obss: ImageT = torch.zeros(t, n, 3, 64, 64).to(store_device)
+        self.obss: ImageT = _observation_storage(
+            t,
+            n,
+            store_device,
+            observation_storage_path,
+        )
+        self.observation_storage_path = (
+            None
+            if observation_storage_path is None
+            else Path(observation_storage_path).expanduser().resolve()
+        )
         self.rews: RewardT = torch.zeros(t, n, 1).to(store_device)
         self.conts: ContT = torch.zeros(t, n, 1).to(store_device)
         self.resets: ResetT = torch.zeros(t, n, 1).to(store_device)

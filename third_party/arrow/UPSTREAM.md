@@ -169,6 +169,13 @@ documented here, covered by focused parity tests, and followed by regenerating
     unchanged ARROW replay decisions; the launcher records their 96-GiB
     sidecar cost. Focused tests cover full-token preservation, fixed-protocol
     rejection, selected posterior/decoder gradients, and launch accounting.
+28. Back only the `DINO-PatchBank-ARROW-v3-Atari-TaskAware` replay observations
+    and frozen feature sidecars with run-local shared mmap files. This avoids
+    exceeding the target container's 32-GiB memory cgroup while preserving the
+    existing float32/float16 dtypes, tensor shapes, FIFO/LTDM retention, write
+    maps, and sampled indices. Other methods retain their prior in-memory replay
+    allocation. Focused tests compare mmap writes and samples with the existing
+    CPU tensor semantics and verify launcher byte accounting.
 
 ## Known issues at import
 

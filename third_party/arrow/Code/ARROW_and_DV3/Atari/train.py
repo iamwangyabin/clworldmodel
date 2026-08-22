@@ -122,7 +122,8 @@ def _print_replay_buffer_debug(config: Config, buf) -> None:
             nv = getattr(sub, "n_valid", None)
             print(
                 f"[replay]   [{i}] {type(sub).__name__}: t={sub.t} n={sub.n} "
-                f"n_valid={nv} sampling_weight={sw}"
+                f"n_valid={nv} sampling_weight={sw} "
+                f"observation_storage={getattr(sub, 'observation_storage_path', None)}"
             )
     else:
         dv3_max = getattr(config, "sac_dv3_data_n_max", None)
@@ -130,6 +131,34 @@ def _print_replay_buffer_debug(config: Config, buf) -> None:
             f"[replay] single buffer: {type(buf).__name__} t={buf.t} n={buf.n} "
             f"n_valid={buf.n_valid} (config.sac_dv3_data_n_max={dv3_max})"
         )
+
+
+def _mapped_replay_storage_accounting(buf: MultiTypeReplay) -> dict[str, object]:
+    buffers = []
+    for index, sub_replay in enumerate(buf.replays):
+        storage_path = getattr(sub_replay, "observation_storage_path", None)
+        if storage_path is None:
+            continue
+        stat = storage_path.stat()
+        buffers.append(
+            {
+                "index": index,
+                "type": type(sub_replay).__name__,
+                "path": str(storage_path),
+                "dtype": str(sub_replay.obss.dtype).removeprefix("torch."),
+                "shape": list(sub_replay.obss.shape),
+                "logical_storage_bytes": (
+                    sub_replay.obss.numel() * sub_replay.obss.element_size()
+                ),
+                "allocated_file_bytes_at_accounting": stat.st_blocks * 512,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "storage_backend": "file_mmap",
+        "numeric_semantics": "float32 observations unchanged",
+        "buffers": buffers,
+    }
 
 
 def _stage_clock(enabled: bool) -> float:
@@ -1231,7 +1260,17 @@ if __name__ == "__main__":
         )
 
     envs = config.get_env_schedule()
-    replay = config.get_replay_buffer()
+    replay_storage_directory = None
+    feature_storage_directory = None
+    if config.continual_method == "dino_patchbank_arrow":
+        if log_dir is None:
+            raise ValueError(
+                "DINO-PatchBank-ARROW requires --log-dir for mapped replay files"
+            )
+        mmap_root = log_dir / "mmap_replay"
+        replay_storage_directory = mmap_root / "observations"
+        feature_storage_directory = mmap_root / "features"
+    replay = config.get_replay_buffer(replay_storage_directory)
     feature_cache = None
     if config.observation_encoder == "dinov3_vits16":
         from clworldmodel.replay import ArrowFrozenFeatureCache
@@ -1244,6 +1283,7 @@ if __name__ == "__main__":
             replay,
             wm.rssm.image_embedder.output_size,
             dtype=cache_dtype,
+            storage_directory=feature_storage_directory,
         )
     _print_replay_buffer_debug(config, replay)
 
@@ -1376,6 +1416,16 @@ if __name__ == "__main__":
             encoding="utf-8",
         )
         os.replace(temporary_feature_accounting_path, feature_accounting_path)
+    if replay_storage_directory is not None:
+        replay_accounting_path = log_dir / "replay_mmap_storage_accounting.json"
+        temporary_replay_accounting_path = replay_accounting_path.with_suffix(
+            ".json.tmp"
+        )
+        temporary_replay_accounting_path.write_text(
+            json.dumps(_mapped_replay_storage_accounting(replay), indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary_replay_accounting_path, replay_accounting_path)
     parameter_accounting_path = log_dir / "model_parameter_accounting.json"
     temporary_accounting_path = parameter_accounting_path.with_suffix(".json.tmp")
     temporary_accounting_path.write_text(

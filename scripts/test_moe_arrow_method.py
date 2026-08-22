@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import random
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +29,7 @@ if torch is not None:
     sys.path.insert(0, str(VENDORED_ATARI))
     from clworldmodel.continual import ActorCriticBank, allocate_task_updates
     from clworldmodel.models.frozen_dinov3 import FrozenDinoV3Encoder
+    from clworldmodel.replay import ArrowFrozenFeatureCache
     from ac import train_ac_from_wm
     from config import Config
     from replay import FifoReplay, MultiTypeReplay
@@ -107,6 +110,8 @@ class MoeArrowMethodTests(unittest.TestCase):
                 "dinov3_feature_loss_kind": "cosine",
             }
         )
+        for replay_config in data["replay_buffers"]:
+            replay_config["rb_device"] = "cpu"
         return data
 
     def test_config_requires_the_complete_named_task_aware_protocol(self) -> None:
@@ -188,6 +193,11 @@ class MoeArrowMethodTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pixel reconstruction"):
             Config.from_dict(invalid)
 
+        invalid = self._patchbank_config_data()
+        invalid["replay_buffers"][0]["rb_device"] = "cuda"
+        with self.assertRaisesRegex(ValueError, "CPU-addressable mmap replay"):
+            Config.from_dict(invalid)
+
     def test_fifo_and_mixed_replay_filter_homogeneous_task_minibatches(self) -> None:
         def values(marker: float, sequences: int = 2):
             actions = torch.full((3, sequences, 4), marker)
@@ -225,6 +235,82 @@ class MoeArrowMethodTests(unittest.TestCase):
         baseline.add(*values(30.0))
         with self.assertRaisesRegex(ValueError, "without task-id storage"):
             baseline.add(*values(40.0), task_id=0)
+
+    def test_patchbank_mmap_preserves_replay_and_feature_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_data = self._patchbank_config_data()
+            config_data.update(
+                {
+                    "n_sync": 1,
+                    "gen_seq_len": 4,
+                    "data_n": 2,
+                    "data_n_max": 2,
+                    "data_t": 2,
+                    "action_space": 3,
+                }
+            )
+            replay = Config.from_dict(config_data).get_replay_buffer(
+                root / "observations"
+            )
+            fifo_path, ltdm_path = (
+                sub_replay.observation_storage_path
+                for sub_replay in replay.replays
+            )
+            self.assertIsNotNone(fifo_path)
+            self.assertIsNotNone(ltdm_path)
+            if fifo_path is None or ltdm_path is None:
+                self.fail("Mapped replay paths were not configured")
+            cache = ArrowFrozenFeatureCache(
+                replay,
+                3,
+                dtype=torch.float16,
+                storage_directory=root / "features",
+            )
+            actions = torch.zeros(2, 2, 3)
+            observations = torch.arange(
+                2 * 2 * 3 * 64 * 64,
+                dtype=torch.float32,
+            ).reshape(2, 2, 3, 64, 64)
+            rewards = torch.zeros(2, 2, 1)
+            continues = torch.ones(2, 2, 1)
+            resets = torch.zeros(2, 2, 1)
+            features = torch.tensor(
+                [
+                    [[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]],
+                    [[4.0, 5.0, 6.0], [40.0, 50.0, 60.0]],
+                ]
+            )
+
+            np.random.seed(7)
+            write_slots = replay.add(
+                actions,
+                observations,
+                rewards,
+                continues,
+                resets,
+                task_id=0,
+            )
+            cache.record(write_slots, features)
+
+            observation_bytes = 2 * 2 * 3 * 64 * 64 * 4
+            self.assertEqual(fifo_path.stat().st_size, observation_bytes)
+            self.assertEqual(ltdm_path.stat().st_size, observation_bytes)
+            self.assertEqual(cache.storage_backend, "file_mmap")
+            self.assertTrue(all(path is not None for path in cache.storage_paths))
+            self.assertTrue(
+                all(path.stat().st_size == 24 for path in cache.storage_paths)
+            )
+            torch.testing.assert_close(replay.replays[0].obss, observations)
+
+            random.seed(11)
+            np.random.seed(13)
+            sampled = cache.minibatch(2, 2, "cpu")
+            for sequence in sampled[2].swapaxes(0, 1):
+                self.assertTrue(
+                    torch.equal(sequence, features[:, 0])
+                    or torch.equal(sequence, features[:, 1])
+                )
 
     def test_hard_routing_updates_only_the_selected_dynamics_expert(self) -> None:
         class Embedder(nn.Module):

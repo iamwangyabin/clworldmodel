@@ -428,6 +428,22 @@ class TrainingLauncherTests(unittest.TestCase):
             launch["replay"]["feature_cache"]["storage_bytes"],
             103_079_215_104,
         )
+        self.assertEqual(
+            launch["replay"]["storage_device"],
+            "cpu_addressable_file_mmap",
+        )
+        self.assertEqual(
+            launch["replay"]["feature_cache"]["storage_backend"],
+            "file_mmap",
+        )
+        self.assertEqual(
+            launch["replay"]["base_storage"]["observation_storage_backend"],
+            "file_mmap",
+        )
+        self.assertEqual(
+            launch["replay"]["base_storage"]["anonymous_cpu_tensor_bytes"],
+            44_040_192,
+        )
         self.assertEqual(launch["actor_critic"]["current_task_update_fraction"], 1.0)
         self.assertFalse(output_dir.exists())
 

@@ -33,6 +33,9 @@ remains selectable so its negative pilot is reproducible.
   continuation, and KL losses decide which coordinates matter.
 - The float16 feature sidecar grows from 1 GiB to 96 GiB under the published
   two-buffer geometry; comparisons are not storage matched.
+- The target container's 32-GiB cgroup cannot hold the unchanged 24-GiB
+  float32 observations and 96-GiB sidecar anonymously. Both use run-local
+  file-backed mmap tensors; tensor values and replay decisions are unchanged.
 - Posterior parameter count and matrix-multiply cost increase substantially.
 - A frozen backbone preserves continual stability but does not test end-to-end
   or partial DINO fine-tuning. Task-specific LoRA is a later named ablation,

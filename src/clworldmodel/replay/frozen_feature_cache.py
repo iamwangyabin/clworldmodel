@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
 import torch
+
+from .mapped_tensor import create_file_backed_tensor
 
 
 class ArrowFrozenFeatureCache:
@@ -17,6 +20,7 @@ class ArrowFrozenFeatureCache:
         feature_dim: int,
         *,
         dtype: torch.dtype = torch.float16,
+        storage_directory: str | Path | None = None,
     ) -> None:
         if feature_dim < 1:
             raise ValueError("feature_dim must be positive")
@@ -28,15 +32,58 @@ class ArrowFrozenFeatureCache:
         self._sub_replays = tuple(replay.replays)
         if not self._sub_replays:
             raise ValueError("ARROW replay must contain at least one sub-buffer")
-        self._features = tuple(
-            torch.zeros(
-                sub_replay.t,
-                sub_replay.n,
-                feature_dim,
-                dtype=dtype,
-                device=sub_replay.obss.device,
-            )
-            for sub_replay in self._sub_replays
+        storage_root = (
+            None
+            if storage_directory is None
+            else Path(storage_directory).expanduser().resolve()
+        )
+        if storage_root is not None:
+            storage_root.mkdir(parents=True, exist_ok=True)
+        storage_paths = []
+        features = []
+        for index, sub_replay in enumerate(self._sub_replays):
+            shape = (sub_replay.t, sub_replay.n, feature_dim)
+            if storage_root is None:
+                storage_path = None
+                values = torch.zeros(
+                    *shape,
+                    dtype=dtype,
+                    device=sub_replay.obss.device,
+                )
+            else:
+                if sub_replay.obss.device.type != "cpu":
+                    raise ValueError("Mapped feature storage requires CPU replay")
+                dtype_name = str(dtype).removeprefix("torch.")
+                storage_path = storage_root / (
+                    f"{index}_{type(sub_replay).__name__}_features.{dtype_name}.mmap"
+                )
+                values = create_file_backed_tensor(
+                    storage_path,
+                    shape,
+                    dtype=dtype,
+                )
+            storage_paths.append(storage_path)
+            features.append(values)
+        self._storage_paths = tuple(storage_paths)
+        self._features = tuple(features)
+
+    @property
+    def storage_paths(self) -> tuple[Path | None, ...]:
+        return self._storage_paths
+
+    @staticmethod
+    def _allocated_file_bytes(path: Path | None) -> int | None:
+        if path is None:
+            return None
+        stat = path.stat()
+        return stat.st_blocks * 512
+
+    @property
+    def storage_backend(self) -> str:
+        return (
+            "file_mmap"
+            if any(path is not None for path in self._storage_paths)
+            else "anonymous_cpu"
         )
 
     @property
@@ -45,8 +92,8 @@ class ArrowFrozenFeatureCache:
 
     def storage_accounting(self) -> dict[str, object]:
         buffers = []
-        for index, (sub_replay, features) in enumerate(
-            zip(self._sub_replays, self._features)
+        for index, (sub_replay, features, storage_path) in enumerate(
+            zip(self._sub_replays, self._features, self._storage_paths)
         ):
             buffers.append(
                 {
@@ -56,6 +103,15 @@ class ArrowFrozenFeatureCache:
                     "trajectory_length": sub_replay.t,
                     "trajectory_slots": sub_replay.n,
                     "feature_storage_bytes": features.numel() * features.element_size(),
+                    "storage_backend": (
+                        "file_mmap" if storage_path is not None else "anonymous_cpu"
+                    ),
+                    "storage_path": (
+                        str(storage_path) if storage_path is not None else None
+                    ),
+                    "allocated_file_bytes_at_accounting": (
+                        self._allocated_file_bytes(storage_path)
+                    ),
                 }
             )
         return {
@@ -63,6 +119,7 @@ class ArrowFrozenFeatureCache:
             "feature_dim": self.feature_dim,
             "dtype": str(self.dtype).removeprefix("torch."),
             "storage_bytes": self.storage_bytes,
+            "storage_backend": self.storage_backend,
             "retention_semantics": "sidecar follows existing ARROW write maps",
             "sampling_semantics": "sidecar follows existing ARROW sampled indices",
             "buffers": buffers,

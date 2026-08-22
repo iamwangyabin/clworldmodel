@@ -84,6 +84,17 @@ Total feature storage is `103,079,215,104` bytes, excluding base observations,
 task IDs, allocator overhead, gradients, activations, parameters, and optimizer
 state. This byte difference must accompany every comparison.
 
+The target VirtAI container exposes a 32-GiB memory cgroup even though the host
+reports substantially more RAM. Therefore V3 stores both the unchanged
+float32 replay observations and float16 feature sidecar as shared, run-local
+file-backed mmap tensors under `mmap_replay/`. The tensor shapes, dtypes, FIFO
+overwrite order, LTDM retention, write maps, and sampled indices do not change.
+Only the storage backing changes from anonymous CPU memory to persistent
+`/gemini/code` files. Logical mapped storage is 25,769,803,776 observation bytes
+plus 103,079,215,104 feature bytes; auxiliary replay tensors remain in CPU RAM.
+The operating system may cache active pages, but the complete logical stores
+must still be byte-accounted and must not be described as memory matched.
+
 All environment interactions, world-model updates, Actor-Critic updates,
 evaluation points, action repeat, reward transformation, and per-task duration
 remain inherited from the resolved published ARROW configuration. New-task
@@ -103,7 +114,7 @@ python scripts/run_dino_patchbank_arrow_atari.py \
 
 The run must start from a clean pushed commit and preserve its generated
 `launch.json`, resolved config, parameter accounting, feature-cache accounting,
-raw evaluation returns, final model, and Actor-Critic bank. A successful smoke
-or single seed establishes execution or acquisition evidence only. Task 2 must
-not be interpreted until Task 1 clearly learns under a matched evaluation
-schedule.
+replay mmap accounting, raw evaluation returns, final model, and Actor-Critic
+bank. A successful smoke or single seed establishes execution or acquisition
+evidence only. Task 2 must not be interpreted until Task 1 clearly learns under
+a matched evaluation schedule.
