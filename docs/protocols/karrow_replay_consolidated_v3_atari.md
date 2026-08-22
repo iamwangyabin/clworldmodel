@@ -134,7 +134,8 @@ checkpoint-actor collection is a secondary on-policy sensitivity analysis.
 After committing and pushing a clean revision:
 
 ```bash
-python scripts/run_karrow_incremental_ar50_atari.py \
+python scripts/run_karrow_ar50_atari.py \
+  --visual-version v3 \
   --variant kan \
   --seed 0 \
   --curriculum original \

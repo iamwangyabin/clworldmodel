@@ -108,6 +108,7 @@ class MoeArrowMethodTests(unittest.TestCase):
                 "dinov3_patch_feature_dim": 384,
                 "dinov3_patch_projection": "none",
                 "dinov3_feature_loss_kind": "cosine",
+                "dinov3_replay_feature_mode": "on_the_fly",
             }
         )
         for replay_config in data["replay_buffers"]:
@@ -171,7 +172,13 @@ class MoeArrowMethodTests(unittest.TestCase):
         self.assertEqual(config.dinov3_patch_pool_size, 16)
         self.assertEqual(config.dinov3_patch_feature_dim, 384)
         self.assertEqual(config.dinov3_patch_projection, "none")
+        self.assertEqual(config.dinov3_replay_feature_mode, "on_the_fly")
         self.assertTrue(config.uses_full_task_experts)
+
+        invalid = self._patchbank_config_data()
+        invalid["dinov3_replay_feature_mode"] = "cached"
+        with self.assertRaisesRegex(ValueError, "recomputes frozen DINOv3 patches"):
+            Config.from_dict(invalid)
 
         invalid = self._patchbank_config_data()
         invalid["dinov3_patch_pool_size"] = 4
@@ -195,7 +202,7 @@ class MoeArrowMethodTests(unittest.TestCase):
 
         invalid = self._patchbank_config_data()
         invalid["replay_buffers"][0]["rb_device"] = "cuda"
-        with self.assertRaisesRegex(ValueError, "CPU-addressable mmap replay"):
+        with self.assertRaisesRegex(ValueError, "CPU-addressable mapped observation"):
             Config.from_dict(invalid)
 
     def test_fifo_and_mixed_replay_filter_homogeneous_task_minibatches(self) -> None:

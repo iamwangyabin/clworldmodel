@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import unittest
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from component_forgetting_audit import _event_candidate, _natural_candidates, _write_metrics_npz
 from component_audit_metrics import (

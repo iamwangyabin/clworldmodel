@@ -31,11 +31,14 @@ remains selectable so its negative pilot is reproducible.
 - The posterior receives 98,304 visual coordinates instead of 1,024.
 - The RSSM's existing learned projection, pixel reconstruction, reward,
   continuation, and KL losses decide which coordinates matter.
-- The float16 feature sidecar grows from 1 GiB to 96 GiB under the published
-  two-buffer geometry; comparisons are not storage matched.
-- The target container's 32-GiB cgroup cannot hold the unchanged 24-GiB
-  float32 observations and 96-GiB sidecar anonymously. Both use run-local
+- Complete patch features are recomputed from each sampled observation batch;
+  no feature sidecar grows with replay capacity. Outputs round through float16
+  before RSSM use to preserve the original fixed feature interface.
+- The target container's 32-GiB cgroup cannot safely hold the unchanged 24-GiB
+  float32 observation replay anonymously. Observations alone use run-local
   file-backed mmap tensors; tensor values and replay decisions are unchanged.
+- DINO inference compute increases because replayed observations are encoded
+  again, but environment and gradient-update budgets do not change.
 - Posterior parameter count and matrix-multiply cost increase substantially.
 - A frozen backbone preserves continual stability but does not test end-to-end
   or partial DINO fine-tuning. Task-specific LoRA is a later named ablation,

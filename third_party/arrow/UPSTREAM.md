@@ -176,6 +176,16 @@ documented here, covered by focused parity tests, and followed by regenerating
     maps, and sampled indices. Other methods retain their prior in-memory replay
     allocation. Focused tests compare mmap writes and samples with the existing
     CPU tensor semantics and verify launcher byte accounting.
+29. Replace the V3 full-patch replay sidecar with on-the-fly frozen DINOv3
+    encoding of the already sampled ARROW observation minibatch. The interrupted
+    `d52bb17` Task-1 pilot showed that the 96-GiB sidecar on the target SeaweedFS
+    FUSE mount exceeded the 32-GiB cgroup working set and caused sustained major
+    faults rather than usable accelerator throughput. Float32 ARROW observations
+    remain file-backed with unchanged shapes and replay decisions. Recomputed
+    features round through the configured float16 cache dtype before returning
+    to float32 RSSM input, matching the superseded sidecar's numeric interface.
+    Focused tests compare cached and on-the-fly samples under identical replay
+    RNG state and verify the launch manifest reports zero feature-storage bytes.
 
 ## Known issues at import
 

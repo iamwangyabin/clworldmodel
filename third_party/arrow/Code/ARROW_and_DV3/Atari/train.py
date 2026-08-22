@@ -1163,7 +1163,9 @@ if __name__ == "__main__":
             "DINO-PatchBank-ARROW routing: "
             f"experts={config.rssm_num_experts} actor_bank=per_task "
             "world_model_warm_start=previous_task_once actor_init=fresh "
-            "visual_input=complete_16x16x384_patches observation=pixels "
+            "visual_input=complete_16x16x384_patches "
+            "feature_source=on_the_fly_from_replay_observations "
+            "observation=pixels "
             f"current_fraction={config.dino_fullbank_current_task_fraction}"
         )
     if resume_payload is not None:
@@ -1261,30 +1263,37 @@ if __name__ == "__main__":
 
     envs = config.get_env_schedule()
     replay_storage_directory = None
-    feature_storage_directory = None
     if config.continual_method == "dino_patchbank_arrow":
         if log_dir is None:
             raise ValueError(
-                "DINO-PatchBank-ARROW requires --log-dir for mapped replay files"
+                "DINO-PatchBank-ARROW requires --log-dir for mapped observation replay"
             )
         mmap_root = log_dir / "mmap_replay"
         replay_storage_directory = mmap_root / "observations"
-        feature_storage_directory = mmap_root / "features"
     replay = config.get_replay_buffer(replay_storage_directory)
     feature_cache = None
     if config.observation_encoder == "dinov3_vits16":
-        from clworldmodel.replay import ArrowFrozenFeatureCache
-
         cache_dtype = {
             "float16": torch.float16,
             "float32": torch.float32,
         }[config.dinov3_feature_cache_dtype]
-        feature_cache = ArrowFrozenFeatureCache(
-            replay,
-            wm.rssm.image_embedder.output_size,
-            dtype=cache_dtype,
-            storage_directory=feature_storage_directory,
-        )
+        if config.dinov3_replay_feature_mode == "cached":
+            from clworldmodel.replay import ArrowFrozenFeatureCache
+
+            feature_cache = ArrowFrozenFeatureCache(
+                replay,
+                wm.rssm.image_embedder.output_size,
+                dtype=cache_dtype,
+            )
+        else:
+            from clworldmodel.replay import ArrowOnTheFlyFeatureSource
+
+            feature_cache = ArrowOnTheFlyFeatureSource(
+                replay,
+                wm.rssm.image_embedder,
+                wm.rssm.image_embedder.output_size,
+                dtype=cache_dtype,
+            )
     _print_replay_buffer_debug(config, replay)
 
     # Optional snapshot initialization. The loaded actor must exist before the
@@ -1557,7 +1566,7 @@ if __name__ == "__main__":
                 config.data_n,
             )
             frozen_features = None
-            if feature_cache is not None:
+            if feature_cache is not None and feature_cache.requires_recording:
                 encoder = wm.rssm.image_embedder
                 if getattr(encoder, "requires_projection_fit", False):
                     if epoch != 0 or not random_policy or global_step != 0:
@@ -1600,7 +1609,7 @@ if __name__ == "__main__":
                 _resets,
                 task_id=current_task_id,
             )
-            if feature_cache is not None:
+            if feature_cache is not None and feature_cache.requires_recording:
                 feature_cache.record(write_slots, frozen_features)
             print(f"{replay.n_valid=}")
             num_new_env_steps = _acts.shape[0] * _acts.shape[1] * config.env_repeat

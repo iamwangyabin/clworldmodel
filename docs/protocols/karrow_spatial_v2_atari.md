@@ -4,8 +4,8 @@
 
 This is an implementation-ready correction to the failed v1 observation path.
 No performance or forgetting claim exists yet. V1 remains reproducible through
-`scripts/run_karrow_ar50_atari.py`; v2 is launched through
-`scripts/run_karrow_spatial_ar50_atari.py`.
+`scripts/run_karrow_ar50_atari.py`; pass `--visual-version v2` for the spatial
+protocol.
 
 V2 does not use replay-functional coefficient consolidation. That behavior is
 isolated in the separately named v3 protocol.
@@ -97,7 +97,8 @@ constant baseline and improve environment return.
 ## Dry run
 
 ```bash
-python scripts/run_karrow_spatial_ar50_atari.py \
+python scripts/run_karrow_ar50_atari.py \
+  --visual-version v2 \
   --variant dino \
   --task-prefix-length 1 \
   --seed 0 \

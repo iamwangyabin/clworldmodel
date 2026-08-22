@@ -195,11 +195,12 @@ SmoothL1 makes a constant feature prediction an explicit nonzero baseline. The
 original Dreamer KL trains the prior; v2 does not reuse the collapsed prior-only
 cosine target.
 
-The v1 launcher keeps its old default. Use the separate v2 launcher for the new
-acquisition screen:
+The shared KARROW launcher keeps v1 as its default. Select v2 explicitly for
+the new acquisition screen:
 
 ```bash
-python scripts/run_karrow_spatial_ar50_atari.py \
+python scripts/run_karrow_ar50_atari.py \
+  --visual-version v2 \
   --variant dino \
   --task-prefix-length 1 \
   --seed 0 \
@@ -221,7 +222,8 @@ coefficients remain plastic. Inference still uses one shared fixed-capacity KAN
 with no task ID or router.
 
 ```bash
-python scripts/run_karrow_incremental_ar50_atari.py \
+python scripts/run_karrow_ar50_atari.py \
+  --visual-version v3 \
   --variant kan \
   --task-prefix-length 2 \
   --seed 0 \
@@ -252,7 +254,8 @@ the base is frozen and the same fixed-capacity residuals continue learning. V4
 adds no router, task ID, adapter expansion, or replay consolidation.
 
 ```bash
-python scripts/run_karrow_input_aligned_ar50_atari.py \
+python scripts/run_karrow_ar50_atari.py \
+  --visual-version v4 \
   --variant kan \
   --task-prefix-length 2 \
   --seed 0 \
@@ -311,7 +314,8 @@ the new Actor-Critic does not inherit the preceding game's policy.
 
 ```bash
 export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
-python scripts/run_dino_fullbank_arrow_atari.py \
+python scripts/run_moe_arrow_atari.py \
+  --method dino-fullbank \
   --seed 0 \
   --task-prefix-length 1 \
   --dry-run
@@ -331,16 +335,17 @@ decoder is restored. There is no spatial pooling, channel projection, or DINO
 feature-prediction head. RSSM dynamics, reward/continue prediction, latent
 imagination, and MLP Actor-Critic training retain their existing algorithms.
 
-The frozen features are cached as a float16 ARROW sidecar. Under the published
-Atari replay geometry this deliberately spends 103,079,215,104 bytes in
-addition to the base replay, so it is a high-memory diagnostic rather than a
-matched-storage baseline. The full feature sidecar and unchanged float32 replay
-observations use run-local file-backed mmap tensors, keeping their numeric and
-sampling semantics without requiring the whole 122.9 GiB working set in RAM.
+Replay retains only ARROW's unchanged float32 observations. Each sampled batch
+recomputes frozen DINO patches on the accelerator, rounds them through float16
+to preserve the fixed feature interface, and feeds them to the RSSM. There is
+no persistent feature sidecar. The observations use run-local file-backed mmap
+tensors because the target container cannot hold ARROW's 24-GiB image replay
+plus model working memory anonymously.
 
 ```bash
 export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
-python scripts/run_dino_patchbank_arrow_atari.py \
+python scripts/run_moe_arrow_atari.py \
+  --method dino-patchbank \
   --seed 0 \
   --task-prefix-length 1 \
   --dry-run

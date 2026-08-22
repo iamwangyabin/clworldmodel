@@ -14,6 +14,8 @@ from .mapped_tensor import create_file_backed_tensor
 class ArrowFrozenFeatureCache:
     """Keep frozen features aligned with ARROW FIFO/LTDM slot decisions."""
 
+    requires_recording = True
+
     def __init__(
         self,
         replay: Any,
@@ -217,3 +219,97 @@ class ArrowFrozenFeatureCache:
             ],
             dim=1,
         )
+
+
+class ArrowOnTheFlyFeatureSource:
+    """Recompute frozen features from sampled ARROW observations on the GPU."""
+
+    requires_recording = False
+
+    def __init__(
+        self,
+        replay: Any,
+        encoder: torch.nn.Module,
+        feature_dim: int,
+        *,
+        dtype: torch.dtype = torch.float16,
+    ) -> None:
+        if feature_dim < 1:
+            raise ValueError("feature_dim must be positive")
+        if dtype not in {torch.float16, torch.float32}:
+            raise ValueError("feature replay dtype must be float16 or float32")
+        self.replay = replay
+        self.encoder = encoder
+        self.feature_dim = feature_dim
+        self.dtype = dtype
+
+    @property
+    def storage_backend(self) -> str:
+        return "on_the_fly"
+
+    @property
+    def storage_bytes(self) -> int:
+        return 0
+
+    def storage_accounting(self) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "feature_dim": self.feature_dim,
+            "dtype": str(self.dtype).removeprefix("torch."),
+            "storage_bytes": 0,
+            "storage_backend": self.storage_backend,
+            "source": "sampled ARROW observations",
+            "retention_semantics": "no separately retained feature values",
+            "sampling_semantics": "features use the existing ARROW sampled observations",
+            "quantization_semantics": (
+                "encoder outputs round through the configured replay dtype before "
+                "RSSM float32 consumption"
+            ),
+            "buffers": [],
+        }
+
+    @torch.no_grad()
+    def minibatch(
+        self,
+        mb_t: int,
+        mb_n: int,
+        mb_device: str | torch.device = "cuda",
+        *,
+        task_id: int | None = None,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        if task_id is None:
+            sample = self.replay.minibatch_with_metadata(
+                mb_t, mb_n, str(mb_device)
+            )
+        else:
+            sample = self.replay.minibatch_with_metadata(
+                mb_t,
+                mb_n,
+                str(mb_device),
+                task_id=task_id,
+            )
+        if len(sample) != 8:
+            raise RuntimeError(
+                "On-the-fly features require ARROW MultiTypeReplay metadata"
+            )
+        actions, observations, rewards, continues, resets = sample[:5]
+        time, sequences = observations.shape[:2]
+        flat_observations = observations.reshape(-1, *observations.shape[-3:])
+        flat_features = self.encoder(flat_observations).detach()
+        if flat_features.shape != (time * sequences, self.feature_dim):
+            raise RuntimeError(
+                "Frozen encoder returned unexpected replay feature shape: "
+                f"expected {(time * sequences, self.feature_dim)}, "
+                f"got {tuple(flat_features.shape)}"
+            )
+        features = flat_features.to(self.dtype).to(torch.float32).view(
+            time, sequences, self.feature_dim
+        )
+        return actions, observations, features, rewards, continues, resets

@@ -25,7 +25,8 @@ the local Atari gates pass.
 
 Stored Atari observations remain float32 `3 x 64 x 64`. The frozen local
 DINOv3 ViT-S/16 internally resizes them to `256 x 256` and returns all 256 patch
-tokens:
+tokens. Replay stores only the observations; every sampled minibatch recomputes
+its frozen DINO features on the accelerator:
 
 ```text
 o_t [3,64,64]
@@ -47,7 +48,9 @@ The selected posterior state `[z_t,h_t]` trains the original DreamerV3 pixel
 decoder against the unmodified `64 x 64` replay observation. Reward,
 continuation, free-bit KL, latent imagination, and Actor-Critic losses retain
 their existing formulas and weights. There is no feature predictor and no DINO
-fine-tuning in V3.
+fine-tuning in V3. Before RSSM consumption, on-the-fly encoder outputs round
+through float16 and return to float32, preserving the numerical interface of
+the superseded float16 sidecar implementation without retaining its values.
 
 ## Continual routing
 
@@ -71,29 +74,25 @@ for every new task is random.
 ## Replay and resources
 
 FIFO/LTDM trajectory capacities and 50/50 selection semantics remain ARROW-50.
-Replay stores task IDs and samples task-homogeneous sequences. The frozen
-feature sidecar follows the exact ARROW write and sample indices.
-
-For each of two `512 x 512` sub-buffers, float16 feature storage is:
-
-```text
-512 * 512 * 98,304 * 2 bytes = 51,539,607,552 bytes
-```
-
-Total feature storage is `103,079,215,104` bytes, excluding base observations,
-task IDs, allocator overhead, gradients, activations, parameters, and optimizer
-state. This byte difference must accompany every comparison.
+Replay stores task IDs and samples task-homogeneous sequences. There is no
+frozen-feature replay sidecar: the sampled ARROW observations are the sole
+persistent visual source, and the corresponding complete patch tensor is
+computed only for the active minibatch.
 
 The target VirtAI container exposes a 32-GiB memory cgroup even though the host
-reports substantially more RAM. Therefore V3 stores both the unchanged
-float32 replay observations and float16 feature sidecar as shared, run-local
-file-backed mmap tensors under `mmap_replay/`. The tensor shapes, dtypes, FIFO
-overwrite order, LTDM retention, write maps, and sampled indices do not change.
-Only the storage backing changes from anonymous CPU memory to persistent
-`/gemini/code` files. Logical mapped storage is 25,769,803,776 observation bytes
-plus 103,079,215,104 feature bytes; auxiliary replay tensors remain in CPU RAM.
-The operating system may cache active pages, but the complete logical stores
-must still be byte-accounted and must not be described as memory matched.
+reports substantially more RAM. V3 therefore stores the unchanged float32
+ARROW replay observations as shared, run-local file-backed mmap tensors under
+`mmap_replay/observations/`. Tensor shape, dtype, FIFO overwrite order, LTDM
+retention, and sampled indices do not change. Logical mapped observation
+storage is `25,769,803,776` bytes; frozen-feature storage is zero bytes and
+auxiliary replay tensors remain in CPU RAM. This keeps ARROW's image replay
+semantics while avoiding the failed `103,079,215,104`-byte feature sidecar.
+
+The superseded commit `d52bb17` cached every patch feature on the network-backed
+`/gemini/code` mount. Its seed-0 Task-1 pilot reached epoch 3 but became dominated
+by mmap major faults once the active FIFO/LTDM feature working set exceeded the
+container memory limit. That interrupted run is a runtime failure, not a method
+performance result.
 
 All environment interactions, world-model updates, Actor-Critic updates,
 evaluation points, action repeat, reward transformation, and per-task duration
@@ -105,7 +104,8 @@ random pretraining collections are explicitly recorded as extra interactions.
 The first run is the seed-0, one-task, 90-epoch MsPacman pilot:
 
 ```bash
-python scripts/run_dino_patchbank_arrow_atari.py \
+python scripts/run_moe_arrow_atari.py \
+  --method dino-patchbank \
   --seed 0 \
   --task-prefix-length 1 \
   --dinov3-model-path /absolute/local/model/path \
@@ -113,7 +113,7 @@ python scripts/run_dino_patchbank_arrow_atari.py \
 ```
 
 The run must start from a clean pushed commit and preserve its generated
-`launch.json`, resolved config, parameter accounting, feature-cache accounting,
+`launch.json`, resolved config, parameter accounting, zero-byte feature-source accounting,
 replay mmap accounting, raw evaluation returns, final model, and Actor-Critic
 bank. A successful smoke or single seed establishes execution or acquisition
 evidence only. Task 2 must not be interpreted until Task 1 clearly learns under

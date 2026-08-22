@@ -198,7 +198,8 @@ class TrainingLauncherTests(unittest.TestCase):
             "kan",
             "--task-prefix-length",
             "2",
-            script="scripts/run_karrow_spatial_ar50_atari.py",
+            "--visual-version",
+            "v2",
         )
 
         self.assertEqual(launch["method"], "KARROW-SpatialFrozenCore-50-T2Pilot")
@@ -233,7 +234,8 @@ class TrainingLauncherTests(unittest.TestCase):
             "kan",
             "--task-prefix-length",
             "2",
-            script="scripts/run_karrow_incremental_ar50_atari.py",
+            "--visual-version",
+            "v3",
         )
 
         self.assertEqual(launch["method"], "KARROW-ReplayConsolidated-50-T2Pilot")
@@ -273,7 +275,8 @@ class TrainingLauncherTests(unittest.TestCase):
             "kan",
             "--task-prefix-length",
             "2",
-            script="scripts/run_karrow_input_aligned_ar50_atari.py",
+            "--visual-version",
+            "v4",
         )
 
         self.assertEqual(launch["method"], "KARROW-InputAligned-50-T2Pilot")
@@ -305,7 +308,8 @@ class TrainingLauncherTests(unittest.TestCase):
                 launch, _ = self._karrow_dry_run(
                     "--variant",
                     "kan",
-                    script="scripts/run_karrow_input_aligned_ar50_atari.py",
+                    "--visual-version",
+                    "v4",
                 )
 
         self.assertEqual(
@@ -350,7 +354,9 @@ class TrainingLauncherTests(unittest.TestCase):
         launch, output_dir = self._karrow_dry_run(
             "--task-prefix-length",
             "2",
-            script="scripts/run_dino_fullbank_arrow_atari.py",
+            "--method",
+            "dino-fullbank",
+            script="scripts/run_moe_arrow_atari.py",
         )
 
         self.assertEqual(launch["method"], "DINO-FullBank-ARROW-50-T2Pilot")
@@ -397,7 +403,9 @@ class TrainingLauncherTests(unittest.TestCase):
         launch, output_dir = self._karrow_dry_run(
             "--task-prefix-length",
             "1",
-            script="scripts/run_dino_patchbank_arrow_atari.py",
+            "--method",
+            "dino-patchbank",
+            script="scripts/run_moe_arrow_atari.py",
         )
 
         self.assertEqual(launch["method"], "DINO-PatchBank-ARROW-50-T1Pilot")
@@ -422,11 +430,12 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(observation["patch_feature_dim"], 384)
         self.assertEqual(observation["patch_projection"], "none")
         self.assertEqual(observation["feature_dim"], 98_304)
+        self.assertEqual(observation["replay_feature_mode"], "on_the_fly")
         self.assertEqual(observation["feature_loss"], "not_applicable")
         self.assertTrue(observation["pixel_decoder"])
         self.assertEqual(
             launch["replay"]["feature_cache"]["storage_bytes"],
-            103_079_215_104,
+            0,
         )
         self.assertEqual(
             launch["replay"]["storage_device"],
@@ -434,7 +443,11 @@ class TrainingLauncherTests(unittest.TestCase):
         )
         self.assertEqual(
             launch["replay"]["feature_cache"]["storage_backend"],
-            "file_mmap",
+            "none",
+        )
+        self.assertEqual(
+            launch["replay"]["feature_cache"]["mode"],
+            "on_the_fly_from_sampled_observations",
         )
         self.assertEqual(
             launch["replay"]["base_storage"]["observation_storage_backend"],

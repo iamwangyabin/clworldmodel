@@ -101,7 +101,8 @@ projections than v1-v3.
 ## Dry run
 
 ```bash
-python scripts/run_karrow_input_aligned_ar50_atari.py \
+python scripts/run_karrow_ar50_atari.py \
+  --visual-version v4 \
   --variant kan \
   --task-prefix-length 2 \
   --seed 0 \

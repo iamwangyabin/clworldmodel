@@ -24,6 +24,7 @@ ObservationEncoder = Literal["cnn", "dinov3_vits16"]
 DinoV3FeatureMode = Literal["cls", "patch_grid"]
 DinoV3FeatureLoss = Literal["cosine", "batch_standardized_smooth_l1"]
 DinoV3PatchProjection = Literal["none", "task1_pca", "fixed_orthogonal"]
+DinoV3ReplayFeatureMode = Literal["cached", "on_the_fly"]
 ContinualMethod = Literal[
     "none",
     "moe_arrow",
@@ -268,6 +269,7 @@ class Config(Serialisable):
     dinov3_input_size: int = 256
     dinov3_max_batch_size: int = 128
     dinov3_feature_cache_dtype: Literal["float16", "float32"] = "float16"
+    dinov3_replay_feature_mode: DinoV3ReplayFeatureMode = "cached"
     dinov3_feature_loss_scale: float = 1.0
     dinov3_feature_mode: DinoV3FeatureMode = "cls"
     dinov3_patch_pool_size: int = 4
@@ -386,7 +388,7 @@ class Config(Serialisable):
                 for replay_config in self.replay_buffers
             ):
                 raise ValueError(
-                    "DINO-PatchBank-ARROW requires CPU-addressable mmap replay"
+                    "DINO-PatchBank-ARROW requires CPU-addressable mapped observation replay"
                 )
         if self.observation_objective not in {
             "reconstruction",
@@ -425,6 +427,18 @@ class Config(Serialisable):
                 raise ValueError("dinov3_max_batch_size must be positive")
             if self.dinov3_feature_cache_dtype not in {"float16", "float32"}:
                 raise ValueError("Unknown DINOv3 feature cache dtype")
+            if self.dinov3_replay_feature_mode not in {"cached", "on_the_fly"}:
+                raise ValueError("Unknown DINOv3 replay feature mode")
+            if is_dino_patchbank:
+                if self.dinov3_replay_feature_mode != "on_the_fly":
+                    raise ValueError(
+                        "DINO-PatchBank-ARROW recomputes frozen DINOv3 patches "
+                        "from sampled replay observations"
+                    )
+            elif self.dinov3_replay_feature_mode != "cached":
+                raise ValueError(
+                    "Only DINO-PatchBank-ARROW supports on-the-fly replay features"
+                )
             if self.dinov3_feature_loss_scale <= 0:
                 raise ValueError("dinov3_feature_loss_scale must be positive")
             if self.dinov3_feature_mode not in {"cls", "patch_grid"}:

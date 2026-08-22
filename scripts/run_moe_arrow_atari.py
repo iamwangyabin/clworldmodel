@@ -67,6 +67,7 @@ class LaunchVariant:
     patch_feature_dim: int
     patch_projection: str
     patch_projection_seed: int
+    replay_feature_mode: str
     pixel_decoder: bool
     observation_description: str
 
@@ -87,6 +88,7 @@ MOE_ARROW_VARIANT = LaunchVariant(
     patch_feature_dim=DINOV3_PATCH_FEATURE_DIM,
     patch_projection=PATCH_PROJECTION,
     patch_projection_seed=PATCH_PROJECTION_SEED,
+    replay_feature_mode="cached",
     pixel_decoder=False,
     observation_description="one-step prior prediction of stopped spatial features",
 )
@@ -107,6 +109,7 @@ DINO_FULLBANK_VARIANT = LaunchVariant(
     patch_feature_dim=DINOV3_PATCH_FEATURE_DIM,
     patch_projection=PATCH_PROJECTION,
     patch_projection_seed=PATCH_PROJECTION_SEED,
+    replay_feature_mode="cached",
     pixel_decoder=False,
     observation_description="current posterior reconstruction of stopped spatial features",
 )
@@ -127,14 +130,30 @@ DINO_PATCHBANK_VARIANT = LaunchVariant(
     patch_feature_dim=FULL_PATCH_FEATURE_DIM,
     patch_projection="none",
     patch_projection_seed=0,
+    replay_feature_mode="on_the_fly",
     pixel_decoder=True,
     observation_description="DreamerV3 pixel reconstruction from full DINOv3 patches",
 )
 
+LAUNCH_VARIANTS = {
+    "moe": MOE_ARROW_VARIANT,
+    "dino-fullbank": DINO_FULLBANK_VARIANT,
+    "dino-patchbank": DINO_PATCHBANK_VARIANT,
+}
 
-def _parser(variant: LaunchVariant) -> argparse.ArgumentParser:
+
+def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=f"Launch {variant.method} with one expert and actor per game"
+        description="Launch a task-aware DINO/ARROW method with one expert and actor per game"
+    )
+    parser.add_argument(
+        "--method",
+        choices=tuple(LAUNCH_VARIANTS),
+        default=default_method,
+        help=(
+            "moe is the original partial-expert route; dino-fullbank and "
+            "dino-patchbank select the corrected full-bank protocols"
+        ),
     )
     parser.add_argument("--seed", type=int, choices=range(5), default=0)
     parser.add_argument("--curriculum", choices=CURRICULUM_DIRS, default="original")
@@ -185,6 +204,7 @@ def _resolved_config(
             "dinov3_input_size": DINOV3_INPUT_SIZE,
             "dinov3_max_batch_size": DINOV3_MAX_BATCH_SIZE,
             "dinov3_feature_cache_dtype": DINOV3_CACHE_DTYPE,
+            "dinov3_replay_feature_mode": variant.replay_feature_mode,
             "dinov3_feature_loss_scale": DINOV3_FEATURE_LOSS_SCALE,
             "dinov3_feature_mode": "patch_grid",
             "dinov3_patch_pool_size": variant.patch_pool_size,
@@ -207,9 +227,10 @@ def _resolved_config(
     return config
 
 
-def main(variant: LaunchVariant = MOE_ARROW_VARIANT) -> int:
-    parser = _parser(variant)
+def main(*, default_method: str = "moe") -> int:
+    parser = _parser(default_method=default_method)
     args = parser.parse_args()
+    variant = LAUNCH_VARIANTS[args.method]
     if args.dinov3_model_path is None:
         parser.error("--dinov3-model-path or DINOV3_MODEL_PATH is required")
     if args.cpu_threads is not None and args.cpu_threads < 1:
@@ -324,11 +345,28 @@ def main(variant: LaunchVariant = MOE_ARROW_VARIANT) -> int:
         * source_config["env_repeat"]
     )
     feature_dim = variant.patch_feature_dim * variant.patch_pool_size**2
-    feature_cache = _feature_cache_budget(
-        config,
-        dtype=DINOV3_CACHE_DTYPE,
-        feature_dim=feature_dim,
-    )
+    if variant.replay_feature_mode == "cached":
+        feature_cache = _feature_cache_budget(
+            config,
+            dtype=DINOV3_CACHE_DTYPE,
+            feature_dim=feature_dim,
+        )
+        feature_cache["storage_backend"] = "anonymous_cpu"
+    else:
+        feature_cache = {
+            "dtype": DINOV3_CACHE_DTYPE,
+            "feature_dim": feature_dim,
+            "storage_bytes": 0,
+            "storage_backend": "none",
+            "mode": "on_the_fly_from_sampled_observations",
+            "quantization_semantics": (
+                "round through configured replay dtype before RSSM float32 consumption"
+            ),
+            "buffers": {},
+            "retention_and_sampling": (
+                "no feature sidecar; uses the sampled ARROW observation batch"
+            ),
+        }
     base_replay_storage = _arrow_replay_storage_budget(config)
     if variant.code_id == "dino_patchbank_arrow":
         base_replay_storage["observation_storage_backend"] = "file_mmap"
@@ -339,10 +377,6 @@ def main(variant: LaunchVariant = MOE_ARROW_VARIANT) -> int:
         base_replay_storage["mmap_directory"] = "mmap_replay/observations"
         for buffer in base_replay_storage["buffers"].values():
             buffer["observation_storage_backend"] = "file_mmap"
-        feature_cache["storage_backend"] = "file_mmap"
-        feature_cache["mmap_directory"] = "mmap_replay/features"
-        for buffer in feature_cache["buffers"].values():
-            buffer["storage_backend"] = "file_mmap"
     task_id_storage_bytes = 2 * source_config["data_n_max"] * 8
 
     launch = {
@@ -455,6 +489,7 @@ def main(variant: LaunchVariant = MOE_ARROW_VARIANT) -> int:
             "patch_projection_seed": variant.patch_projection_seed,
             "patch_projection_frames": 0,
             "feature_dim": feature_dim,
+            "replay_feature_mode": variant.replay_feature_mode,
             "objective": variant.observation_description,
             "feature_loss": (
                 "not_applicable" if variant.pixel_decoder else variant.feature_loss

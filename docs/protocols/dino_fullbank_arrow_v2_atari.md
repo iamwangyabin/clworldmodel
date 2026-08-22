@@ -138,7 +138,8 @@ Inspect the first-task acquisition configuration without creating a run:
 
 ```bash
 export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
-python scripts/run_dino_fullbank_arrow_atari.py \
+python scripts/run_moe_arrow_atari.py \
+  --method dino-fullbank \
   --seed 0 \
   --task-prefix-length 1 \
   --dry-run
