@@ -1129,6 +1129,14 @@ if __name__ == "__main__":
             "world_model_warm_start=previous_task_once actor_init=fresh "
             f"current_fraction={config.dino_fullbank_current_task_fraction}"
         )
+    elif config.continual_method == "dino_patchbank_arrow":
+        print(
+            "DINO-PatchBank-ARROW routing: "
+            f"experts={config.rssm_num_experts} actor_bank=per_task "
+            "world_model_warm_start=previous_task_once actor_init=fresh "
+            "visual_input=complete_16x16x384_patches observation=pixels "
+            f"current_fraction={config.dino_fullbank_current_task_fraction}"
+        )
     if resume_payload is not None:
         print(
             "Initializing from analysis snapshot: "
@@ -1225,10 +1233,7 @@ if __name__ == "__main__":
     envs = config.get_env_schedule()
     replay = config.get_replay_buffer()
     feature_cache = None
-    if config.observation_objective in {
-        "dinov3_next_feature",
-        "dinov3_posterior_feature",
-    }:
+    if config.observation_encoder == "dinov3_vits16":
         from clworldmodel.replay import ArrowFrozenFeatureCache
 
         cache_dtype = {
@@ -1275,11 +1280,16 @@ if __name__ == "__main__":
             shuffled_task_schedule,
         )
 
-        actor_bank_artifact_kind = (
-            "dino_fullbank_arrow_actor_critic_bank_inference_state"
-            if config.uses_full_task_experts
-            else "moe_arrow_actor_critic_bank_inference_state"
-        )
+        if config.continual_method == "dino_patchbank_arrow":
+            actor_bank_artifact_kind = (
+                "dino_patchbank_arrow_actor_critic_bank_inference_state"
+            )
+        elif config.uses_full_task_experts:
+            actor_bank_artifact_kind = (
+                "dino_fullbank_arrow_actor_critic_bank_inference_state"
+            )
+        else:
+            actor_bank_artifact_kind = "moe_arrow_actor_critic_bank_inference_state"
         actor_critic_bank = ActorCriticBank(
             artifact_kind=actor_bank_artifact_kind
         )
@@ -1628,7 +1638,9 @@ if __name__ == "__main__":
             for task_id, update_count in world_model_allocation.items():
                 writer.add_scalar(
                     (
-                        f"DINOFullBankArrow/world_model_updates_task_{task_id}"
+                        f"DINOPatchBankArrow/world_model_updates_task_{task_id}"
+                        if config.continual_method == "dino_patchbank_arrow"
+                        else f"DINOFullBankArrow/world_model_updates_task_{task_id}"
                         if config.uses_full_task_experts
                         else f"MoEArrow/world_model_updates_task_{task_id}"
                     ),
@@ -1720,11 +1732,21 @@ if __name__ == "__main__":
 
                         init_z, init_h = wm.rssm.initial_state(original.shape[1])
                         no_resets = torch.zeros(*original.shape[:2], 1, device=init_z.device)
+                        image_log_rssm_kwargs = {}
+                        if current_task_id is not None:
+                            image_log_rssm_kwargs["task_id"] = current_task_id
                         z_posts, z, h = wm.rssm(
-                            init_z, _acts[:, 0:2].cuda(), init_h, original, no_resets
+                            init_z,
+                            _acts[:, 0:2].cuda(),
+                            init_h,
+                            original,
+                            no_resets,
+                            **image_log_rssm_kwargs,
                         )
                         zhs = wm.zh_transform(z, h)
-                        recon = torch.stack([wm.decoder(zh) for zh in zhs])
+                        recon = torch.stack(
+                            [wm.decoder_for(current_task_id)(zh) for zh in zhs]
+                        )
 
                         writer.add_images(
                             "reconstructed",
@@ -1817,7 +1839,9 @@ if __name__ == "__main__":
             for task_id, task_steps in actor_allocation.items():
                 writer.add_scalar(
                     (
-                        f"DINOFullBankArrow/actor_critic_updates_task_{task_id}"
+                        f"DINOPatchBankArrow/actor_critic_updates_task_{task_id}"
+                        if config.continual_method == "dino_patchbank_arrow"
+                        else f"DINOFullBankArrow/actor_critic_updates_task_{task_id}"
                         if config.uses_full_task_experts
                         else f"MoEArrow/actor_critic_updates_task_{task_id}"
                     ),

@@ -322,6 +322,31 @@ Its first gate is MsPacman acquisition, not continual retention. See
 `docs/protocols/dino_fullbank_arrow_v2_atari.md` for the exact routing,
 resource accounting, and execution order.
 
+## Full-patch method: DINO-PatchBank-ARROW-v3
+
+`DINO-PatchBank-ARROW-50` removes the fixed `4 x 4 x 64` visual bottleneck.
+The frozen DINOv3 ViT-S/16 supplies every `16 x 16 x 384` patch coordinate to
+the task-routed DreamerV3 posterior, and the original 64-pixel reconstruction
+decoder is restored. There is no spatial pooling, channel projection, or DINO
+feature-prediction head. RSSM dynamics, reward/continue prediction, latent
+imagination, and MLP Actor-Critic training retain their existing algorithms.
+
+The frozen features are cached as a float16 ARROW sidecar. Under the published
+Atari replay geometry this deliberately spends 103,079,215,104 bytes in
+addition to the base replay, so it is a high-memory diagnostic rather than a
+matched-storage baseline.
+
+```bash
+export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
+python scripts/run_dino_patchbank_arrow_atari.py \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+```
+
+See `docs/protocols/dino_patchbank_arrow_v3_atari.md` for the fixed protocol,
+paper-derived motivation, and claim limits.
+
 ## Task-2 snapshot acquisition diagnostic
 
 The Task-2 snapshot protocol starts from the completed Task-1 analysis

@@ -46,7 +46,8 @@ from run_karrow_ar50_atari import (
 
 PATCH_PROJECTION = "fixed_orthogonal"
 PATCH_PROJECTION_SEED = 0
-FEATURE_DIM = DINOV3_PATCH_FEATURE_DIM * DINOV3_PATCH_POOL_SIZE**2
+FULL_PATCH_POOL_SIZE = DINOV3_INPUT_SIZE // 16
+FULL_PATCH_FEATURE_DIM = 384
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,12 @@ class LaunchVariant:
     random_policy: str
     shared_core_mode: str
     full_task_experts: bool
+    patch_pool_size: int
+    patch_feature_dim: int
+    patch_projection: str
+    patch_projection_seed: int
+    pixel_decoder: bool
+    observation_description: str
 
 
 MOE_ARROW_VARIANT = LaunchVariant(
@@ -76,6 +83,12 @@ MOE_ARROW_VARIANT = LaunchVariant(
     random_policy="first",
     shared_core_mode="trainable",
     full_task_experts=False,
+    patch_pool_size=DINOV3_PATCH_POOL_SIZE,
+    patch_feature_dim=DINOV3_PATCH_FEATURE_DIM,
+    patch_projection=PATCH_PROJECTION,
+    patch_projection_seed=PATCH_PROJECTION_SEED,
+    pixel_decoder=False,
+    observation_description="one-step prior prediction of stopped spatial features",
 )
 
 DINO_FULLBANK_VARIANT = LaunchVariant(
@@ -90,6 +103,32 @@ DINO_FULLBANK_VARIANT = LaunchVariant(
     random_policy="new",
     shared_core_mode="task_isolated",
     full_task_experts=True,
+    patch_pool_size=DINOV3_PATCH_POOL_SIZE,
+    patch_feature_dim=DINOV3_PATCH_FEATURE_DIM,
+    patch_projection=PATCH_PROJECTION,
+    patch_projection_seed=PATCH_PROJECTION_SEED,
+    pixel_decoder=False,
+    observation_description="current posterior reconstruction of stopped spatial features",
+)
+
+DINO_PATCHBANK_VARIANT = LaunchVariant(
+    method="DINO-PatchBank-ARROW-50",
+    code_id="dino_patchbank_arrow",
+    protocol="DINO-PatchBank-ARROW-v3-Atari-TaskAware",
+    role="full-patch-dino-dreamerv3-task-aware-method",
+    output_prefix="dino_patchbank_arrow_ar50",
+    current_task_fraction=1.0,
+    observation_objective="reconstruction",
+    feature_loss="cosine",
+    random_policy="new",
+    shared_core_mode="task_isolated",
+    full_task_experts=True,
+    patch_pool_size=FULL_PATCH_POOL_SIZE,
+    patch_feature_dim=FULL_PATCH_FEATURE_DIM,
+    patch_projection="none",
+    patch_projection_seed=0,
+    pixel_decoder=True,
+    observation_description="DreamerV3 pixel reconstruction from full DINOv3 patches",
 )
 
 
@@ -148,11 +187,11 @@ def _resolved_config(
             "dinov3_feature_cache_dtype": DINOV3_CACHE_DTYPE,
             "dinov3_feature_loss_scale": DINOV3_FEATURE_LOSS_SCALE,
             "dinov3_feature_mode": "patch_grid",
-            "dinov3_patch_pool_size": DINOV3_PATCH_POOL_SIZE,
-            "dinov3_patch_feature_dim": DINOV3_PATCH_FEATURE_DIM,
-            "dinov3_patch_projection": PATCH_PROJECTION,
+            "dinov3_patch_pool_size": variant.patch_pool_size,
+            "dinov3_patch_feature_dim": variant.patch_feature_dim,
+            "dinov3_patch_projection": variant.patch_projection,
             "dinov3_patch_projection_frames": 0,
-            "dinov3_patch_projection_seed": PATCH_PROJECTION_SEED,
+            "dinov3_patch_projection_seed": variant.patch_projection_seed,
             "dinov3_feature_loss_kind": variant.feature_loss,
             "dinov3_feature_std_floor": DINOV3_FEATURE_STD_FLOOR,
             "actor_network": "mlp",
@@ -284,10 +323,11 @@ def main(variant: LaunchVariant = MOE_ARROW_VARIANT) -> int:
         * decisions_per_epoch
         * source_config["env_repeat"]
     )
+    feature_dim = variant.patch_feature_dim * variant.patch_pool_size**2
     feature_cache = _feature_cache_budget(
         config,
         dtype=DINOV3_CACHE_DTYPE,
-        feature_dim=FEATURE_DIM,
+        feature_dim=feature_dim,
     )
     task_id_storage_bytes = 2 * source_config["data_n_max"] * 8
 
@@ -338,7 +378,11 @@ def main(variant: LaunchVariant = MOE_ARROW_VARIANT) -> int:
                     "posterior_representation",
                     "recurrent_dynamics",
                     "latent_prior",
-                    "feature_predictor",
+                    (
+                        "pixel_decoder"
+                        if variant.pixel_decoder
+                        else "feature_predictor"
+                    ),
                     "reward_head",
                     "continue_head",
                 ]
@@ -365,7 +409,7 @@ def main(variant: LaunchVariant = MOE_ARROW_VARIANT) -> int:
                 else "copy previous task expert once"
             ),
             "old_task_parameters_frozen": variant.full_task_experts,
-            "pixel_decoder": False,
+            "pixel_decoder": variant.pixel_decoder,
         },
         "actor_critic": {
             "topology": "per_task_bank",
@@ -391,19 +435,17 @@ def main(variant: LaunchVariant = MOE_ARROW_VARIANT) -> int:
             "model_artifact": model_artifact,
             "input_size": DINOV3_INPUT_SIZE,
             "feature_mode": "patch_grid",
-            "patch_pool_size": DINOV3_PATCH_POOL_SIZE,
-            "patch_feature_dim": DINOV3_PATCH_FEATURE_DIM,
-            "patch_projection": PATCH_PROJECTION,
-            "patch_projection_seed": PATCH_PROJECTION_SEED,
+            "patch_pool_size": variant.patch_pool_size,
+            "patch_feature_dim": variant.patch_feature_dim,
+            "patch_projection": variant.patch_projection,
+            "patch_projection_seed": variant.patch_projection_seed,
             "patch_projection_frames": 0,
-            "feature_dim": FEATURE_DIM,
-            "objective": (
-                "current posterior reconstruction of stopped spatial features"
-                if variant.full_task_experts
-                else "one-step prior prediction of stopped spatial features"
+            "feature_dim": feature_dim,
+            "objective": variant.observation_description,
+            "feature_loss": (
+                "not_applicable" if variant.pixel_decoder else variant.feature_loss
             ),
-            "feature_loss": variant.feature_loss,
-            "pixel_decoder": False,
+            "pixel_decoder": variant.pixel_decoder,
             "task1_fitted_visual_projection": False,
         },
         "collection": {

@@ -154,9 +154,12 @@ class WorldModel(nn.Module):
                 raise ValueError(
                     "DINOv3 posterior features require batch-standardized SmoothL1"
                 )
-        if full_task_experts and observation_objective != "dinov3_posterior_feature":
+        if full_task_experts and observation_objective not in {
+            "reconstruction",
+            "dinov3_posterior_feature",
+        }:
             raise ValueError(
-                "Full task experts require the DINOv3 posterior-feature objective"
+                "Full task experts require pixel or DINOv3 feature reconstruction"
             )
 
         self.ls = ls
@@ -209,9 +212,14 @@ class WorldModel(nn.Module):
         self.zh_transform = ZhToModelState(ls, h_dim)
         self.feature_predictor_residual = None
         self.feature_predictor_experts = nn.ModuleList()
+        self.decoder_experts = nn.ModuleList()
 
         if observation_objective == "reconstruction":
             self.decoder = Decoder(img_channels, self.zh_transform.out_features, cnn_depth)
+            if full_task_experts:
+                self.decoder_experts.extend(
+                    copy.deepcopy(self.decoder) for _ in range(num_task_experts - 1)
+                )
         elif observation_objective == "r2":
             from clworldmodel.models.r2 import R2BarlowObjective, R2Projector
 
@@ -402,6 +410,14 @@ class WorldModel(nn.Module):
             return self.feature_predictor
         return self.feature_predictor_experts[task_index - 1]
 
+    def decoder_for(self, task_id: Optional[int | torch.Tensor]) -> nn.Module:
+        if not hasattr(self, "decoder"):
+            raise RuntimeError("The configured observation objective has no decoder")
+        task_index = self.rssm._task_index(task_id)
+        if task_index == 0 or not self.full_task_experts:
+            return self.decoder
+        return self.decoder_experts[task_index - 1]
+
     def initialize_task_expert(
         self, target_task_id: int, source_task_id: int
     ) -> bool:
@@ -430,7 +446,11 @@ class WorldModel(nn.Module):
                 self.continue_fc, self.continue_experts, source_index
             ).state_dict()
         )
-        if self.full_task_experts:
+        if self.full_task_experts and self.observation_objective == "reconstruction":
+            self.decoder_for(target_index).load_state_dict(
+                self.decoder_for(source_index).state_dict()
+            )
+        elif self.full_task_experts:
             self.feature_predictor_for(target_index).load_state_dict(
                 self.feature_predictor_for(source_index).state_dict()
             )
@@ -459,7 +479,10 @@ class WorldModel(nn.Module):
             self._head_for(
                 self.continue_fc, self.continue_experts, index
             ).requires_grad_(is_active)
-            self.feature_predictor_for(index).requires_grad_(is_active)
+            if self.observation_objective == "reconstruction":
+                self.decoder_for(index).requires_grad_(is_active)
+            else:
+                self.feature_predictor_for(index).requires_grad_(is_active)
 
     def predict_reward_symlog(
         self, model_state: torch.Tensor, task_id: Optional[int | torch.Tensor] = None
@@ -496,6 +519,8 @@ class WorldModel(nn.Module):
             continue_head.requires_grad_(False)
         if hasattr(self, "decoder"):
             self.decoder.requires_grad_(False)
+        for decoder in self.decoder_experts:
+            decoder.requires_grad_(False)
         if hasattr(self, "r2_projector"):
             self.r2_projector.requires_grad_(False)
         if hasattr(self, "feature_predictor"):
@@ -544,7 +569,7 @@ class WorldModel(nn.Module):
         init_z, init_h = self.rssm.initial_state(n)
         # Shift actions and xs, since RSSM takes (prev_action, next_obs)
         embeddings = None
-        if self.observation_objective in {
+        if observation_features is not None or self.observation_objective in {
             "r2",
             "dinov3_next_feature",
             "dinov3_posterior_feature",
@@ -560,7 +585,7 @@ class WorldModel(nn.Module):
                 )
             if embeddings.shape[-1] != self.rssm.image_embedder.output_size:
                 raise ValueError("Observation features have an unexpected width")
-            if self.observation_objective in {
+            if observation_features is not None or self.observation_objective in {
                 "dinov3_next_feature",
                 "dinov3_posterior_feature",
             }:
@@ -597,7 +622,7 @@ class WorldModel(nn.Module):
         t, n, x = zhs.shape
         zhs_f12 = zhs.view(-1, x)
         if self.observation_objective == "reconstruction":
-            recon = self.decoder(zhs_f12).view(t, n, *xs.shape[-3:])
+            recon = self.decoder_for(task_id)(zhs_f12).view(t, n, *xs.shape[-3:])
             # Loss shape [ T N C 64 64 ]
             observation_losses = (recon - xs).square().sum([2, 3, 4])
             observation_loss = observation_losses.mean()

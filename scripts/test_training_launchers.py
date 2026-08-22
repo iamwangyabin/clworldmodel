@@ -393,6 +393,44 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(launch["extra_gradient_updates"], 0)
         self.assertFalse(output_dir.exists())
 
+    def test_dino_patchbank_dry_run_records_full_patches_and_pixel_decoder(self) -> None:
+        launch, output_dir = self._karrow_dry_run(
+            "--task-prefix-length",
+            "1",
+            script="scripts/run_dino_patchbank_arrow_atari.py",
+        )
+
+        self.assertEqual(launch["method"], "DINO-PatchBank-ARROW-50-T1Pilot")
+        self.assertEqual(
+            launch["protocol"], "DINO-PatchBank-ARROW-v3-Atari-TaskAware"
+        )
+        self.assertEqual(launch["code_id"], "dino_patchbank_arrow")
+        self.assertEqual(
+            launch["world_model"]["expert_modules"],
+            [
+                "posterior_representation",
+                "recurrent_dynamics",
+                "latent_prior",
+                "pixel_decoder",
+                "reward_head",
+                "continue_head",
+            ],
+        )
+        self.assertTrue(launch["world_model"]["pixel_decoder"])
+        observation = launch["observation"]
+        self.assertEqual(observation["patch_pool_size"], 16)
+        self.assertEqual(observation["patch_feature_dim"], 384)
+        self.assertEqual(observation["patch_projection"], "none")
+        self.assertEqual(observation["feature_dim"], 98_304)
+        self.assertEqual(observation["feature_loss"], "not_applicable")
+        self.assertTrue(observation["pixel_decoder"])
+        self.assertEqual(
+            launch["replay"]["feature_cache"]["storage_bytes"],
+            103_079_215_104,
+        )
+        self.assertEqual(launch["actor_critic"]["current_task_update_fraction"], 1.0)
+        self.assertFalse(output_dir.exists())
+
     def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:
         launch = self._arrow_dry_run("--actor-network", "relu_kan")
 

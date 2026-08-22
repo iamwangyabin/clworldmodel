@@ -159,6 +159,16 @@ documented here, covered by focused parity tests, and followed by regenerating
     source pretrain setting. Focused tests cover protocol rejection,
     posterior/feature-head routing and gradients, frozen old parameters, fresh
     actors, current-only allocation, and launch-manifest semantics.
+27. Add the opt-in, separately named
+    `DINO-PatchBank-ARROW-v3-Atari-TaskAware` path without changing V2. The
+    frozen DINOv3 encoder retains its complete `16 x 16 x 384` patch tensor and
+    supplies the flattened 98,304 coordinates to the existing task-routed
+    Dreamer posterior projection. The fixed pooling and channel projection are
+    removed, and each task route owns a restored pixel reconstruction decoder
+    instead of a DINO feature head. Frozen float16 features remain aligned to
+    unchanged ARROW replay decisions; the launcher records their 96-GiB
+    sidecar cost. Focused tests cover full-token preservation, fixed-protocol
+    rejection, selected posterior/decoder gradients, and launch accounting.
 
 ## Known issues at import
 

@@ -24,7 +24,12 @@ ObservationEncoder = Literal["cnn", "dinov3_vits16"]
 DinoV3FeatureMode = Literal["cls", "patch_grid"]
 DinoV3FeatureLoss = Literal["cosine", "batch_standardized_smooth_l1"]
 DinoV3PatchProjection = Literal["none", "task1_pca", "fixed_orthogonal"]
-ContinualMethod = Literal["none", "moe_arrow", "dino_fullbank_arrow"]
+ContinualMethod = Literal[
+    "none",
+    "moe_arrow",
+    "dino_fullbank_arrow",
+    "dino_patchbank_arrow",
+]
 ResidualCorrection = Literal["none", "mlp", "kan"]
 ResidualInputMode = Literal["base_output", "module_input"]
 ResidualConsolidation = Literal["none", "replay_functional"]
@@ -311,11 +316,13 @@ class Config(Serialisable):
             "none",
             "moe_arrow",
             "dino_fullbank_arrow",
+            "dino_patchbank_arrow",
         }:
             raise ValueError(f"Unknown continual method: {self.continual_method!r}")
         is_moe_arrow = self.continual_method == "moe_arrow"
         is_dino_fullbank = self.continual_method == "dino_fullbank_arrow"
-        uses_task_experts = is_moe_arrow or is_dino_fullbank
+        is_dino_patchbank = self.continual_method == "dino_patchbank_arrow"
+        uses_task_experts = is_moe_arrow or is_dino_fullbank or is_dino_patchbank
         if uses_task_experts:
             if self.algorithm != "arrow":
                 raise ValueError("Task-aware expert methods require ARROW mixed replay")
@@ -348,22 +355,31 @@ class Config(Serialisable):
                 raise ValueError(
                     "MoE-ARROW predicts frozen DINOv3 features from the RSSM prior"
                 )
-        elif is_dino_fullbank:
+        elif is_dino_fullbank or is_dino_patchbank:
             if self.dino_fullbank_current_task_fraction != 1.0:
                 raise ValueError(
-                    "DINO-FullBank-ARROW assigns all updates to the current task"
+                    "DINO task banks assign all updates to the current task"
                 )
             if self.shared_core_mode != "task_isolated":
                 raise ValueError(
-                    "DINO-FullBank-ARROW requires shared_core_mode='task_isolated'"
+                    "DINO task banks require shared_core_mode='task_isolated'"
                 )
-            if self.observation_objective != "dinov3_posterior_feature":
+            expected_objective = (
+                "reconstruction"
+                if is_dino_patchbank
+                else "dinov3_posterior_feature"
+            )
+            if self.observation_objective != expected_objective:
                 raise ValueError(
-                    "DINO-FullBank-ARROW reconstructs posterior DINOv3 features"
+                    (
+                        "DINO-PatchBank-ARROW keeps DreamerV3 pixel reconstruction"
+                        if is_dino_patchbank
+                        else "DINO-FullBank-ARROW reconstructs posterior DINOv3 features"
+                    )
                 )
             if self.random_policy != "new":
                 raise ValueError(
-                    "DINO-FullBank-ARROW requires a random collection for each new task"
+                    "DINO task banks require a random collection for each new task"
                 )
         if self.observation_objective not in {
             "reconstruction",
@@ -382,10 +398,11 @@ class Config(Serialisable):
             raise ValueError("r2_normalization_eps must be positive")
         if self.observation_encoder not in {"cnn", "dinov3_vits16"}:
             raise ValueError(f"Unknown observation encoder: {self.observation_encoder!r}")
-        uses_dinov3 = self.observation_objective in {
+        uses_dinov3_objective = self.observation_objective in {
             "dinov3_next_feature",
             "dinov3_posterior_feature",
         }
+        uses_dinov3 = self.observation_encoder == "dinov3_vits16"
         if uses_dinov3:
             if self.algorithm != "arrow":
                 raise ValueError("KARROW Frozen-Core requires ARROW mixed replay")
@@ -461,7 +478,7 @@ class Config(Serialisable):
                         or self.dinov3_patch_projection_seed != 0
                     ):
                         raise ValueError("KARROW v1 does not fit a patch projection")
-            else:
+            elif self.observation_objective == "dinov3_posterior_feature":
                 if self.dinov3_feature_mode != "patch_grid":
                     if is_dino_fullbank:
                         raise ValueError(
@@ -505,6 +522,41 @@ class Config(Serialisable):
                     raise ValueError(
                         "Posterior DINOv3 objectives require batch-standardized SmoothL1"
                     )
+            elif self.observation_objective == "reconstruction":
+                if not is_dino_patchbank:
+                    raise ValueError(
+                        "DINOv3 pixel reconstruction is reserved for "
+                        "DINO-PatchBank-ARROW"
+                    )
+                if self.dinov3_feature_mode != "patch_grid":
+                    raise ValueError(
+                        "DINO-PatchBank-ARROW requires spatial DINOv3 patch tokens"
+                    )
+                if self.dinov3_patch_pool_size != 16:
+                    raise ValueError(
+                        "DINO-PatchBank-ARROW retains the complete 16x16 patch grid"
+                    )
+                if self.dinov3_patch_feature_dim != 384:
+                    raise ValueError(
+                        "DINO-PatchBank-ARROW retains all 384 patch channels"
+                    )
+                if self.dinov3_patch_projection != "none":
+                    raise ValueError(
+                        "DINO-PatchBank-ARROW does not project frozen patch features"
+                    )
+                if self.dinov3_patch_projection_frames != 0:
+                    raise ValueError(
+                        "DINO-PatchBank-ARROW does not fit a patch projection"
+                    )
+                if self.dinov3_patch_projection_seed != 0:
+                    raise ValueError(
+                        "DINO-PatchBank-ARROW has no patch-projection RNG"
+                    )
+            else:
+                raise ValueError(
+                    "The DINOv3 encoder does not support the configured observation "
+                    f"objective: {self.observation_objective!r}"
+                )
             if self.actor_network != "mlp":
                 raise ValueError("KARROW keeps the original MLP actor and critic")
             if self.fresh_ac is not False:
@@ -514,7 +566,8 @@ class Config(Serialisable):
                     )
                 raise ValueError("KARROW requires one persistent actor-critic across tasks")
         elif (
-            self.observation_encoder != "cnn"
+            uses_dinov3_objective
+            or self.observation_encoder != "cnn"
             or self.dinov3_model_path is not None
             or self.dinov3_feature_mode != "cls"
             or self.dinov3_patch_feature_dim != 384
@@ -524,7 +577,7 @@ class Config(Serialisable):
             or self.dinov3_feature_loss_kind != "cosine"
         ):
             raise ValueError(
-                "Only DINOv3 feature objectives may configure the DINOv3 encoder"
+                "Only named DINOv3 protocols may configure the DINOv3 encoder"
             )
 
         if self.residual_correction not in {"none", "mlp", "kan"}:
@@ -546,9 +599,11 @@ class Config(Serialisable):
             "task_isolated",
         }:
             raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
-        if self.shared_core_mode == "task_isolated" and not is_dino_fullbank:
+        if self.shared_core_mode == "task_isolated" and not (
+            is_dino_fullbank or is_dino_patchbank
+        ):
             raise ValueError(
-                "shared_core_mode='task_isolated' is reserved for DINO-FullBank-ARROW"
+                "shared_core_mode='task_isolated' is reserved for DINO task banks"
             )
         if self.residual_correction != "none" and not uses_dinov3:
             raise ValueError("KARROW residuals require the frozen DINOv3 protocol")
@@ -807,17 +862,27 @@ class Config(Serialisable):
 
     @property
     def uses_task_experts(self) -> bool:
-        return self.continual_method in {"moe_arrow", "dino_fullbank_arrow"}
+        return self.continual_method in {
+            "moe_arrow",
+            "dino_fullbank_arrow",
+            "dino_patchbank_arrow",
+        }
 
     @property
     def uses_full_task_experts(self) -> bool:
-        return self.continual_method == "dino_fullbank_arrow"
+        return self.continual_method in {
+            "dino_fullbank_arrow",
+            "dino_patchbank_arrow",
+        }
 
     @property
     def task_update_fraction(self) -> float:
         if self.continual_method == "moe_arrow":
             return self.moe_arrow_current_task_fraction
-        if self.continual_method == "dino_fullbank_arrow":
+        if self.continual_method in {
+            "dino_fullbank_arrow",
+            "dino_patchbank_arrow",
+        }:
             return self.dino_fullbank_current_task_fraction
         raise ValueError("Task update fractions require a task-aware expert method")
 

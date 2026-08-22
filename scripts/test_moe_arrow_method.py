@@ -94,6 +94,21 @@ class MoeArrowMethodTests(unittest.TestCase):
         )
         return data
 
+    @classmethod
+    def _patchbank_config_data(cls) -> dict:
+        data = cls._fullbank_config_data()
+        data.update(
+            {
+                "continual_method": "dino_patchbank_arrow",
+                "observation_objective": "reconstruction",
+                "dinov3_patch_pool_size": 16,
+                "dinov3_patch_feature_dim": 384,
+                "dinov3_patch_projection": "none",
+                "dinov3_feature_loss_kind": "cosine",
+            }
+        )
+        return data
+
     def test_config_requires_the_complete_named_task_aware_protocol(self) -> None:
         config = Config.from_dict(self._method_config_data())
         self.assertEqual(config.continual_method, "moe_arrow")
@@ -142,6 +157,35 @@ class MoeArrowMethodTests(unittest.TestCase):
         invalid = self._fullbank_config_data()
         invalid["shared_core_mode"] = "trainable"
         with self.assertRaisesRegex(ValueError, "task_isolated"):
+            Config.from_dict(invalid)
+
+    def test_patchbank_config_retains_all_patches_and_pixel_reconstruction(self) -> None:
+        config = Config.from_dict(self._patchbank_config_data())
+        self.assertEqual(config.continual_method, "dino_patchbank_arrow")
+        self.assertEqual(config.observation_objective, "reconstruction")
+        self.assertEqual(config.dinov3_patch_pool_size, 16)
+        self.assertEqual(config.dinov3_patch_feature_dim, 384)
+        self.assertEqual(config.dinov3_patch_projection, "none")
+        self.assertTrue(config.uses_full_task_experts)
+
+        invalid = self._patchbank_config_data()
+        invalid["dinov3_patch_pool_size"] = 4
+        with self.assertRaisesRegex(ValueError, "complete 16x16 patch grid"):
+            Config.from_dict(invalid)
+
+        invalid = self._patchbank_config_data()
+        invalid["dinov3_patch_projection"] = "fixed_orthogonal"
+        invalid["dinov3_patch_feature_dim"] = 64
+        with self.assertRaisesRegex(ValueError, "all 384 patch channels"):
+            Config.from_dict(invalid)
+
+        invalid = self._patchbank_config_data()
+        invalid["observation_objective"] = "dinov3_posterior_feature"
+        invalid["dinov3_patch_pool_size"] = 4
+        invalid["dinov3_patch_feature_dim"] = 64
+        invalid["dinov3_patch_projection"] = "fixed_orthogonal"
+        invalid["dinov3_feature_loss_kind"] = "batch_standardized_smooth_l1"
+        with self.assertRaisesRegex(ValueError, "pixel reconstruction"):
             Config.from_dict(invalid)
 
     def test_fifo_and_mixed_replay_filter_homogeneous_task_minibatches(self) -> None:
@@ -335,6 +379,45 @@ class MoeArrowMethodTests(unittest.TestCase):
         self.assertFalse(first.requires_projection_fit)
         self.assertEqual(first(torch.zeros(2, 3, 64, 64)).shape, (2, 1024))
 
+    def test_full_patch_encoder_preserves_every_spatial_token_coordinate(self) -> None:
+        class Backbone(nn.Module):
+            config = SimpleNamespace(
+                hidden_size=384,
+                patch_size=16,
+                num_register_tokens=0,
+            )
+
+            def forward(self, pixel_values: torch.Tensor) -> SimpleNamespace:
+                batch = pixel_values.shape[0]
+                patch_tokens = torch.arange(
+                    16 * 16 * 384,
+                    dtype=torch.float32,
+                    device=pixel_values.device,
+                ).reshape(1, 16 * 16, 384)
+                cls = torch.full(
+                    (1, 1, 384),
+                    -1.0,
+                    dtype=torch.float32,
+                    device=pixel_values.device,
+                )
+                tokens = torch.cat((cls, patch_tokens), dim=1)
+                return SimpleNamespace(last_hidden_state=tokens.expand(batch, -1, -1))
+
+        encoder = FrozenDinoV3Encoder(
+            None,
+            feature_mode="patch_grid",
+            patch_pool_size=16,
+            patch_feature_dim=384,
+            patch_projection="none",
+            backbone=Backbone(),
+        )
+        encoded = encoder(torch.zeros(2, 3, 64, 64))
+        self.assertEqual(encoder.output_size, 16 * 16 * 384)
+        self.assertEqual(encoded.shape, (2, 16 * 16 * 384))
+        torch.testing.assert_close(
+            encoded[0], torch.arange(16 * 16 * 384, dtype=torch.float32)
+        )
+
     def test_actor_bank_warm_starts_weights_but_not_optimizer_objects(self) -> None:
         def factory(task_id: int):
             actor_critic = nn.Linear(3, 2)
@@ -500,6 +583,78 @@ class MoeArrowMethodTests(unittest.TestCase):
             torch.equal(
                 world_model.feature_predictor_experts[0].weight,
                 selected_feature_weight,
+            )
+        )
+
+    def test_patchbank_routes_pixel_decoders_and_precomputed_full_features(self) -> None:
+        class Embedder(nn.Module):
+            output_size = 12
+
+            def forward(self, images: torch.Tensor) -> torch.Tensor:
+                return images.mean((-2, -1)).repeat(1, 4)
+
+        torch.manual_seed(29)
+        world_model = WorldModel(
+            3,
+            (2, 3),
+            4,
+            5,
+            cnn_depth=4,
+            mlp_features=8,
+            mlp_layers=2,
+            observation_objective="reconstruction",
+            num_task_experts=2,
+            full_task_experts=True,
+            image_embedder=Embedder(),
+        )
+        self.assertIsNot(world_model.decoder_for(0), world_model.decoder_for(1))
+        world_model.activate_task_expert(0)
+        self.assertTrue(world_model.initialize_task_expert(1, 0))
+        for source, target in zip(
+            world_model.decoder_for(0).parameters(),
+            world_model.decoder_for(1).parameters(),
+        ):
+            torch.testing.assert_close(source, target)
+
+        world_model.activate_task_expert(1)
+        self.assertFalse(any(p.requires_grad for p in world_model.decoder_for(0).parameters()))
+        self.assertTrue(all(p.requires_grad for p in world_model.decoder_for(1).parameters()))
+
+        actions = torch.nn.functional.one_hot(
+            torch.tensor([[0, 1], [2, 3], [1, 0]]), num_classes=4
+        ).float()
+        observations = torch.rand(3, 2, 3, 64, 64)
+        features = torch.randn(3, 2, Embedder.output_size, requires_grad=True)
+        rewards = torch.randn(3, 2, 1)
+        continues = torch.ones(3, 2, 1)
+        resets = torch.zeros(3, 2, 1)
+
+        loss, metrics = world_model.compute_loss(
+            actions,
+            observations,
+            rewards,
+            continues,
+            resets,
+            observation_features=features,
+            task_id=1,
+        )
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIn("Loss/recon", metrics)
+        self.assertIsNone(features.grad)
+        self.assertTrue(all(p.grad is None for p in world_model.decoder_for(0).parameters()))
+        self.assertTrue(any(p.grad is not None for p in world_model.decoder_for(1).parameters()))
+        self.assertTrue(
+            all(
+                p.grad is None
+                for p in world_model.rssm.representation_for(0).parameters()
+            )
+        )
+        self.assertTrue(
+            any(
+                p.grad is not None
+                for p in world_model.rssm.representation_for(1).parameters()
             )
         )
 

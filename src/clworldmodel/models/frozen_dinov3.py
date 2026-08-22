@@ -282,9 +282,13 @@ class FrozenDinoV3Encoder(nn.Module):
             self.patch_grid_size,
             self.patch_grid_size,
         )
-        pooled = F.adaptive_avg_pool2d(
-            patch_grid,
-            (self.patch_pool_size, self.patch_pool_size),
+        pooled = (
+            patch_grid
+            if self.patch_pool_size == self.patch_grid_size
+            else F.adaptive_avg_pool2d(
+                patch_grid,
+                (self.patch_pool_size, self.patch_pool_size),
+            )
         )
         return pooled.permute(0, 2, 3, 1)
 
