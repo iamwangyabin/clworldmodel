@@ -1,4 +1,5 @@
 import copy
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -25,6 +26,20 @@ ValueFunction = Callable[[AcStateT], ReturnT]
 N_CRITIC_BINS = 255
 
 
+def _autocast_context(device: torch.device, compute_dtype: str):
+    if compute_dtype == "float32":
+        return nullcontext()
+    from clworldmodel.precision import autocast_context
+
+    return autocast_context(device, compute_dtype)
+
+
+def _full_precision_context(device: torch.device):
+    if device.type == "cuda":
+        return torch.autocast(device_type="cuda", enabled=False)
+    return nullcontext()
+
+
 def zh_to_ac_state(z: LatentT, h: HiddenT) -> AcStateT:
     return torch.cat((z.flatten(-2), h), dim=-1)
 
@@ -35,16 +50,18 @@ def ac_state_to_zh(state: AcStateT, ls: LatentShape, h_dim: int) -> tuple[Latent
 
 
 def rew_symlog_to_2hot(x: RewardSymlogT) -> RewardSymlogCatT:
-    hi = 20
-    scale = N_CRITIC_BINS // 2 / hi
-    x = x * scale
-    b = x - x.floor()
-    a = 1 - b
-    res = torch.zeros(*x.shape[:-1], N_CRITIC_BINS, device=x.device)
-    # If you get some weird CUDA assert error, it's because `x` is under/overflowing here
-    res.scatter_(-1, x.floor().long() + N_CRITIC_BINS // 2, a)
-    res.scatter_(-1, x.floor().long() + N_CRITIC_BINS // 2 + 1, b)
-    return res
+    with _full_precision_context(x.device):
+        x = x.float()
+        hi = 20
+        scale = N_CRITIC_BINS // 2 / hi
+        x = x * scale
+        b = x - x.floor()
+        a = 1 - b
+        res = torch.zeros(*x.shape[:-1], N_CRITIC_BINS, device=x.device)
+        # If this raises a CUDA assert, the symlog target is outside the bins.
+        res.scatter_(-1, x.floor().long() + N_CRITIC_BINS // 2, a)
+        res.scatter_(-1, x.floor().long() + N_CRITIC_BINS // 2 + 1, b)
+        return res
 
 
 class ResidualCategoricalHead(nn.Module):
@@ -361,8 +378,9 @@ class ActorCritic(nn.Module):
         return self.value_from_log_probs(critic_network(state))
 
     def value_from_log_probs(self, critic_preds_log: RewardSymlogCatT) -> RewardT:
-        critic_bins = critic_preds_log.exp()
-        return symexp(critic_bins @ self.symlog_bins)
+        with _full_precision_context(critic_preds_log.device):
+            critic_bins = critic_preds_log.float().exp()
+            return symexp(critic_bins @ self.symlog_bins)
 
     def compute_loss(
         self,
@@ -374,44 +392,50 @@ class ActorCritic(nn.Module):
         slow_critic_preds_log: Optional[RewardSymlogCatT] = None,
         slow_critic_regularizer: float = 0.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        action_logs = self.actor(states)
-        critic_preds_log = self.critic(states)
+        action_logs = self.actor(states).float()
+        critic_preds_log = self.critic(states).float()
+        with _full_precision_context(states.device):
+            actions = actions.float()
+            lam_returns = lam_returns.float()
+            scale = torch.as_tensor(scale, device=states.device).float()
 
-        # Actor gradients
-        # `action_logs` (log probs): [ T N n_acts ]
-        # `action_sample_logs` (log probs): [ T N 1 ]
-        action_sample_logs = (action_logs * actions).sum(-1, keepdim=True)
-        critic_values = self.value_from_log_probs(critic_preds_log.detach())
-        if actor_baseline_values is None:
-            actor_baseline_values = critic_values
-        elif actor_baseline_values.shape != lam_returns.shape:
-            raise ValueError(
-                "Actor baseline values and lambda returns must have equal shapes, "
-                f"got {actor_baseline_values.shape} and {lam_returns.shape}"
-            )
-        reinforce = (
-            -action_sample_logs
-            * (lam_returns - actor_baseline_values.detach())
-            / scale
-        ).mean()
+            # Actor gradients
+            # `action_logs` (log probs): [ T N n_acts ]
+            # `action_sample_logs` (log probs): [ T N 1 ]
+            action_sample_logs = (action_logs * actions).sum(-1, keepdim=True)
+            critic_values = self.value_from_log_probs(critic_preds_log.detach())
+            if actor_baseline_values is None:
+                actor_baseline_values = critic_values
+            elif actor_baseline_values.shape != lam_returns.shape:
+                raise ValueError(
+                    "Actor baseline values and lambda returns must have equal shapes, "
+                    f"got {actor_baseline_values.shape} and {lam_returns.shape}"
+                )
+            reinforce = (
+                -action_sample_logs
+                * (lam_returns - actor_baseline_values.detach().float())
+                / scale
+            ).mean()
 
-        # [ T N n_acts ]
-        entropy = td.Categorical(logits=action_logs).entropy().mean()
+            # [ T N n_acts ]
+            entropy = td.Categorical(logits=action_logs).entropy().mean()
 
-        # Critic gradients
-        critic_targets = rew_symlog_to_2hot(symlog(lam_returns))
-        critic_loss = -(critic_preds_log * critic_targets).sum(-1).mean()
-        if slow_critic_regularizer:
-            if slow_critic_preds_log is None:
-                raise ValueError("slow critic predictions are required by its regularizer")
-            slow_values = symexp(
-                slow_critic_preds_log.detach().exp() @ self.symlog_bins
-            )
-            slow_targets = rew_symlog_to_2hot(symlog(slow_values))
-            slow_loss = -(critic_preds_log * slow_targets).sum(-1).mean()
-            critic_loss = critic_loss + slow_critic_regularizer * slow_loss
+            # Critic gradients
+            critic_targets = rew_symlog_to_2hot(symlog(lam_returns))
+            critic_loss = -(critic_preds_log * critic_targets).sum(-1).mean()
+            if slow_critic_regularizer:
+                if slow_critic_preds_log is None:
+                    raise ValueError(
+                        "slow critic predictions are required by its regularizer"
+                    )
+                slow_values = self.value_from_log_probs(
+                    slow_critic_preds_log.detach()
+                )
+                slow_targets = rew_symlog_to_2hot(symlog(slow_values))
+                slow_loss = -(critic_preds_log * slow_targets).sum(-1).mean()
+                critic_loss = critic_loss + slow_critic_regularizer * slow_loss
 
-        return reinforce, entropy, critic_loss
+            return reinforce, entropy, critic_loss
 
     def compute_replay_critic_loss(
         self,
@@ -420,19 +444,23 @@ class ActorCritic(nn.Module):
         slow_critic_preds_log: Optional[RewardSymlogCatT] = None,
         slow_critic_regularizer: float = 0.0,
     ) -> torch.Tensor:
-        critic_preds_log = self.critic(states)
-        critic_targets = rew_symlog_to_2hot(symlog(targets))
-        critic_loss = -(critic_preds_log * critic_targets).sum(-1).mean()
-        if slow_critic_regularizer:
-            if slow_critic_preds_log is None:
-                raise ValueError("slow critic predictions are required by its regularizer")
-            slow_values = symexp(
-                slow_critic_preds_log.detach().exp() @ self.symlog_bins
-            )
-            slow_targets = rew_symlog_to_2hot(symlog(slow_values))
-            slow_loss = -(critic_preds_log * slow_targets).sum(-1).mean()
-            critic_loss = critic_loss + slow_critic_regularizer * slow_loss
-        return critic_loss
+        critic_preds_log = self.critic(states).float()
+        with _full_precision_context(states.device):
+            targets = targets.float()
+            critic_targets = rew_symlog_to_2hot(symlog(targets))
+            critic_loss = -(critic_preds_log * critic_targets).sum(-1).mean()
+            if slow_critic_regularizer:
+                if slow_critic_preds_log is None:
+                    raise ValueError(
+                        "slow critic predictions are required by its regularizer"
+                    )
+                slow_values = self.value_from_log_probs(
+                    slow_critic_preds_log.detach()
+                )
+                slow_targets = rew_symlog_to_2hot(symlog(slow_values))
+                slow_loss = -(critic_preds_log * slow_targets).sum(-1).mean()
+                critic_loss = critic_loss + slow_critic_regularizer * slow_loss
+            return critic_loss
 
 
 @dataclass(frozen=True)
@@ -459,15 +487,19 @@ def replay_lambda_returns(
     if rewards.shape[0] < 2:
         raise ValueError("Replay value targets require at least two context frames")
 
-    targets = torch.empty_like(bootstrap_values[:-1])
-    next_return = bootstrap_values[-1]
-    for t in reversed(range(rewards.shape[0] - 1)):
-        live = discount * continues[t]
-        next_return = rewards[t] + live * (
-            (1.0 - lam) * bootstrap_values[t + 1] + lam * next_return
-        )
-        targets[t] = next_return
-    return targets
+    with _full_precision_context(rewards.device):
+        rewards = rewards.float()
+        continues = continues.float()
+        bootstrap_values = bootstrap_values.float()
+        targets = torch.empty_like(bootstrap_values[:-1])
+        next_return = bootstrap_values[-1]
+        for t in reversed(range(rewards.shape[0] - 1)):
+            live = discount * continues[t]
+            next_return = rewards[t] + live * (
+                (1.0 - lam) * bootstrap_values[t + 1] + lam * next_return
+            )
+            targets[t] = next_return
+        return targets
 
 
 @dataclass
@@ -600,6 +632,7 @@ def dream_rollout(
     # Rewards [ T N 1 ]
     # Lambda returns: [ T N 1 ]
     z, h = wm.rssm.initial_state(n_sync)
+    compute_dtype = getattr(wm, "compute_dtype", "float32")
     no_reset = torch.zeros(n_sync, 1, device=z.device)
     # Arbitrary (n_ctx_frames) context frames
     if feature_cache is None:
@@ -614,9 +647,10 @@ def dream_rollout(
         rssm_kwargs = {"temperature": temperature}
         if task_id is not None:
             rssm_kwargs["task_id"] = task_id
-        _, context_z, context_h = wm.rssm(
-            z, ctx_acts, h, ctx_images, ctx_resets, **rssm_kwargs
-        )
+        with _autocast_context(z.device, compute_dtype):
+            _, context_z, context_h = wm.rssm(
+                z, ctx_acts, h, ctx_images, ctx_resets, **rssm_kwargs
+            )
     else:
         feature_kwargs = {"mb_device": z.device}
         if task_id is not None:
@@ -628,14 +662,15 @@ def dream_rollout(
         observe_kwargs = {"temperature": temperature}
         if task_id is not None:
             observe_kwargs["task_id"] = task_id
-        _, context_z, context_h = wm.rssm.observe_embeddings(
-            z,
-            ctx_acts,
-            h,
-            wm.rssm.adapt_observation_embeddings(ctx_features),
-            ctx_resets,
-            **observe_kwargs,
-        )
+        with _autocast_context(z.device, compute_dtype):
+            _, context_z, context_h = wm.rssm.observe_embeddings(
+                z,
+                ctx_acts,
+                h,
+                wm.rssm.adapt_observation_embeddings(ctx_features),
+                ctx_resets,
+                **observe_kwargs,
+            )
     replay_value_batch = ReplayValueBatch(
         states=zh_to_ac_state(context_z, context_h),
         rewards=ctx_rewards,
@@ -649,57 +684,63 @@ def dream_rollout(
     rewards = []
     returns_preds = []
     conts = []
-    for _ in range(n_steps):
-        state = zh_to_ac_state(z, h)
-        zh = wm.zh_transform(z, h)
-        if hasattr(wm, "predict_reward_symlog"):
-            reward_symlog = wm.predict_reward_symlog(zh, task_id)
-        else:
-            reward_symlog = wm.reward_fc(zh)
-            reward_residual = getattr(wm, "reward_residual", None)
-            if reward_residual is not None:
-                reward_symlog = reward_symlog + reward_residual(zh)
-        reward = symexp(reward_symlog)
-        if hasattr(wm, "predict_continue"):
-            cont = wm.predict_continue(zh, task_id)
-        else:
-            cont_logits = wm.continue_fc(zh)
-            continue_residual = getattr(wm, "continue_residual", None)
-            if continue_residual is not None:
-                cont = torch.sigmoid(cont_logits + continue_residual(zh))
+    with _autocast_context(z.device, compute_dtype):
+        for _ in range(n_steps):
+            state = zh_to_ac_state(z, h)
+            zh = wm.zh_transform(z, h)
+            if hasattr(wm, "predict_reward_symlog"):
+                reward_symlog = wm.predict_reward_symlog(zh, task_id)
             else:
-                cont = cont_logits
+                reward_symlog = wm.reward_fc(zh)
+                reward_residual = getattr(wm, "reward_residual", None)
+                if reward_residual is not None:
+                    reward_symlog = reward_symlog + reward_residual(zh)
+            reward = symexp(reward_symlog)
+            if hasattr(wm, "predict_continue"):
+                cont = wm.predict_continue(zh, task_id).float()
+            else:
+                cont_logits = wm.continue_fc(zh)
+                continue_residual = getattr(wm, "continue_residual", None)
+                if continue_residual is not None:
+                    cont = torch.sigmoid(
+                        cont_logits + continue_residual(zh)
+                    ).float()
+                else:
+                    cont = cont_logits.float()
+            if target_value is None:
+                action_log, returns_pred = ac(state)
+                returns_preds.append(returns_pred.float())
+            else:
+                action_log = ac.actor(state)
+            with _full_precision_context(action_log.device):
+                action_dist = td.OneHotCategorical(logits=action_log.float())
+                action = action_dist.sample()
+
+            states.append(state)
+            actions.append(action)
+            rewards.append(reward)
+            conts.append(cont)
+
+            rssm_kwargs = {"temperature": temperature}
+            if task_id is not None:
+                rssm_kwargs["task_id"] = task_id
+            _, z, h = wm.rssm(z, action, h, None, no_reset, **rssm_kwargs)
+
+        states = torch.stack(states)
+        actions = torch.stack(actions)
+        rewards = torch.stack(rewards).float()
+        conts = torch.stack(conts).float()
+        # False preserves the recorded ARROW/FastKAN pilot's pre-transition bootstrap.
+        bootstrap_state = zh_to_ac_state(z, h) if corrected_terminal_bootstrap else state
         if target_value is None:
-            action_log, returns_pred = ac(state)
-            returns_preds.append(returns_pred)
+            returns_preds = torch.stack(returns_preds).float()
+            _, final_returns_pred = ac(bootstrap_state)
+            final_returns_pred = final_returns_pred.float()
         else:
-            action_log = ac.actor(state)
-        action_dist = td.OneHotCategorical(logits=action_log)
-        action = action_dist.sample()
-
-        states.append(state)
-        actions.append(action)
-        rewards.append(reward)
-        conts.append(cont)
-
-        rssm_kwargs = {"temperature": temperature}
-        if task_id is not None:
-            rssm_kwargs["task_id"] = task_id
-        _, z, h = wm.rssm(z, action, h, None, no_reset, **rssm_kwargs)
-
-    states = torch.stack(states)
-    actions = torch.stack(actions)
-    rewards = torch.stack(rewards)
-    # False preserves the recorded ARROW/FastKAN pilot's pre-transition bootstrap.
-    bootstrap_state = zh_to_ac_state(z, h) if corrected_terminal_bootstrap else state
-    if target_value is None:
-        returns_preds = torch.stack(returns_preds)
-        _, final_returns_pred = ac(bootstrap_state)
-    else:
-        target_states = torch.cat((states, bootstrap_state.unsqueeze(0)), dim=0)
-        target_values = target_value(target_states)
-        returns_preds = target_values[:-1]
-        final_returns_pred = target_values[-1]
+            target_states = torch.cat((states, bootstrap_state.unsqueeze(0)), dim=0)
+            target_values = target_value(target_states).float()
+            returns_preds = target_values[:-1]
+            final_returns_pred = target_values[-1]
 
     # Compute returns
     lam_returns = torch.zeros_like(returns_preds, device=returns_preds.device)
@@ -883,46 +924,51 @@ def train_ac_from_wm(
 
         one = torch.tensor(1, device=scale.device)
         slow_critic_preds_log = None
-        if aco.slow_critic is not None:
-            with torch.no_grad():
-                slow_critic_preds_log = aco.slow_critic(states)
-        actor_baseline_values = None
-        if use_slow_critic_targets:
-            actor_baseline_values = ac.value_from_log_probs(slow_critic_preds_log)
-        reinforce, entropy, critic_loss = ac.compute_loss(
-            states,
-            actions,
-            lam_returns,
-            torch.max(one, scale_ema),
-            actor_baseline_values=actor_baseline_values,
-            slow_critic_preds_log=slow_critic_preds_log,
-            slow_critic_regularizer=slow_critic_regularizer,
-        )
-        replay_critic_loss = torch.zeros((), device=states.device)
-        if replay_critic_loss_scale:
-            with torch.no_grad():
-                replay_bootstrap_values = ac.value(
-                    replay_value_batch.states,
-                    critic=aco.slow_critic if use_slow_critic_targets else None,
+        compute_dtype = getattr(wm, "compute_dtype", "float32")
+        with _autocast_context(states.device, compute_dtype):
+            if aco.slow_critic is not None:
+                with torch.no_grad():
+                    slow_critic_preds_log = aco.slow_critic(states)
+            actor_baseline_values = None
+            if use_slow_critic_targets:
+                actor_baseline_values = ac.value_from_log_probs(
+                    slow_critic_preds_log
                 )
-                replay_targets = replay_lambda_returns(
-                    replay_value_batch.rewards,
-                    replay_value_batch.continues,
-                    replay_bootstrap_values,
-                    discount=discount,
-                    lam=lam,
-                )
-                slow_replay_preds_log = (
-                    aco.slow_critic(replay_value_batch.states[:-1])
-                    if aco.slow_critic is not None
-                    else None
-                )
-            replay_critic_loss = ac.compute_replay_critic_loss(
-                replay_value_batch.states[:-1],
-                replay_targets,
-                slow_critic_preds_log=slow_replay_preds_log,
+            reinforce, entropy, critic_loss = ac.compute_loss(
+                states,
+                actions,
+                lam_returns,
+                torch.max(one, scale_ema),
+                actor_baseline_values=actor_baseline_values,
+                slow_critic_preds_log=slow_critic_preds_log,
                 slow_critic_regularizer=slow_critic_regularizer,
             )
+        replay_critic_loss = torch.zeros((), device=states.device)
+        if replay_critic_loss_scale:
+            with _autocast_context(states.device, compute_dtype):
+                with torch.no_grad():
+                    replay_bootstrap_values = ac.value(
+                        replay_value_batch.states,
+                        critic=aco.slow_critic if use_slow_critic_targets else None,
+                    )
+                    replay_targets = replay_lambda_returns(
+                        replay_value_batch.rewards,
+                        replay_value_batch.continues,
+                        replay_bootstrap_values,
+                        discount=discount,
+                        lam=lam,
+                    )
+                    slow_replay_preds_log = (
+                        aco.slow_critic(replay_value_batch.states[:-1])
+                        if aco.slow_critic is not None
+                        else None
+                    )
+                replay_critic_loss = ac.compute_replay_critic_loss(
+                    replay_value_batch.states[:-1],
+                    replay_targets,
+                    slow_critic_preds_log=slow_replay_preds_log,
+                    slow_critic_regularizer=slow_critic_regularizer,
+                )
         consolidation_loss = ac.consolidation_penalty()
         loss = (
             reinforce

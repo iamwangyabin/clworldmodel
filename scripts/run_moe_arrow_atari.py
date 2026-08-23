@@ -76,6 +76,36 @@ class LaunchVariant:
     observation_description: str
 
 
+@dataclass(frozen=True)
+class PrecisionProfile:
+    compute_dtype: str
+    dinov3_max_batch_size: int
+    feature_dtype: str
+    autocast_enabled: bool
+    name_suffix: str
+    output_suffix: str
+
+
+PRECISION_PROFILES = {
+    "fp32-tf32": PrecisionProfile(
+        compute_dtype="float32",
+        dinov3_max_batch_size=DINOV3_MAX_BATCH_SIZE,
+        feature_dtype=DINOV3_CACHE_DTYPE,
+        autocast_enabled=False,
+        name_suffix="",
+        output_suffix="",
+    ),
+    "bf16-amp": PrecisionProfile(
+        compute_dtype="bfloat16",
+        dinov3_max_batch_size=512,
+        feature_dtype="bfloat16",
+        autocast_enabled=True,
+        name_suffix="-BF16AMP",
+        output_suffix="_bf16_amp",
+    ),
+}
+
+
 MOE_ARROW_VARIANT = LaunchVariant(
     method="MoE-ARROW-50",
     code_id="moe_arrow",
@@ -235,6 +265,12 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int)
     parser.add_argument("--profile-stages", action="store_true")
+    parser.add_argument(
+        "--precision-profile",
+        choices=tuple(PRECISION_PROFILES),
+        default="fp32-tf32",
+        help="Explicit execution precision; BF16 AMP is validated for DINO-ConvBank",
+    )
     parser.add_argument("--swanlab-project")
     parser.add_argument("--swanlab-experiment-name")
     parser.add_argument("--dry-run", action="store_true")
@@ -247,11 +283,13 @@ def _resolved_config(
     model_path: Path,
     epochs: int,
     variant: LaunchVariant = MOE_ARROW_VARIANT,
+    precision_profile: PrecisionProfile = PRECISION_PROFILES["fp32-tf32"],
 ) -> dict:
     config = json.loads(json.dumps(source))
     config.update(
         {
             "epochs": epochs,
+            "compute_dtype": precision_profile.compute_dtype,
             "continual_method": variant.code_id,
             "rssm_num_experts": len(config["esc"]["env_configs"]),
             "moe_arrow_current_task_fraction": 0.5,
@@ -260,8 +298,8 @@ def _resolved_config(
             "observation_encoder": "dinov3_vits16",
             "dinov3_model_path": str(model_path),
             "dinov3_input_size": DINOV3_INPUT_SIZE,
-            "dinov3_max_batch_size": DINOV3_MAX_BATCH_SIZE,
-            "dinov3_feature_cache_dtype": DINOV3_CACHE_DTYPE,
+            "dinov3_max_batch_size": precision_profile.dinov3_max_batch_size,
+            "dinov3_feature_cache_dtype": precision_profile.feature_dtype,
             "dinov3_replay_feature_mode": variant.replay_feature_mode,
             "dinov3_feature_loss_scale": DINOV3_FEATURE_LOSS_SCALE,
             "dinov3_feature_mode": "patch_grid",
@@ -290,6 +328,12 @@ def main(*, default_method: str = "moe") -> int:
     parser = _parser(default_method=default_method)
     args = parser.parse_args()
     variant = LAUNCH_VARIANTS[args.method]
+    precision_profile = PRECISION_PROFILES[args.precision_profile]
+    if args.precision_profile == "bf16-amp" and args.method != "dino-convbank":
+        parser.error(
+            "--precision-profile bf16-amp is currently validated only for "
+            "dino-convbank"
+        )
     if args.dinov3_model_path is None:
         parser.error("--dinov3-model-path or DINOV3_MODEL_PATH is required")
     if args.cpu_threads is not None and args.cpu_threads < 1:
@@ -318,12 +362,19 @@ def main(*, default_method: str = "moe") -> int:
         model_path=model_path,
         epochs=training_epochs,
         variant=variant,
+        precision_profile=precision_profile,
     )
     allocated_experts = int(config["rssm_num_experts"])
 
     method = variant.method
     role = variant.role
     output_prefix = variant.output_prefix
+    protocol = variant.protocol
+    if precision_profile.name_suffix:
+        method += precision_profile.name_suffix
+        role += "-bf16-runtime-profile"
+        output_prefix += precision_profile.output_suffix
+        protocol = protocol.replace("-Atari-", "-BF16AMP-Atari-")
     if args.task_prefix_length is not None:
         method += f"-T{args.task_prefix_length}Pilot"
         role += "-pilot"
@@ -467,19 +518,25 @@ def main(*, default_method: str = "moe") -> int:
     if variant.replay_feature_mode == "cached":
         feature_cache = _feature_cache_budget(
             config,
-            dtype=DINOV3_CACHE_DTYPE,
+            dtype=config["dinov3_feature_cache_dtype"],
             feature_dim=feature_dim,
         )
         feature_cache["storage_backend"] = "anonymous_cpu"
     else:
+        feature_dtype = config["dinov3_feature_cache_dtype"]
+        consumer_dtype = config["compute_dtype"]
         feature_cache = {
-            "dtype": DINOV3_CACHE_DTYPE,
+            "dtype": feature_dtype,
+            "quantization_dtype": feature_dtype,
+            "consumer_dtype": consumer_dtype,
             "feature_dim": feature_dim,
             "storage_bytes": 0,
             "storage_backend": "none",
             "mode": "on_the_fly_from_sampled_observations",
             "quantization_semantics": (
-                "round through configured replay dtype before RSSM float32 consumption"
+                "encoder output retained without a dtype round trip"
+                if feature_dtype == consumer_dtype
+                else "round through configured replay dtype before RSSM consumption"
             ),
             "buffers": {},
             "retention_and_sampling": (
@@ -505,7 +562,7 @@ def main(*, default_method: str = "moe") -> int:
         "method": method,
         "code_id": variant.code_id,
         "role": role,
-        "protocol": variant.protocol,
+        "protocol": protocol,
         "started_at_utc": None,
         "project_git": project_git,
         "upstream_arrow_commit": UPSTREAM_COMMIT,
@@ -538,6 +595,34 @@ def main(*, default_method: str = "moe") -> int:
             * source_config["steps_per_batch"],
             "actor_critic_updates": training_epochs
             * source_config["ac_train_steps"],
+        },
+        "precision": {
+            "profile": args.precision_profile,
+            "autocast_enabled": precision_profile.autocast_enabled,
+            "compute_dtype": precision_profile.compute_dtype,
+            "parameter_dtype": "float32",
+            "gradient_dtype": "float32 parameter gradients",
+            "optimizer_state_dtype": "float32",
+            "gradient_scaler": False,
+            "sensitive_math_dtype": "float32",
+            "sensitive_math": [
+                "categorical sampling and KL",
+                "symlog and symexp",
+                "pixel, reward, and continuation losses",
+                "lambda returns and value targets",
+                "actor log-probabilities and critic distributions",
+            ],
+            "tf32_enabled_for_float32_matmuls": True,
+            "dinov3_execution_chunk_size": config["dinov3_max_batch_size"],
+            "world_model_optimization_batch": {
+                "time": source_config["mb_t_size"],
+                "sequences": source_config["mb_n_size"],
+                "frames": source_config["mb_t_size"]
+                * source_config["mb_n_size"],
+                "unchanged": True,
+            },
+            "actor_context_batch_frames": 4 * source_config["ac_train_sync"],
+            "optimizer_update_budgets_unchanged": True,
         },
         "world_model": {
             "router": "hard_task_id",

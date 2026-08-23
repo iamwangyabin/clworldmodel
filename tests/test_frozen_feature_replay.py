@@ -102,6 +102,28 @@ class FrozenFeatureReplayTests(unittest.TestCase):
             on_the_fly.storage_accounting()["storage_backend"], "on_the_fly"
         )
 
+    def test_bfloat16_on_the_fly_features_avoid_the_float32_round_trip(self) -> None:
+        replay, _, _ = self._replay_batch()
+        source = ArrowOnTheFlyFeatureSource(
+            replay,
+            _Encoder(),
+            _Encoder.output_size,
+            dtype=torch.bfloat16,
+            consumer_dtype=torch.bfloat16,
+        )
+
+        sample = source.minibatch(3, 2, mb_device="cpu")
+        features = sample[2]
+        accounting = source.storage_accounting()
+
+        self.assertEqual(features.dtype, torch.bfloat16)
+        self.assertEqual(accounting["quantization_dtype"], "bfloat16")
+        self.assertEqual(accounting["consumer_dtype"], "bfloat16")
+        self.assertEqual(
+            accounting["quantization_semantics"],
+            "encoder output is retained without a dtype round trip",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,7 @@ import random
 import socket
 import time
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -36,6 +36,22 @@ from generate_trajectory import (
     reinterpret_nt_to_t_n,
 )
 from wm import WorldModel
+
+
+def _autocast_context(device: torch.device, compute_dtype: str):
+    if compute_dtype == "float32":
+        return nullcontext()
+    from clworldmodel.precision import autocast_context
+
+    return autocast_context(device, compute_dtype)
+
+
+def _require_cuda_compute_support(compute_dtype: str) -> None:
+    if compute_dtype == "float32":
+        return
+    from clworldmodel.precision import require_cuda_compute_support
+
+    require_cuda_compute_support(compute_dtype)
 
 
 def _environment_seed_streams(
@@ -1094,6 +1110,7 @@ if __name__ == "__main__":
     if args.epochs is not None:
         config_overrides["epochs"] = args.epochs
     config = Config.from_dict(config_overrides)
+    _require_cuda_compute_support(config.compute_dtype)
     if config.uses_task_experts and analysis_snapshot_dir is not None:
         raise ValueError(
             "Task-bank analysis snapshots are disabled until replay, all actor "
@@ -1218,6 +1235,7 @@ if __name__ == "__main__":
         config.mlp_features,
         config.mlp_layers,
         config.wall_time_optimisation,
+        compute_dtype=config.compute_dtype,
         observation_objective=config.observation_objective,
         r2_barlow_loss_scale=config.r2_barlow_loss_scale,
         r2_redundancy_scale=config.r2_redundancy_scale,
@@ -1294,6 +1312,7 @@ if __name__ == "__main__":
     if config.observation_encoder == "dinov3_vits16":
         cache_dtype = {
             "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
             "float32": torch.float32,
         }[config.dinov3_feature_cache_dtype]
         if config.dinov3_replay_feature_mode == "cached":
@@ -1312,6 +1331,10 @@ if __name__ == "__main__":
                 wm.rssm.image_embedder,
                 wm.rssm.image_embedder.output_size,
                 dtype=cache_dtype,
+                consumer_dtype={
+                    "float32": torch.float32,
+                    "bfloat16": torch.bfloat16,
+                }[config.compute_dtype],
             )
     _print_replay_buffer_debug(config, replay)
 
@@ -1777,14 +1800,15 @@ if __name__ == "__main__":
             }
             if update_task_id is not None:
                 world_model_loss_kwargs["task_id"] = update_task_id
-            loss, metrics = compute_world_model_loss(
-                mb_acts,
-                mb_obss,
-                mb_rews,
-                mb_conts,
-                mb_resets,
-                **world_model_loss_kwargs,
-            )
+            with _autocast_context(mb_acts.device, config.compute_dtype):
+                loss, metrics = compute_world_model_loss(
+                    mb_acts,
+                    mb_obss,
+                    mb_rews,
+                    mb_conts,
+                    mb_resets,
+                    **world_model_loss_kwargs,
+                )
 
             protected_values = None
             if shared_core_frozen and capture_kan_parameter_values is not None:

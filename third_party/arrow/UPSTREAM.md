@@ -200,6 +200,17 @@ documented here, covered by focused parity tests, and followed by regenerating
     shape/layer/parameter contracts, stopped DINO gradients, adapter and active
     expert gradients, frozen old experts, config isolation, and launch resource
     accounting.
+31. Add the opt-in, separately named
+    `DINO-ConvBank-ARROW-v4-BF16AMP-Atari-TaskAware` execution profile without
+    changing the V4 FP32/TF32 default. CUDA DINO, RSSM, decoder, Actor, and
+    Critic kernels run under BF16 autocast while model parameters, Adam state,
+    categorical sampling and KL, symlog transforms, reconstruction and behavior
+    losses, lambda returns, and value targets remain FP32. On-the-fly DINO
+    features stay BF16 through the shared convolution instead of performing the
+    V4 float16-to-float32 round trip, and the DINO execution chunk grows from
+    128 to the unchanged 512-frame optimization batch. Focused tests cover
+    config isolation, launcher budget and dtype accounting, BF16 feature flow,
+    FP32-sensitive math, and unchanged FP32 defaults.
 
 ## Known issues at import
 

@@ -53,6 +53,7 @@ ActorNetwork = Literal[
     "fast_kan_ac_stable",
 ]
 ActorCriticOptimizer = Literal["adam", "laprop"]
+ComputeDType = Literal["float32", "bfloat16"]
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -224,6 +225,7 @@ class Config(Serialisable):
     mlp_features: int = 512
     mlp_layers: int = 2
     wall_time_optimisation: bool = False
+    compute_dtype: ComputeDType = "float32"
 
     actor_network: ActorNetwork = "mlp"
     actor_kan_hidden_features: int = 64
@@ -271,7 +273,9 @@ class Config(Serialisable):
     dinov3_model_path: Optional[str] = None
     dinov3_input_size: int = 256
     dinov3_max_batch_size: int = 128
-    dinov3_feature_cache_dtype: Literal["float16", "float32"] = "float16"
+    dinov3_feature_cache_dtype: Literal[
+        "float16", "bfloat16", "float32"
+    ] = "float16"
     dinov3_replay_feature_mode: DinoV3ReplayFeatureMode = "cached"
     dinov3_feature_loss_scale: float = 1.0
     dinov3_feature_mode: DinoV3FeatureMode = "cls"
@@ -315,6 +319,8 @@ class Config(Serialisable):
     def __post_init__(self) -> None:
         if self.epochs < 1:
             raise ValueError("epochs must be positive")
+        if self.compute_dtype not in {"float32", "bfloat16"}:
+            raise ValueError(f"Unknown compute dtype: {self.compute_dtype!r}")
         assert self.n_sync * self.gen_seq_len == self.data_n * self.data_t
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
@@ -438,15 +444,34 @@ class Config(Serialisable):
                 raise ValueError("KARROW Frozen-Core fixes DINOv3 input size at 256")
             if self.dinov3_max_batch_size < 1:
                 raise ValueError("dinov3_max_batch_size must be positive")
-            if self.dinov3_feature_cache_dtype not in {"float16", "float32"}:
+            if self.dinov3_feature_cache_dtype not in {
+                "float16",
+                "bfloat16",
+                "float32",
+            }:
                 raise ValueError("Unknown DINOv3 feature cache dtype")
             if self.dinov3_replay_feature_mode not in {"cached", "on_the_fly"}:
                 raise ValueError("Unknown DINOv3 replay feature mode")
+            if (
+                self.dinov3_feature_cache_dtype == "bfloat16"
+                and self.dinov3_replay_feature_mode != "on_the_fly"
+            ):
+                raise ValueError(
+                    "bfloat16 DINO features are supported only for on-the-fly replay"
+                )
             if is_dino_pixelbank:
                 if self.dinov3_replay_feature_mode != "on_the_fly":
                     raise ValueError(
                         "A DINO patch task bank recomputes frozen DINOv3 patches "
                         "from sampled replay observations"
+                    )
+                if (
+                    self.compute_dtype == "bfloat16"
+                    and self.dinov3_feature_cache_dtype != "bfloat16"
+                ):
+                    raise ValueError(
+                        "BF16 DINO patch task banks require bfloat16 on-the-fly "
+                        "features to avoid a redundant dtype round trip"
                     )
             elif self.dinov3_replay_feature_mode != "cached":
                 raise ValueError(

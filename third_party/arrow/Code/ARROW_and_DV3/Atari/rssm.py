@@ -1,4 +1,5 @@
 import copy
+from contextlib import nullcontext
 from typing import Optional, Type
 
 import torch
@@ -28,22 +29,30 @@ ResetT = torch.Tensor
 # Optional [ T ... ] dimension in front where applicable
 
 
+def _full_precision_context(device: torch.device):
+    if device.type == "cuda":
+        return torch.autocast(device_type="cuda", enabled=False)
+    return nullcontext()
+
+
 def straight_through_one_hot(
     logits: torch.Tensor, stochastic: bool
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    log_probs = torch.log_softmax(logits, dim=-1)
-    probs = log_probs.exp()
-    if stochastic:
-        flat_indices = torch.multinomial(
-            probs.reshape(-1, probs.shape[-1]), 1, replacement=True
-        ).squeeze(-1)
-        sample = torch.nn.functional.one_hot(
-            flat_indices, probs.shape[-1]
-        ).reshape_as(probs)
-    else:
-        sample = torch.nn.functional.one_hot(probs.argmax(-1), probs.shape[-1])
-    sample = sample.to(probs.dtype) + probs - probs.detach()
-    return log_probs, sample
+    with _full_precision_context(logits.device):
+        logits = logits.float()
+        log_probs = torch.log_softmax(logits, dim=-1)
+        probs = log_probs.exp()
+        if stochastic:
+            flat_indices = torch.multinomial(
+                probs.reshape(-1, probs.shape[-1]), 1, replacement=True
+            ).squeeze(-1)
+            sample = torch.nn.functional.one_hot(
+                flat_indices, probs.shape[-1]
+            ).reshape_as(probs)
+        else:
+            sample = torch.nn.functional.one_hot(probs.argmax(-1), probs.shape[-1])
+        sample = sample.to(probs.dtype) + probs - probs.detach()
+        return log_probs, sample
 
 
 class LayerNormSiLU(nn.Module):
@@ -108,6 +117,7 @@ class Rssm(nn.Module):
         residual_input_mode: str = "base_output",
         residual_consolidation: str = "none",
         image_embedder: Optional[nn.Module] = None,
+        compute_dtype: str = "float32",
     ) -> None:
         super().__init__()
         if num_task_experts < 1:
@@ -158,6 +168,7 @@ class Rssm(nn.Module):
                 patch_feature_dim=dinov3_patch_feature_dim,
                 patch_projection=dinov3_patch_projection,
                 patch_projection_seed=dinov3_patch_projection_seed,
+                compute_dtype=compute_dtype,
             )
         else:
             raise ValueError(f"Unknown observation encoder: {observation_encoder!r}")

@@ -1,4 +1,5 @@
 import copy
+from contextlib import nullcontext
 from typing import Literal, Optional
 
 import torch
@@ -30,10 +31,19 @@ ObservationObjective = Literal[
 # RewardSymlogT (symlog(real)): [ N 1 ]
 
 
+def _full_precision_context(device: torch.device):
+    if device.type == "cuda":
+        return torch.autocast(device_type="cuda", enabled=False)
+    return nullcontext()
+
+
 def categorical_kl(logits_p: torch.Tensor, logits_q: torch.Tensor) -> torch.Tensor:
-    log_p = torch.log_softmax(logits_p, dim=-1)
-    log_q = torch.log_softmax(logits_q, dim=-1)
-    return (log_p.exp() * (log_p - log_q)).sum(-1)
+    with _full_precision_context(logits_p.device):
+        logits_p = logits_p.float()
+        logits_q = logits_q.float()
+        log_p = torch.log_softmax(logits_p, dim=-1)
+        log_q = torch.log_softmax(logits_q, dim=-1)
+        return (log_p.exp() * (log_p - log_q)).sum(-1)
 
 
 def masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -41,11 +51,15 @@ def masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
 
 def symlog(x: torch.Tensor) -> torch.Tensor:
-    return x.sign() * (x.abs() + 1).log()
+    with _full_precision_context(x.device):
+        x = x.float()
+        return x.sign() * (x.abs() + 1).log()
 
 
 def symexp(x: torch.Tensor) -> torch.Tensor:
-    return x.sign() * (x.abs().exp() - 1)
+    with _full_precision_context(x.device):
+        x = x.float()
+        return x.sign() * (x.abs().exp() - 1)
 
 
 def batch_standardized_smooth_l1(
@@ -128,6 +142,7 @@ class WorldModel(nn.Module):
         num_task_experts: int = 1,
         full_task_experts: bool = False,
         image_embedder: Optional[nn.Module] = None,
+        compute_dtype: str = "float32",
     ) -> None:
         super().__init__()
         if observation_objective not in {
@@ -162,10 +177,13 @@ class WorldModel(nn.Module):
             raise ValueError(
                 "Full task experts require pixel or DINOv3 feature reconstruction"
             )
+        if compute_dtype not in {"float32", "bfloat16"}:
+            raise ValueError(f"Unknown compute dtype: {compute_dtype!r}")
 
         self.ls = ls
         self.a_dim = a_dim
         self.h_dim = h_dim
+        self.compute_dtype = compute_dtype
         self.observation_objective = observation_objective
         self.r2_barlow_loss_scale = r2_barlow_loss_scale
         self.r2_redundancy_scale = r2_redundancy_scale
@@ -186,6 +204,7 @@ class WorldModel(nn.Module):
             mlp_features,
             mlp_layers,
             wto,
+            compute_dtype=compute_dtype,
             observation_encoder=observation_encoder,
             dinov3_model_path=dinov3_model_path,
             dinov3_input_size=dinov3_input_size,
@@ -635,7 +654,7 @@ class WorldModel(nn.Module):
         if self.observation_objective == "reconstruction":
             recon = self.decoder_for(task_id)(zhs_f12).view(t, n, *xs.shape[-3:])
             # Loss shape [ T N C 64 64 ]
-            observation_losses = (recon - xs).square().sum([2, 3, 4])
+            observation_losses = (recon.float() - xs.float()).square().sum([2, 3, 4])
             observation_loss = observation_losses.mean()
             observation_metrics = {
                 "Loss/recon": observation_loss,
@@ -714,10 +733,13 @@ class WorldModel(nn.Module):
             }
 
         rews_pred = self.predict_reward_symlog(zhs, task_id)  # [ T N 1 ]
-        rews_loss = (rews_pred - symlog(rews)).square().mean()
+        rews_loss = (rews_pred.float() - symlog(rews)).square().mean()
 
         conts_pred = self.predict_continue(zhs, task_id)  # [ T N 1 ]
-        conts_loss = torch.nn.functional.binary_cross_entropy(conts_pred, conts, reduction="mean")
+        with _full_precision_context(conts_pred.device):
+            conts_loss = torch.nn.functional.binary_cross_entropy(
+                conts_pred.float(), conts.float(), reduction="mean"
+            )
 
         with torch.no_grad():
             low_kl = rep_losses < 1 + 1e-3

@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from functools import partial
 from typing import Any, Callable, Optional
 
@@ -13,6 +14,14 @@ from tqdm import tqdm
 from ac import ActorCritic, zh_to_ac_state
 from rssm import ActionT, ContT, ImageT, ResetT
 from wm import RewardT, WorldModel
+
+
+def _autocast_context(device: torch.device, compute_dtype: str):
+    if compute_dtype == "float32":
+        return nullcontext()
+    from clworldmodel.precision import autocast_context
+
+    return autocast_context(device, compute_dtype)
 
 
 def _environment_worker_seeds(seed: int, n_sync: int) -> tuple[list[int], list[int]]:
@@ -276,16 +285,22 @@ def generate_trajectories(
                     rssm_kwargs["task_id"] = task_id
                 if deterministic_policy:
                     rssm_kwargs["stochastic"] = False
-                _, z, h = wm.rssm(
-                    z,
-                    act_t,
-                    h,
-                    torch.from_numpy(obs / 255).float().permute(0, 3, 1, 2).to(z.device),
-                    torch.from_numpy(reset).float().unsqueeze(-1).to(z.device),
-                    **rssm_kwargs,
-                )
-                ac_state = zh_to_ac_state(z, h)
-                act_prob = ac.actor(ac_state)
+                with _autocast_context(
+                    z.device, getattr(wm, "compute_dtype", "float32")
+                ):
+                    _, z, h = wm.rssm(
+                        z,
+                        act_t,
+                        h,
+                        torch.from_numpy(obs / 255)
+                        .float()
+                        .permute(0, 3, 1, 2)
+                        .to(z.device),
+                        torch.from_numpy(reset).float().unsqueeze(-1).to(z.device),
+                        **rssm_kwargs,
+                    )
+                    ac_state = zh_to_ac_state(z, h)
+                    act_prob = ac.actor(ac_state).float()
                 if deterministic_policy:
                     act = act_prob.argmax(dim=-1)
                 else:

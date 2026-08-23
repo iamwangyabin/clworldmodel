@@ -233,14 +233,25 @@ class ArrowOnTheFlyFeatureSource:
         feature_dim: int,
         *,
         dtype: torch.dtype = torch.float16,
+        consumer_dtype: torch.dtype = torch.float32,
     ) -> None:
         if feature_dim < 1:
             raise ValueError("feature_dim must be positive")
-        if dtype not in {torch.float16, torch.float32}:
-            raise ValueError("feature replay dtype must be float16 or float32")
+        supported_dtypes = {torch.float16, torch.bfloat16, torch.float32}
+        if dtype not in supported_dtypes:
+            raise ValueError(
+                "feature replay dtype must be float16, bfloat16, or float32"
+            )
+        if consumer_dtype not in supported_dtypes:
+            raise ValueError(
+                "feature consumer dtype must be float16, bfloat16, or float32"
+            )
         self.replay = replay
         self.encoder = encoder
         self.feature_dim = feature_dim
+        self.quantization_dtype = dtype
+        self.consumer_dtype = consumer_dtype
+        # Preserve the public attribute used by existing accounting/tests.
         self.dtype = dtype
 
     @property
@@ -256,14 +267,20 @@ class ArrowOnTheFlyFeatureSource:
             "schema_version": 1,
             "feature_dim": self.feature_dim,
             "dtype": str(self.dtype).removeprefix("torch."),
+            "quantization_dtype": str(self.quantization_dtype).removeprefix(
+                "torch."
+            ),
+            "consumer_dtype": str(self.consumer_dtype).removeprefix("torch."),
             "storage_bytes": 0,
             "storage_backend": self.storage_backend,
             "source": "sampled ARROW observations",
             "retention_semantics": "no separately retained feature values",
             "sampling_semantics": "features use the existing ARROW sampled observations",
             "quantization_semantics": (
-                "encoder outputs round through the configured replay dtype before "
-                "RSSM float32 consumption"
+                "encoder output is retained without a dtype round trip"
+                if self.quantization_dtype == self.consumer_dtype
+                else "encoder output rounds through the configured replay dtype "
+                "before conversion to the consumer dtype"
             ),
             "buffers": [],
         }
@@ -309,7 +326,10 @@ class ArrowOnTheFlyFeatureSource:
                 f"expected {(time * sequences, self.feature_dim)}, "
                 f"got {tuple(flat_features.shape)}"
             )
-        features = flat_features.to(self.dtype).to(torch.float32).view(
-            time, sequences, self.feature_dim
-        )
+        features = flat_features
+        if features.dtype != self.quantization_dtype:
+            features = features.to(self.quantization_dtype)
+        if features.dtype != self.consumer_dtype:
+            features = features.to(self.consumer_dtype)
+        features = features.view(time, sequences, self.feature_dim)
         return actions, observations, features, rewards, continues, resets

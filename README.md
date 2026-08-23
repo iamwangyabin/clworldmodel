@@ -387,10 +387,18 @@ python scripts/run_moe_arrow_atari.py \
   --method dino-convbank \
   --seed 0 \
   --task-prefix-length 1 \
+  --precision-profile fp32-tf32 \
   --dry-run
 ```
 
-This protocol is implemented but untrained. See
+An opt-in `--precision-profile bf16-amp` execution variant uses BF16 autocast,
+keeps parameters and Adam state in FP32, retains sensitive probability and
+target math in FP32, batches all 512 sampled frames into one DINO execution
+chunk, and avoids the old feature dtype round trip. It does not increase the
+optimization batch, interaction budget, or update count. The FP32 profile
+remains the default, and the two profiles are reported separately.
+
+This protocol remains experimental and has no validated multi-seed result. See
 `docs/protocols/dino_convbank_arrow_v4_atari.md` for the exact gradient path,
 resource accounting, routing semantics, and acquisition gates.
 

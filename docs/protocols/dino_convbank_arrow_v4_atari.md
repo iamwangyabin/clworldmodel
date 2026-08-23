@@ -16,15 +16,17 @@ otherwise unchanged Dreamer posterior.
 ## Visual and latent path
 
 Replay stores only the unchanged float32 Atari observations. A sampled batch is
-encoded on the accelerator by the frozen local DINOv3 ViT-S/16. Encoder outputs
-round through float16 and return to float32, as in V3. The new adapter then runs
-inside the RSSM:
+encoded on the accelerator by the frozen local DINOv3 ViT-S/16. Under the
+canonical `fp32-tf32` profile, encoder outputs round through float16 and return
+to float32, as in V3. The separately named `bf16-amp` execution profile keeps
+DINO output and adapter input in bfloat16 and therefore removes that redundant
+round trip. The new adapter then runs inside the RSSM:
 
 ```text
 o_t [3,64,64]
   -> frozen DINOv3 resize/normalization
   -> U_t [16,16,384]
-  -> detach and float16/float32 round trip
+  -> detach and explicit precision profile
   -> permute [384,16,16]
   -> Conv2d(384,64,kernel=3,stride=2,padding=1)
   -> per-location ChannelLayerNorm(64, eps=1e-3)
@@ -101,6 +103,32 @@ The launch manifest records both visual widths, exact adapter parameters,
 posterior parameters per task, replay bytes, and the fact that the adapter is
 shared and plastic across task boundaries.
 
+## Execution precision profiles
+
+The default `fp32-tf32` profile is unchanged and remains the V4 reference. The
+opt-in `bf16-amp` profile is named
+`DINO-ConvBank-ARROW-v4-BF16AMP-Atari-TaskAware`; it changes numerical
+execution, so its results must not be silently merged with the FP32 profile.
+It makes only the following runtime changes:
+
+- CUDA matrix and convolution kernels in DINO, RSSM, decoder, actor, and critic
+  run under bfloat16 autocast.
+- Model parameters, gradients owned by FP32 parameters, and Adam states remain
+  float32. BF16 does not use a gradient scaler.
+- Categorical sampling and KL, symlog/symexp, pixel/reward/continue losses,
+  lambda returns, actor log probabilities, and value targets explicitly compute
+  in float32.
+- On-the-fly DINO features stay bfloat16 through the shared convolution adapter
+  instead of allocating a float16-to-float32 conversion.
+- The DINO execution chunk grows from 128 to 512 frames. The optimization batch
+  remains exactly `T=32, N=16`, or 512 frames per world-model update; this is
+  execution batching, not more samples or updates.
+
+Environment interactions, replay capacity and sampling, update counts, loss
+weights, task routing, evaluation, and checkpoints are unchanged. The profile
+requires a CUDA accelerator with native BF16 support and fails before model
+allocation otherwise.
+
 ## Execution and gates
 
 The first run is the seed-0 one-task 90-epoch MsPacman pilot:
@@ -111,6 +139,18 @@ python scripts/run_moe_arrow_atari.py \
   --seed 0 \
   --task-prefix-length 1 \
   --dinov3-model-path /absolute/local/model/path \
+  --profile-stages
+```
+
+The BF16 execution pilot adds the explicit profile flag:
+
+```bash
+python scripts/run_moe_arrow_atari.py \
+  --method dino-convbank \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dinov3-model-path /absolute/local/model/path \
+  --precision-profile bf16-amp \
   --profile-stages
 ```
 

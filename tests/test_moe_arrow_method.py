@@ -177,6 +177,11 @@ class MoeArrowMethodTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "task_isolated"):
             Config.from_dict(invalid)
 
+        invalid = self._fullbank_config_data()
+        invalid["dinov3_feature_cache_dtype"] = "bfloat16"
+        with self.assertRaisesRegex(ValueError, "only for on-the-fly replay"):
+            Config.from_dict(invalid)
+
     def test_patchbank_config_retains_all_patches_and_pixel_reconstruction(self) -> None:
         config = Config.from_dict(self._patchbank_config_data())
         self.assertEqual(config.continual_method, "dino_patchbank_arrow")
@@ -239,6 +244,31 @@ class MoeArrowMethodTests(unittest.TestCase):
         invalid = self._convbank_config_data()
         invalid["shared_core_mode"] = "task_isolated"
         with self.assertRaisesRegex(ValueError, "task_banked_shared_adapter"):
+            Config.from_dict(invalid)
+
+    def test_convbank_bfloat16_profile_removes_cross_dtype_feature_round_trip(self) -> None:
+        data = self._convbank_config_data()
+        data.update(
+            {
+                "compute_dtype": "bfloat16",
+                "dinov3_max_batch_size": 512,
+                "dinov3_feature_cache_dtype": "bfloat16",
+            }
+        )
+        config = Config.from_dict(data)
+
+        self.assertEqual(config.compute_dtype, "bfloat16")
+        self.assertEqual(config.dinov3_max_batch_size, 512)
+        self.assertEqual(config.dinov3_feature_cache_dtype, "bfloat16")
+
+        invalid = data.copy()
+        invalid["dinov3_feature_cache_dtype"] = "float16"
+        with self.assertRaisesRegex(ValueError, "redundant dtype round trip"):
+            Config.from_dict(invalid)
+
+        invalid = self._convbank_config_data()
+        invalid["compute_dtype"] = "float16"
+        with self.assertRaisesRegex(ValueError, "Unknown compute dtype"):
             Config.from_dict(invalid)
 
     def test_convbank_posterior_has_the_recorded_parameter_count(self) -> None:
@@ -555,6 +585,38 @@ class MoeArrowMethodTests(unittest.TestCase):
         torch.testing.assert_close(
             encoded[0], torch.arange(16 * 16 * 384, dtype=torch.float32)
         )
+
+    def test_full_patch_encoder_can_emit_bfloat16_without_unfreezing(self) -> None:
+        class Backbone(nn.Module):
+            config = SimpleNamespace(
+                hidden_size=384,
+                patch_size=16,
+                num_register_tokens=0,
+            )
+
+            def forward(self, pixel_values: torch.Tensor) -> SimpleNamespace:
+                tokens = torch.zeros(
+                    pixel_values.shape[0],
+                    1 + 16 * 16,
+                    384,
+                    device=pixel_values.device,
+                )
+                return SimpleNamespace(last_hidden_state=tokens)
+
+        encoder = FrozenDinoV3Encoder(
+            None,
+            feature_mode="patch_grid",
+            patch_pool_size=16,
+            patch_feature_dim=384,
+            patch_projection="none",
+            compute_dtype="bfloat16",
+            backbone=Backbone(),
+        )
+
+        encoded = encoder(torch.zeros(2, 3, 64, 64, requires_grad=True))
+
+        self.assertEqual(encoded.dtype, torch.bfloat16)
+        self.assertFalse(encoded.requires_grad)
 
     def test_actor_bank_warm_starts_weights_but_not_optimizer_objects(self) -> None:
         def factory(task_id: int):

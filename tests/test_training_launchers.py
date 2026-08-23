@@ -482,6 +482,9 @@ class TrainingLauncherTests(unittest.TestCase):
             launch["protocol"], "DINO-ConvBank-ARROW-v4-Atari-TaskAware"
         )
         self.assertEqual(launch["code_id"], "dino_convbank_arrow")
+        self.assertEqual(launch["precision"]["profile"], "fp32-tf32")
+        self.assertFalse(launch["precision"]["autocast_enabled"])
+        self.assertEqual(launch["precision"]["dinov3_execution_chunk_size"], 128)
         self.assertEqual(
             launch["world_model"]["shared_modules"],
             [
@@ -535,6 +538,60 @@ class TrainingLauncherTests(unittest.TestCase):
             "cpu_addressable_file_mmap",
         )
         self.assertEqual(launch["replay"]["feature_cache"]["storage_bytes"], 0)
+        self.assertEqual(
+            launch["replay"]["feature_cache"]["quantization_dtype"], "float16"
+        )
+        self.assertEqual(
+            launch["replay"]["feature_cache"]["consumer_dtype"], "float32"
+        )
+        self.assertFalse(output_dir.exists())
+
+    def test_dino_convbank_bfloat16_profile_records_execution_only_changes(self) -> None:
+        launch, output_dir = self._karrow_dry_run(
+            "--task-prefix-length",
+            "1",
+            "--method",
+            "dino-convbank",
+            "--precision-profile",
+            "bf16-amp",
+            script="scripts/run_moe_arrow_atari.py",
+        )
+
+        self.assertEqual(
+            launch["method"], "DINO-ConvBank-ARROW-50-BF16AMP-T1Pilot"
+        )
+        self.assertEqual(
+            launch["protocol"],
+            "DINO-ConvBank-ARROW-v4-BF16AMP-Atari-TaskAware",
+        )
+        precision = launch["precision"]
+        self.assertEqual(precision["profile"], "bf16-amp")
+        self.assertTrue(precision["autocast_enabled"])
+        self.assertEqual(precision["compute_dtype"], "bfloat16")
+        self.assertEqual(precision["parameter_dtype"], "float32")
+        self.assertEqual(precision["optimizer_state_dtype"], "float32")
+        self.assertFalse(precision["gradient_scaler"])
+        self.assertEqual(precision["sensitive_math_dtype"], "float32")
+        self.assertEqual(precision["dinov3_execution_chunk_size"], 512)
+        self.assertEqual(
+            precision["world_model_optimization_batch"],
+            {
+                "time": 32,
+                "sequences": 16,
+                "frames": 512,
+                "unchanged": True,
+            },
+        )
+        self.assertEqual(launch["training_scope"]["world_model_updates"], 90_000)
+        self.assertEqual(launch["training_scope"]["actor_critic_updates"], 72_000)
+        self.assertTrue(precision["optimizer_update_budgets_unchanged"])
+        feature_source = launch["replay"]["feature_cache"]
+        self.assertEqual(feature_source["quantization_dtype"], "bfloat16")
+        self.assertEqual(feature_source["consumer_dtype"], "bfloat16")
+        self.assertEqual(
+            feature_source["quantization_semantics"],
+            "encoder output retained without a dtype round trip",
+        )
         self.assertFalse(output_dir.exists())
 
     def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:

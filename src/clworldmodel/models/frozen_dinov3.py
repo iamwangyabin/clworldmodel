@@ -9,6 +9,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from clworldmodel.precision import (
+    autocast_context,
+    torch_dtype,
+    validate_compute_dtype,
+)
+
 
 class FrozenDinoV3Encoder(nn.Module):
     """Load a local DINOv3 ViT-S/16 artifact and expose frozen visual features."""
@@ -29,6 +35,7 @@ class FrozenDinoV3Encoder(nn.Module):
             "none", "task1_pca", "fixed_orthogonal"
         ] = "none",
         patch_projection_seed: int = 0,
+        compute_dtype: str = "float32",
         backbone: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
@@ -50,6 +57,7 @@ class FrozenDinoV3Encoder(nn.Module):
             raise ValueError("DINOv3 patch projection requires patch-grid mode")
         if patch_projection_seed < 0:
             raise ValueError("DINOv3 patch projection seed must be non-negative")
+        compute_dtype = validate_compute_dtype(compute_dtype)
 
         if backbone is None:
             if model_path is None:
@@ -79,6 +87,7 @@ class FrozenDinoV3Encoder(nn.Module):
         self.patch_pool_size = patch_pool_size
         self.patch_feature_dim = patch_feature_dim
         self.patch_projection_kind = patch_projection
+        self.compute_dtype = compute_dtype
         config = getattr(backbone, "config", None)
         self.token_features = int(
             getattr(
@@ -306,7 +315,7 @@ class FrozenDinoV3Encoder(nn.Module):
         if self.feature_mode != "patch_grid":
             raise RuntimeError("Raw patch features require patch-grid mode")
         chunks = []
-        with torch.no_grad():
+        with torch.no_grad(), autocast_context(images.device, self.compute_dtype):
             for start in range(0, images.shape[0], self.max_batch_size):
                 chunks.append(
                     self._extract_patch_chunk(
@@ -342,15 +351,17 @@ class FrozenDinoV3Encoder(nn.Module):
                 raise RuntimeError("DINOv3 backbone did not return token features")
         if features.shape[-1] != self.output_size:
             raise RuntimeError("DINOv3 returned an unexpected feature dimension")
-        return features.float()
+        return features.to(torch_dtype(self.compute_dtype))
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         chunks = []
-        with torch.no_grad():
+        with torch.no_grad(), autocast_context(images.device, self.compute_dtype):
             for start in range(0, images.shape[0], self.max_batch_size):
                 chunks.append(
                     self._encode_chunk(images[start : start + self.max_batch_size])
                 )
         if not chunks:
-            return images.new_empty((0, self.output_size), dtype=torch.float32)
+            return images.new_empty(
+                (0, self.output_size), dtype=torch_dtype(self.compute_dtype)
+            )
         return torch.cat(chunks, dim=0)
