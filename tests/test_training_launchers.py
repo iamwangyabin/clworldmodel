@@ -477,14 +477,18 @@ class TrainingLauncherTests(unittest.TestCase):
             script="scripts/run_moe_arrow_atari.py",
         )
 
-        self.assertEqual(launch["method"], "DINO-ConvBank-ARROW-50-T1Pilot")
         self.assertEqual(
-            launch["protocol"], "DINO-ConvBank-ARROW-v4-Atari-TaskAware"
+            launch["method"],
+            "DINO-ConvBank-ARROW-50-BF16AMP-Uint8Replay-T1Pilot",
+        )
+        self.assertEqual(
+            launch["protocol"],
+            "DINO-ConvBank-ARROW-v4-BF16AMP-Uint8Replay-Atari-TaskAware",
         )
         self.assertEqual(launch["code_id"], "dino_convbank_arrow")
-        self.assertEqual(launch["precision"]["profile"], "fp32-tf32")
-        self.assertFalse(launch["precision"]["autocast_enabled"])
-        self.assertEqual(launch["precision"]["dinov3_execution_chunk_size"], 128)
+        self.assertEqual(launch["precision"]["profile"], "bf16-amp")
+        self.assertTrue(launch["precision"]["autocast_enabled"])
+        self.assertEqual(launch["precision"]["dinov3_execution_chunk_size"], 512)
         self.assertEqual(
             launch["world_model"]["shared_modules"],
             [
@@ -539,14 +543,19 @@ class TrainingLauncherTests(unittest.TestCase):
         )
         self.assertEqual(launch["replay"]["feature_cache"]["storage_bytes"], 0)
         self.assertEqual(
-            launch["replay"]["feature_cache"]["quantization_dtype"], "float16"
+            launch["replay"]["feature_cache"]["quantization_dtype"], "bfloat16"
         )
         self.assertEqual(
-            launch["replay"]["feature_cache"]["consumer_dtype"], "float32"
+            launch["replay"]["feature_cache"]["consumer_dtype"], "bfloat16"
         )
+        base_storage = launch["replay"]["base_storage"]
+        self.assertEqual(base_storage["dtype"], "uint8")
+        self.assertEqual(base_storage["observation_bytes"], 6_442_450_944)
+        self.assertEqual(base_storage["allocated_tensor_bytes"], 6_486_491_136)
+        self.assertEqual(launch["replay"]["sampled_observation_dtype"], "float32")
         self.assertFalse(output_dir.exists())
 
-    def test_dino_convbank_bfloat16_profile_records_execution_only_changes(self) -> None:
+    def test_dino_convbank_explicit_bfloat16_records_required_profile(self) -> None:
         launch, output_dir = self._karrow_dry_run(
             "--task-prefix-length",
             "1",
@@ -558,11 +567,12 @@ class TrainingLauncherTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            launch["method"], "DINO-ConvBank-ARROW-50-BF16AMP-T1Pilot"
+            launch["method"],
+            "DINO-ConvBank-ARROW-50-BF16AMP-Uint8Replay-T1Pilot",
         )
         self.assertEqual(
             launch["protocol"],
-            "DINO-ConvBank-ARROW-v4-BF16AMP-Atari-TaskAware",
+            "DINO-ConvBank-ARROW-v4-BF16AMP-Uint8Replay-Atari-TaskAware",
         )
         precision = launch["precision"]
         self.assertEqual(precision["profile"], "bf16-amp")
@@ -593,6 +603,106 @@ class TrainingLauncherTests(unittest.TestCase):
             "encoder output retained without a dtype round trip",
         )
         self.assertFalse(output_dir.exists())
+
+    def test_dino_convbank_two_and_four_gpu_ddp_keep_global_budgets(self) -> None:
+        expected_local_batches = {
+            2: {"world_model": 8, "actor": 64},
+            4: {"world_model": 4, "actor": 32},
+        }
+
+        for devices, local in expected_local_batches.items():
+            with self.subTest(devices=devices):
+                launch, output_dir = self._karrow_dry_run(
+                    "--task-prefix-length",
+                    "1",
+                    "--method",
+                    "dino-convbank",
+                    "--devices",
+                    str(devices),
+                    script="scripts/run_moe_arrow_atari.py",
+                )
+
+                self.assertEqual(
+                    launch["method"],
+                    "DINO-ConvBank-ARROW-50-BF16AMP-Uint8Replay-"
+                    f"DP{devices}-T1Pilot",
+                )
+                self.assertEqual(
+                    launch["protocol"],
+                    "DINO-ConvBank-ARROW-v4-BF16AMP-Uint8Replay-"
+                    f"DP{devices}-Atari-TaskAware",
+                )
+                execution = launch["distributed_execution"]
+                self.assertTrue(execution["enabled"])
+                self.assertEqual(execution["world_size"], devices)
+                self.assertEqual(execution["backend"], "nccl")
+                self.assertEqual(execution["replay_owner"], "rank_0")
+                self.assertEqual(execution["collection"], "rank_0_only")
+                self.assertEqual(
+                    execution["world_model_sequences"],
+                    {"global": 16, "per_rank": local["world_model"]},
+                )
+                self.assertEqual(
+                    execution["actor_context_sequences"],
+                    {"global": 128, "per_rank": local["actor"]},
+                )
+                self.assertEqual(
+                    launch["precision"]["world_model_optimization_batch"][
+                        "frames"
+                    ],
+                    512,
+                )
+                self.assertEqual(
+                    launch["training_scope"]["world_model_updates"], 90_000
+                )
+                self.assertEqual(
+                    launch["training_scope"]["actor_critic_updates"], 72_000
+                )
+                command = launch["command"]
+                self.assertEqual(
+                    command[1:6],
+                    [
+                        "-m",
+                        "torch.distributed.run",
+                        "--standalone",
+                        "--nproc-per-node",
+                        str(devices),
+                    ],
+                )
+                self.assertIn("Code/ARROW_and_DV3/Atari/train.py", command)
+                self.assertFalse(output_dir.exists())
+
+    def test_dino_convbank_rejects_fp32_execution(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model_dir = root / "dinov3"
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(
+                json.dumps({"hidden_size": 384, "patch_size": 16}),
+                encoding="utf-8",
+            )
+            (model_dir / "model.safetensors").write_bytes(b"test-weights")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--dinov3-model-path",
+                    str(model_dir),
+                    "--method",
+                    "dino-convbank",
+                    "--precision-profile",
+                    "fp32-tf32",
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("dino-convbank requires", result.stderr)
 
     def test_kan_actor_dry_run_changes_only_actor_and_keeps_arrow_50_replay(self) -> None:
         launch = self._arrow_dry_run("--actor-network", "relu_kan")

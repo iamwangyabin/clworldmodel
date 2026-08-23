@@ -38,6 +38,25 @@ from generate_trajectory import (
 from wm import WorldModel
 
 
+class _NoOpWriter:
+    """Keep non-primary ranks out of TensorBoard and filesystem side effects."""
+
+    def add_scalar(self, *args, **kwargs) -> None:
+        return None
+
+    def add_scalars(self, *args, **kwargs) -> None:
+        return None
+
+    def add_images(self, *args, **kwargs) -> None:
+        return None
+
+    def flush(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
 def _autocast_context(device: torch.device, compute_dtype: str):
     if compute_dtype == "float32":
         return nullcontext()
@@ -151,17 +170,20 @@ def _print_replay_buffer_debug(config: Config, buf) -> None:
 
 def _mapped_replay_storage_accounting(buf: MultiTypeReplay) -> dict[str, object]:
     buffers = []
+    observation_dtypes = set()
     for index, sub_replay in enumerate(buf.replays):
         storage_path = getattr(sub_replay, "observation_storage_path", None)
         if storage_path is None:
             continue
         stat = storage_path.stat()
+        dtype = str(sub_replay.obss.dtype).removeprefix("torch.")
+        observation_dtypes.add(dtype)
         buffers.append(
             {
                 "index": index,
                 "type": type(sub_replay).__name__,
                 "path": str(storage_path),
-                "dtype": str(sub_replay.obss.dtype).removeprefix("torch."),
+                "dtype": dtype,
                 "shape": list(sub_replay.obss.shape),
                 "logical_storage_bytes": (
                     sub_replay.obss.numel() * sub_replay.obss.element_size()
@@ -169,10 +191,21 @@ def _mapped_replay_storage_accounting(buf: MultiTypeReplay) -> dict[str, object]
                 "allocated_file_bytes_at_accounting": stat.st_blocks * 512,
             }
         )
+    if len(observation_dtypes) != 1:
+        raise RuntimeError(
+            "Mapped replay sub-buffers must use one observation dtype"
+        )
+    observation_dtype = next(iter(observation_dtypes))
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "storage_backend": "file_mmap",
-        "numeric_semantics": "float32 observations unchanged",
+        "observation_dtype": observation_dtype,
+        "sampled_dtype": "float32",
+        "numeric_semantics": (
+            "uint8 pixels are transferred before exact float32 division by 255"
+            if observation_dtype == "uint8"
+            else "float32 observations unchanged"
+        ),
         "buffers": buffers,
     }
 
@@ -198,7 +231,52 @@ def _evaluate_policy_tasks(
     eval_funcs,
     environment_seed_rng: np.random.Generator,
     actor_critic_bank=None,
+    distributed_context=None,
 ) -> tuple[list[float], list[float]]:
+    if distributed_context is not None and distributed_context.enabled:
+        task_seeds = [
+            _next_environment_seed(environment_seed_rng) for _ in eval_funcs
+        ]
+        local_values = torch.zeros(
+            len(eval_funcs), 2, dtype=torch.float64, device=distributed_context.device
+        )
+        local_present = torch.zeros_like(local_values)
+        with _preserve_training_rng_state():
+            for task_id, (env_fns, task_seed) in enumerate(
+                zip(eval_funcs, task_seeds)
+            ):
+                if task_id % distributed_context.world_size != distributed_context.rank:
+                    continue
+                task_aco = (
+                    actor_critic_bank.get_optional(task_id)
+                    if actor_critic_bank is not None
+                    else aco
+                )
+                evaluation_kwargs = {}
+                if config.uses_task_experts:
+                    evaluation_kwargs = {
+                        "task_id": task_id,
+                        "deterministic_policy": True,
+                    }
+                mean, std = evaluate(
+                    config.n_sync,
+                    wm=wm,
+                    ac=task_aco.ac if task_aco is not None else None,
+                    env_fns=env_fns,
+                    env_repeat=config.env_repeat,
+                    n_rollouts=16,
+                    seed=task_seed,
+                    **evaluation_kwargs,
+                )
+                local_values[task_id] = torch.tensor(
+                    (mean, std), dtype=torch.float64, device=local_values.device
+                )
+                local_present[task_id] = 1
+        combined = distributed_context.combine_sparse_task_values(
+            local_values, local_present
+        ).cpu()
+        return combined[:, 0].tolist(), combined[:, 1].tolist()
+
     means = []
     stds = []
     with _preserve_training_rng_state():
@@ -1110,6 +1188,21 @@ if __name__ == "__main__":
     if args.epochs is not None:
         config_overrides["epochs"] = args.epochs
     config = Config.from_dict(config_overrides)
+    from clworldmodel.distributed import (
+        DistributedContext,
+        DistributedReplaySampler,
+    )
+
+    distributed_context = DistributedContext.initialize(
+        config.data_parallel_world_size
+    )
+    device = distributed_context.device
+    if distributed_context.enabled and args.compile_world_model:
+        raise ValueError(
+            "--compile-world-model is not yet validated with multi-GPU DDP"
+        )
+    if distributed_context.enabled and log_dir is None:
+        raise ValueError("multi-GPU training requires an explicit --log-dir")
     _require_cuda_compute_support(config.compute_dtype)
     if config.uses_task_experts and analysis_snapshot_dir is not None:
         raise ValueError(
@@ -1166,6 +1259,12 @@ if __name__ == "__main__":
     print(f"Residual consolidation: {config.residual_consolidation}")
     print(f"Shared core mode: {config.shared_core_mode}")
     print(f"Continual method: {config.continual_method}")
+    print(
+        "Data parallel execution: "
+        f"world_size={distributed_context.world_size} rank={distributed_context.rank} "
+        f"local_rank={distributed_context.local_rank} device={device} "
+        "global_batch_unchanged=True"
+    )
     if config.continual_method == "moe_arrow":
         print(
             "MoE-ARROW routing: "
@@ -1264,7 +1363,7 @@ if __name__ == "__main__":
         residual_consolidation=config.residual_consolidation,
         num_task_experts=config.rssm_num_experts,
         full_task_experts=config.uses_full_task_experts,
-    ).cuda()
+    ).to(device)
     resume_world_model_opened: list[str] = []
     resume_state_report: dict[str, dict[str, list[str]]] = {}
     if resume_payload is not None:
@@ -1290,24 +1389,43 @@ if __name__ == "__main__":
         fused=args.fused_adam,
     )
     compute_world_model_loss = wm.compute_loss
+    distributed_world_model = None
+    distributed_world_model_task_id = None
     if args.compile_world_model:
         compute_world_model_loss = torch.compile(
             compute_world_model_loss, dynamic=False, mode="reduce-overhead"
         )
+    local_torch_seed = distributed_context.seed_local_torch_stream(config.seed)
+    print(f"Local torch sampling seed: {local_torch_seed}")
 
     envs = config.get_env_schedule()
     replay_storage_directory = None
     if config.continual_method in {
         "dino_patchbank_arrow",
         "dino_convbank_arrow",
-    }:
+    } and (not distributed_context.enabled or distributed_context.is_primary):
         if log_dir is None:
             raise ValueError(
                 "DINO patch task banks require --log-dir for mapped observation replay"
             )
         mmap_root = log_dir / "mmap_replay"
         replay_storage_directory = mmap_root / "observations"
-    replay = config.get_replay_buffer(replay_storage_directory)
+    authoritative_replay = (
+        config.get_replay_buffer(replay_storage_directory)
+        if not distributed_context.enabled or distributed_context.is_primary
+        else None
+    )
+    replay = (
+        DistributedReplaySampler(
+            distributed_context,
+            authoritative_replay,
+            action_space=config.action_space,
+            num_tasks=len(config.esc.env_configs),
+            observation_shape=(3, config.img_size, config.img_size),
+        )
+        if distributed_context.enabled
+        else authoritative_replay
+    )
     feature_cache = None
     if config.observation_encoder == "dinov3_vits16":
         cache_dtype = {
@@ -1336,7 +1454,8 @@ if __name__ == "__main__":
                     "bfloat16": torch.bfloat16,
                 }[config.compute_dtype],
             )
-    _print_replay_buffer_debug(config, replay)
+    if distributed_context.is_primary:
+        _print_replay_buffer_debug(config, authoritative_replay)
 
     # Optional snapshot initialization. The loaded actor must exist before the
     # first Task-2 collection; otherwise the first epoch would silently use a
@@ -1429,66 +1548,79 @@ if __name__ == "__main__":
         log_dir.mkdir(parents=True, exist_ok=True)
         print(f"[DEBUG] log_dir={log_dir}")
     else:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[DEBUG] log_dir={log_dir} (explicit)")
+        if distributed_context.is_primary:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[DEBUG] log_dir={log_dir} (explicit)")
+        distributed_context.barrier()
 
 
-    swanlab_run = _init_swanlab(
-        args.swanlab_project, args.swanlab_experiment_name, config
+    swanlab_run = (
+        _init_swanlab(args.swanlab_project, args.swanlab_experiment_name, config)
+        if distributed_context.is_primary
+        else None
     )
     from torch.utils.tensorboard import SummaryWriter
 
-    writer = SummaryWriter(log_dir=log_dir)
-    log_dir = Path(log_dir)
-    config.save(log_dir / "config.json")
-    if resume_payload is not None:
-        resume_metadata = {
-            "schema_version": 1,
-            "artifact_kind": "task_acquisition_from_analysis_snapshot",
-            "initial_snapshot": str(args.init_analysis_snapshot.expanduser().resolve()),
-            "initial_snapshot_epoch": resume_payload.get("epoch"),
-            "initial_snapshot_task": resume_payload.get("task"),
-            "adaptation_mode": resume_mode,
-            "replay_state": "reset_empty",
-            "optimizer_state": "reset_new_optimizer",
-            "rng_state": "reset_from_config_seed",
-            "collection_policy": "loaded_actor_from_snapshot",
-            "world_model_opened_modules": resume_world_model_opened,
-            "actor_critic_opened_modules": resume_actor_critic_opened,
-            "snapshot_state_report": resume_state_report,
-        }
-        (log_dir / "resume_initialization.json").write_text(
-            json.dumps(resume_metadata, indent=2) + "\n",
-            encoding="utf-8",
-        )
-    if feature_cache is not None:
-        feature_accounting_path = log_dir / "feature_cache_storage_accounting.json"
-        temporary_feature_accounting_path = feature_accounting_path.with_suffix(
-            ".json.tmp"
-        )
-        temporary_feature_accounting_path.write_text(
-            json.dumps(feature_cache.storage_accounting(), indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary_feature_accounting_path, feature_accounting_path)
-    if replay_storage_directory is not None:
-        replay_accounting_path = log_dir / "replay_mmap_storage_accounting.json"
-        temporary_replay_accounting_path = replay_accounting_path.with_suffix(
-            ".json.tmp"
-        )
-        temporary_replay_accounting_path.write_text(
-            json.dumps(_mapped_replay_storage_accounting(replay), indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary_replay_accounting_path, replay_accounting_path)
-    parameter_accounting_path = log_dir / "model_parameter_accounting.json"
-    temporary_accounting_path = parameter_accounting_path.with_suffix(".json.tmp")
-    temporary_accounting_path.write_text(
-        json.dumps(_world_model_parameter_accounting(wm), indent=2) + "\n",
-        encoding="utf-8",
+    writer = (
+        SummaryWriter(log_dir=log_dir)
+        if distributed_context.is_primary
+        else _NoOpWriter()
     )
-    os.replace(temporary_accounting_path, parameter_accounting_path)
+    log_dir = Path(log_dir)
+    if distributed_context.is_primary:
+        config.save(log_dir / "config.json")
+        if resume_payload is not None:
+            resume_metadata = {
+                "schema_version": 1,
+                "artifact_kind": "task_acquisition_from_analysis_snapshot",
+                "initial_snapshot": str(args.init_analysis_snapshot.expanduser().resolve()),
+                "initial_snapshot_epoch": resume_payload.get("epoch"),
+                "initial_snapshot_task": resume_payload.get("task"),
+                "adaptation_mode": resume_mode,
+                "replay_state": "reset_empty",
+                "optimizer_state": "reset_new_optimizer",
+                "rng_state": "reset_from_config_seed",
+                "collection_policy": "loaded_actor_from_snapshot",
+                "world_model_opened_modules": resume_world_model_opened,
+                "actor_critic_opened_modules": resume_actor_critic_opened,
+                "snapshot_state_report": resume_state_report,
+            }
+            (log_dir / "resume_initialization.json").write_text(
+                json.dumps(resume_metadata, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        if feature_cache is not None:
+            feature_accounting_path = log_dir / "feature_cache_storage_accounting.json"
+            temporary_feature_accounting_path = feature_accounting_path.with_suffix(
+                ".json.tmp"
+            )
+            temporary_feature_accounting_path.write_text(
+                json.dumps(feature_cache.storage_accounting(), indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary_feature_accounting_path, feature_accounting_path)
+        if replay_storage_directory is not None:
+            replay_accounting_path = log_dir / "replay_mmap_storage_accounting.json"
+            temporary_replay_accounting_path = replay_accounting_path.with_suffix(
+                ".json.tmp"
+            )
+            temporary_replay_accounting_path.write_text(
+                json.dumps(
+                    _mapped_replay_storage_accounting(authoritative_replay), indent=2
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary_replay_accounting_path, replay_accounting_path)
+        parameter_accounting_path = log_dir / "model_parameter_accounting.json"
+        temporary_accounting_path = parameter_accounting_path.with_suffix(".json.tmp")
+        temporary_accounting_path.write_text(
+            json.dumps(_world_model_parameter_accounting(wm), indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary_accounting_path, parameter_accounting_path)
     actor_accounting_path = log_dir / "actor_critic_parameter_accounting.json"
+    profile_stages = args.profile_stages and distributed_context.is_primary
 
     
     total_env_steps = 0        # number of *real* environment interactions so far
@@ -1584,104 +1716,112 @@ if __name__ == "__main__":
             shared_core_frozen = True
             print("Frozen shared world-model and actor-critic cores after task 1")
             writer.add_scalar("Continual/shared_core_frozen", 1, global_step)
-        epoch_started = _stage_clock(args.profile_stages)
-        collect_started = _stage_clock(args.profile_stages)
+        epoch_started = _stage_clock(profile_stages)
+        collect_started = _stage_clock(profile_stages)
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
-        if resume_payload is not None:
-            random_policy = False
-        elif config.random_policy == "first":
-            random_policy = epoch == 0
-        elif config.random_policy == "new":
-            random_policy = envs.is_new_env()
-        for _ in range(
-            config.pretrain_data_multiplier if random_policy and config.pretrain_enabled else 1
-        ):
-            _acts, _obss, _rews, _conts, _resets = reinterpret_nt_to_t_n(
-                *generate_trajectories(
-                    config.n_sync * config.gen_seq_len,
-                    config.n_sync,
-                    wm=wm,
-                    ac=None if random_policy else aco.ac,
-                    env_fns=envs.funcs(),
-                    env_repeat=config.env_repeat,
-                    seed=_next_environment_seed(collection_environment_seed_rng),
-                    task_id=current_task_id,
-                ),
-                config.data_t,
-                config.data_n,
-            )
-            frozen_features = None
-            if feature_cache is not None and feature_cache.requires_recording:
-                encoder = wm.rssm.image_embedder
-                if getattr(encoder, "requires_projection_fit", False):
-                    if epoch != 0 or not random_policy or global_step != 0:
-                        raise RuntimeError(
-                            "Task-1 patch PCA must be fitted before model training"
+        if distributed_context.is_primary:
+            if resume_payload is not None:
+                random_policy = False
+            elif config.random_policy == "first":
+                random_policy = epoch == 0
+            elif config.random_policy == "new":
+                random_policy = envs.is_new_env()
+            for _ in range(
+                config.pretrain_data_multiplier
+                if random_policy and config.pretrain_enabled
+                else 1
+            ):
+                _acts, _obss, _rews, _conts, _resets = reinterpret_nt_to_t_n(
+                    *generate_trajectories(
+                        config.n_sync * config.gen_seq_len,
+                        config.n_sync,
+                        wm=wm,
+                        ac=None if random_policy else aco.ac,
+                        env_fns=envs.funcs(),
+                        env_repeat=config.env_repeat,
+                        seed=_next_environment_seed(collection_environment_seed_rng),
+                        task_id=current_task_id,
+                    ),
+                    config.data_t,
+                    config.data_n,
+                )
+                frozen_features = None
+                if feature_cache is not None and feature_cache.requires_recording:
+                    encoder = wm.rssm.image_embedder
+                    if getattr(encoder, "requires_projection_fit", False):
+                        if epoch != 0 or not random_policy or global_step != 0:
+                            raise RuntimeError(
+                                "Task-1 patch PCA must be fitted before model training"
+                            )
+                        projection_metadata = _fit_dinov3_patch_projection(
+                            wm,
+                            _obss,
+                            calibration_frames=config.dinov3_patch_projection_frames,
                         )
-                    projection_metadata = _fit_dinov3_patch_projection(
+                        projection_path = log_dir / "dinov3_patch_projection.json"
+                        temporary_projection_path = projection_path.with_suffix(
+                            ".json.tmp"
+                        )
+                        temporary_projection_path.write_text(
+                            json.dumps(projection_metadata, indent=2) + "\n",
+                            encoding="utf-8",
+                        )
+                        os.replace(temporary_projection_path, projection_path)
+                        writer.add_scalar(
+                            "DINOv3/patch_projection_explained_variance",
+                            projection_metadata["explained_variance_ratio"],
+                            global_step,
+                        )
+                        print(
+                            "Fitted and froze Task-1 DINOv3 patch PCA: "
+                            f"{projection_metadata}"
+                        )
+                    frozen_features = _encode_frozen_observation_features(
                         wm,
                         _obss,
-                        calibration_frames=config.dinov3_patch_projection_frames,
+                        batch_size=config.dinov3_max_batch_size,
                     )
-                    projection_path = log_dir / "dinov3_patch_projection.json"
-                    temporary_projection_path = projection_path.with_suffix(
-                        ".json.tmp"
-                    )
-                    temporary_projection_path.write_text(
-                        json.dumps(projection_metadata, indent=2) + "\n",
-                        encoding="utf-8",
-                    )
-                    os.replace(temporary_projection_path, projection_path)
-                    writer.add_scalar(
-                        "DINOv3/patch_projection_explained_variance",
-                        projection_metadata["explained_variance_ratio"],
-                        global_step,
-                    )
-                    print(
-                        "Fitted and froze Task-1 DINOv3 patch PCA: "
-                        f"{projection_metadata}"
-                    )
-                frozen_features = _encode_frozen_observation_features(
-                    wm,
+                write_slots = replay.add(
+                    _acts,
                     _obss,
-                    batch_size=config.dinov3_max_batch_size,
+                    _rews,
+                    _conts,
+                    _resets,
+                    task_id=current_task_id,
                 )
-            write_slots = replay.add(
-                _acts,
-                _obss,
-                _rews,
-                _conts,
-                _resets,
-                task_id=current_task_id,
+                if feature_cache is not None and feature_cache.requires_recording:
+                    feature_cache.record(write_slots, frozen_features)
+                print(f"{replay.n_valid=}")
+                num_new_env_steps = (
+                    _acts.shape[0] * _acts.shape[1] * config.env_repeat
+                )
+                total_env_steps += num_new_env_steps
+                writer.add_scalar("Sample/total_env_steps", total_env_steps, global_step)
+
+            rews_eps_mean = _rews.sum().item() / _resets.sum().item()
+            writer.add_scalar("Perf/rews_eps_mean", rews_eps_mean, global_step)
+            len_eps_mean = (
+                config.gen_seq_len / _resets.sum().item() * config.env_repeat
             )
-            if feature_cache is not None and feature_cache.requires_recording:
-                feature_cache.record(write_slots, frozen_features)
-            print(f"{replay.n_valid=}")
-            num_new_env_steps = _acts.shape[0] * _acts.shape[1] * config.env_repeat
-            total_env_steps += num_new_env_steps
-            writer.add_scalar("Sample/total_env_steps", total_env_steps, global_step)
+            writer.add_scalar("Perf/len_eps_mean", len_eps_mean, global_step)
+            if rews_eps_mean >= best_rews_mean:
+                best_rews_mean = rews_eps_mean
+                if save_nets and aco is not None:
+                    print(f"Saving best rews eps mean {rews_eps_mean=}")
+                    torch.save(wm.state_dict(), log_dir / "save_wm_best.pt")
+                    torch.save(aco.ac.state_dict(), log_dir / "save_ac_best.pt")
+                    if actor_critic_bank is not None:
+                        torch.save(
+                            actor_critic_bank.inference_state_dict(),
+                            log_dir / "save_ac_bank_best.pt",
+                        )
 
-        rews_eps_mean = _rews.sum().item() / _resets.sum().item()
-        writer.add_scalar("Perf/rews_eps_mean", rews_eps_mean, global_step)
-        len_eps_mean = config.gen_seq_len / _resets.sum().item() * config.env_repeat
-        writer.add_scalar("Perf/len_eps_mean", len_eps_mean, global_step)
-        if rews_eps_mean >= best_rews_mean:
-            best_rews_mean = rews_eps_mean
-            if save_nets and aco is not None:
-                print(f"Saving best rews eps mean {rews_eps_mean=}")
-                torch.save(wm.state_dict(), log_dir / "save_wm_best.pt")
-                torch.save(aco.ac.state_dict(), log_dir / "save_ac_best.pt")
-                if actor_critic_bank is not None:
-                    torch.save(
-                        actor_critic_bank.inference_state_dict(),
-                        log_dir / "save_ac_bank_best.pt",
-                    )
-
-        collect_seconds = _stage_elapsed(collect_started, args.profile_stages)
+        collect_seconds = _stage_elapsed(collect_started, profile_stages)
+        distributed_context.barrier()
 
         # Evaluation games
-        eval_started = _stage_clock(args.profile_stages)
+        eval_started = _stage_clock(profile_stages)
         if epoch % 10 == 0 or epoch + 1 in milestone_completed_epochs:
             eval_results_mean, eval_results_std = _evaluate_policy_tasks(
                 config,
@@ -1690,39 +1830,50 @@ if __name__ == "__main__":
                 envs.eval_funcs(),
                 evaluation_environment_seed_rng,
                 actor_critic_bank=actor_critic_bank,
+                distributed_context=distributed_context,
             )
             eval_raw_mean, eval_raw_std = _raw_return_statistics(
                 config.esc.env_configs, eval_results_mean, eval_results_std
             )
-            writer.add_scalars(
-                "Perf/eval_rew_eps_mean",
-                {f"{i}": m for i, m in enumerate(eval_results_mean)},
-                global_step,
-            )
-            writer.add_scalars(
-                "Perf/eval_rew_eps_std",
-                {f"{i}": s for i, s in enumerate(eval_results_std)},
-                global_step,
-            )
-            writer.add_scalars(
-                "Perf/eval_raw_return_mean",
-                {f"{i}": mean for i, mean in enumerate(eval_raw_mean)},
-                global_step,
-            )
-            writer.add_scalars(
-                "Perf/eval_raw_return_std",
-                {f"{i}": std for i, std in enumerate(eval_raw_std)},
-                global_step,
-            )
-            print("Eval for epoch: ",epoch)
-            print(f"Eval means: {eval_results_mean}")
-            print(f"Eval stds: {eval_results_std}")
-            print(f"Eval raw means: {eval_raw_mean}")
-            print(f"Eval raw stds: {eval_raw_std}")
+            if distributed_context.is_primary:
+                writer.add_scalars(
+                    "Perf/eval_rew_eps_mean",
+                    {f"{i}": m for i, m in enumerate(eval_results_mean)},
+                    global_step,
+                )
+                writer.add_scalars(
+                    "Perf/eval_rew_eps_std",
+                    {f"{i}": s for i, s in enumerate(eval_results_std)},
+                    global_step,
+                )
+                writer.add_scalars(
+                    "Perf/eval_raw_return_mean",
+                    {f"{i}": mean for i, mean in enumerate(eval_raw_mean)},
+                    global_step,
+                )
+                writer.add_scalars(
+                    "Perf/eval_raw_return_std",
+                    {f"{i}": std for i, std in enumerate(eval_raw_std)},
+                    global_step,
+                )
+                print("Eval for epoch: ",epoch)
+                print(f"Eval means: {eval_results_mean}")
+                print(f"Eval stds: {eval_results_std}")
+                print(f"Eval raw means: {eval_raw_mean}")
+                print(f"Eval raw stds: {eval_raw_std}")
 
-        eval_seconds = _stage_elapsed(eval_started, args.profile_stages)
+        eval_seconds = _stage_elapsed(eval_started, profile_stages)
 
-        world_model_started = _stage_clock(args.profile_stages)
+        if (
+            distributed_context.enabled
+            and distributed_world_model_task_id != current_task_id
+        ):
+            distributed_context.barrier()
+            distributed_world_model = distributed_context.wrap_module(wm)
+            compute_world_model_loss = distributed_world_model
+            distributed_world_model_task_id = current_task_id
+
+        world_model_started = _stage_clock(profile_stages)
         world_model_updates_this_epoch = (
             config.steps_per_batch
             if epoch > 0 or not config.pretrain_enabled
@@ -1770,10 +1921,11 @@ if __name__ == "__main__":
             observation_features = None
             if epoch > 0 or not config.pretrain_enabled:
                 mb_t_size = config.mb_t_size
-                mb_n_size = config.mb_n_size
+                global_mb_n_size = config.mb_n_size
             else:
                 mb_t_size = config.pretrain_mb_t_size
-                mb_n_size = config.pretrain_mb_n_size
+                global_mb_n_size = config.pretrain_mb_n_size
+            mb_n_size = distributed_context.local_sequences(global_mb_n_size)
             replay_sample_kwargs = {}
             if update_task_id is not None:
                 replay_sample_kwargs["task_id"] = update_task_id
@@ -1827,13 +1979,18 @@ if __name__ == "__main__":
             #     progbar.set_postfix({k: f"{v:.2f}" for k, v in metrics.items()})
 
             if global_step % config.log_frequency == 0:
+                metrics = distributed_context.mean_tensor_mapping(metrics)
                 writer.add_scalar("Metric/grad_norm", grad_norm, global_step)
                 with torch.no_grad():
                     for metric_key, metric_value in metrics.items():
                         writer.add_scalar(metric_key, metric_value, global_step)
 
-                    if log_images and config.observation_objective == "reconstruction":
-                        original = _obss[:16, 0:2].cuda()
+                    if (
+                        distributed_context.is_primary
+                        and log_images
+                        and config.observation_objective == "reconstruction"
+                    ):
+                        original = _obss[:16, 0:2].to(device)
                         writer.add_images(
                             "original", original.swapaxes(0, 1).flatten(0, 1), global_step
                         )
@@ -1845,7 +2002,7 @@ if __name__ == "__main__":
                             image_log_rssm_kwargs["task_id"] = current_task_id
                         z_posts, z, h = wm.rssm(
                             init_z,
-                            _acts[:, 0:2].cuda(),
+                            _acts[:, 0:2].to(device),
                             init_h,
                             original,
                             no_resets,
@@ -1873,8 +2030,8 @@ if __name__ == "__main__":
                         )
             global_step += 1
 
-        world_model_seconds = _stage_elapsed(world_model_started, args.profile_stages)
-        actor_started = _stage_clock(args.profile_stages)
+        world_model_seconds = _stage_elapsed(world_model_started, profile_stages)
+        actor_started = _stage_clock(profile_stages)
 
         actor_critic_kwargs = {
             "dream_steps": config.ac_dream_steps,
@@ -1928,13 +2085,19 @@ if __name__ == "__main__":
                 and config.residual_consolidation == "replay_functional"
             ),
             "feature_cache": feature_cache,
+            "distributed_context": distributed_context,
         }
 
+        local_ac_train_sync = distributed_context.local_sequences(
+            config.ac_train_sync
+        )
+
         if config.uses_task_experts:
+            replay_task_ids = replay.available_task_ids()
             actor_available_tasks = tuple(
                 task_id
                 for task_id in actor_critic_bank.task_ids()
-                if task_id in replay.available_task_ids()
+                if task_id in replay_task_ids
             )
             actor_allocation = allocate_task_updates(
                 config.ac_train_steps,
@@ -1964,7 +2127,7 @@ if __name__ == "__main__":
                     wm,
                     replay,
                     task_steps,
-                    config.ac_train_sync,
+                    local_ac_train_sync,
                     aco=actor_critic_bank.get(task_id),
                     lr=config.ac_lr,
                     task_id=task_id,
@@ -1994,7 +2157,7 @@ if __name__ == "__main__":
                 wm,
                 replay,
                 config.ac_train_steps,
-                config.ac_train_sync,
+                local_ac_train_sync,
                 lr=config.ac_fresh_lr,
                 **actor_critic_kwargs,
             )
@@ -2003,14 +2166,16 @@ if __name__ == "__main__":
                 wm,
                 replay,
                 config.ac_train_steps,
-                config.ac_train_sync,
+                local_ac_train_sync,
                 aco=aco,
                 lr=config.ac_lr,
                 **actor_critic_kwargs,
             )
 
-        actor_seconds = _stage_elapsed(actor_started, args.profile_stages)
-        if actor_critic_bank is not None or not actor_accounting_path.exists():
+        actor_seconds = _stage_elapsed(actor_started, profile_stages)
+        if distributed_context.is_primary and (
+            actor_critic_bank is not None or not actor_accounting_path.exists()
+        ):
             temporary_actor_accounting_path = actor_accounting_path.with_suffix(
                 ".json.tmp"
             )
@@ -2037,10 +2202,12 @@ if __name__ == "__main__":
                 metric_value,
                 actor_critic_updates,
             )
-        _print_cuda_memory(f"epoch_end_{epoch}")
+        if distributed_context.is_primary:
+            _print_cuda_memory(f"epoch_end_{epoch}")
 
-        if save_nets or (
-            config.uses_task_experts and epoch == config.epochs - 1
+        if distributed_context.is_primary and (
+            save_nets
+            or (config.uses_task_experts and epoch == config.epochs - 1)
         ):
             torch.save(wm.state_dict(), log_dir / "save_wm.pt")
             torch.save(aco.ac.state_dict(), log_dir / "save_ac.pt")
@@ -2050,7 +2217,7 @@ if __name__ == "__main__":
                     log_dir / "save_ac_bank.pt",
                 )
 
-        if analysis_snapshot_dir is not None:
+        if distributed_context.is_primary and analysis_snapshot_dir is not None:
             boundary_metadata = _task_boundary_metadata(config, epoch)
             if boundary_metadata is not None:
                 _save_analysis_snapshot(
@@ -2096,7 +2263,7 @@ if __name__ == "__main__":
 
         envs.step()
         torch.cuda.empty_cache()
-        if args.profile_stages:
+        if profile_stages:
             epoch_seconds = _stage_elapsed(epoch_started, True)
             measured = (
                 collect_seconds + eval_seconds + world_model_seconds + actor_seconds
@@ -2128,6 +2295,7 @@ if __name__ == "__main__":
             eval_funcs,
             evaluation_environment_seed_rng,
             actor_critic_bank=actor_critic_bank,
+            distributed_context=distributed_context,
         )
         final_raw_means, final_raw_stds = _raw_return_statistics(
             task_configs, final_scaled_means, final_scaled_stds
@@ -2168,39 +2336,45 @@ if __name__ == "__main__":
                 )
             ],
         }
-        final_evaluation_path = log_dir / "final_evaluation.json"
-        temporary_final_evaluation_path = final_evaluation_path.with_suffix(".json.tmp")
-        temporary_final_evaluation_path.write_text(
-            json.dumps(final_evaluation, indent=2) + "\n", encoding="utf-8"
-        )
-        os.replace(temporary_final_evaluation_path, final_evaluation_path)
-        writer.add_scalars(
-            "Perf/final_eval_rew_eps_mean",
-            {f"{i}": mean for i, mean in enumerate(final_scaled_means)},
-            global_step,
-        )
-        writer.add_scalars(
-            "Perf/final_eval_rew_eps_std",
-            {f"{i}": std for i, std in enumerate(final_scaled_stds)},
-            global_step,
-        )
-        writer.add_scalars(
-            "Perf/final_eval_raw_return_mean",
-            {f"{i}": mean for i, mean in enumerate(final_raw_means)},
-            global_step,
-        )
-        writer.add_scalars(
-            "Perf/final_eval_raw_return_std",
-            {f"{i}": std for i, std in enumerate(final_raw_stds)},
-            global_step,
-        )
-        print(f"Final eval scaled means: {final_scaled_means}")
-        print(f"Final eval scaled stds: {final_scaled_stds}")
-        print(f"Final eval raw means: {final_raw_means}")
-        print(f"Final eval raw stds: {final_raw_stds}")
+        if distributed_context.is_primary:
+            final_evaluation_path = log_dir / "final_evaluation.json"
+            temporary_final_evaluation_path = final_evaluation_path.with_suffix(
+                ".json.tmp"
+            )
+            temporary_final_evaluation_path.write_text(
+                json.dumps(final_evaluation, indent=2) + "\n", encoding="utf-8"
+            )
+            os.replace(temporary_final_evaluation_path, final_evaluation_path)
+            writer.add_scalars(
+                "Perf/final_eval_rew_eps_mean",
+                {f"{i}": mean for i, mean in enumerate(final_scaled_means)},
+                global_step,
+            )
+            writer.add_scalars(
+                "Perf/final_eval_rew_eps_std",
+                {f"{i}": std for i, std in enumerate(final_scaled_stds)},
+                global_step,
+            )
+            writer.add_scalars(
+                "Perf/final_eval_raw_return_mean",
+                {f"{i}": mean for i, mean in enumerate(final_raw_means)},
+                global_step,
+            )
+            writer.add_scalars(
+                "Perf/final_eval_raw_return_std",
+                {f"{i}": std for i, std in enumerate(final_raw_stds)},
+                global_step,
+            )
+            print(f"Final eval scaled means: {final_scaled_means}")
+            print(f"Final eval scaled stds: {final_scaled_stds}")
+            print(f"Final eval raw means: {final_raw_means}")
+            print(f"Final eval raw stds: {final_raw_stds}")
     writer.close()
     if swanlab_run is not None:
         import swanlab
 
         swanlab.finish()
-    _print_cuda_memory("training_end")
+    if distributed_context.is_primary:
+        _print_cuda_memory("training_end")
+    distributed_context.barrier()
+    distributed_context.close()

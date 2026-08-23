@@ -263,13 +263,26 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
+    parser.add_argument(
+        "--devices",
+        type=int,
+        choices=(1, 2, 4),
+        default=1,
+        help=(
+            "Number of CUDA devices. Two- and four-device native DDP are "
+            "validated only for DINO-ConvBank"
+        ),
+    )
     parser.add_argument("--cpu-threads", type=int)
     parser.add_argument("--profile-stages", action="store_true")
     parser.add_argument(
         "--precision-profile",
         choices=tuple(PRECISION_PROFILES),
-        default="fp32-tf32",
-        help="Explicit execution precision; BF16 AMP is validated for DINO-ConvBank",
+        default=None,
+        help=(
+            "Explicit execution precision. DINO-ConvBank defaults to and requires "
+            "BF16 AMP; other methods default to FP32/TF32"
+        ),
     )
     parser.add_argument("--swanlab-project")
     parser.add_argument("--swanlab-experiment-name")
@@ -284,12 +297,14 @@ def _resolved_config(
     epochs: int,
     variant: LaunchVariant = MOE_ARROW_VARIANT,
     precision_profile: PrecisionProfile = PRECISION_PROFILES["fp32-tf32"],
+    data_parallel_world_size: int = 1,
 ) -> dict:
     config = json.loads(json.dumps(source))
     config.update(
         {
             "epochs": epochs,
             "compute_dtype": precision_profile.compute_dtype,
+            "data_parallel_world_size": data_parallel_world_size,
             "continual_method": variant.code_id,
             "rssm_num_experts": len(config["esc"]["env_configs"]),
             "moe_arrow_current_task_fraction": 0.5,
@@ -311,6 +326,11 @@ def _resolved_config(
             "dinov3_patch_adapter": variant.patch_adapter,
             "dinov3_feature_loss_kind": variant.feature_loss,
             "dinov3_feature_std_floor": DINOV3_FEATURE_STD_FLOOR,
+            "replay_observation_dtype": (
+                "uint8"
+                if variant.code_id == "dino_convbank_arrow"
+                else "float32"
+            ),
             "actor_network": "mlp",
             "fresh_ac": False,
             "random_policy": variant.random_policy,
@@ -328,12 +348,19 @@ def main(*, default_method: str = "moe") -> int:
     parser = _parser(default_method=default_method)
     args = parser.parse_args()
     variant = LAUNCH_VARIANTS[args.method]
-    precision_profile = PRECISION_PROFILES[args.precision_profile]
-    if args.precision_profile == "bf16-amp" and args.method != "dino-convbank":
+    precision_profile_name = args.precision_profile or (
+        "bf16-amp" if args.method == "dino-convbank" else "fp32-tf32"
+    )
+    precision_profile = PRECISION_PROFILES[precision_profile_name]
+    if args.method == "dino-convbank" and precision_profile_name != "bf16-amp":
+        parser.error("dino-convbank requires --precision-profile bf16-amp")
+    if precision_profile_name == "bf16-amp" and args.method != "dino-convbank":
         parser.error(
             "--precision-profile bf16-amp is currently validated only for "
             "dino-convbank"
         )
+    if args.devices > 1 and args.method != "dino-convbank":
+        parser.error("--devices 2/4 is validated only for dino-convbank")
     if args.dinov3_model_path is None:
         parser.error("--dinov3-model-path or DINOV3_MODEL_PATH is required")
     if args.cpu_threads is not None and args.cpu_threads < 1:
@@ -363,6 +390,7 @@ def main(*, default_method: str = "moe") -> int:
         epochs=training_epochs,
         variant=variant,
         precision_profile=precision_profile,
+        data_parallel_world_size=args.devices,
     )
     allocated_experts = int(config["rssm_num_experts"])
 
@@ -375,6 +403,16 @@ def main(*, default_method: str = "moe") -> int:
         role += "-bf16-runtime-profile"
         output_prefix += precision_profile.output_suffix
         protocol = protocol.replace("-Atari-", "-BF16AMP-Atari-")
+    if config["replay_observation_dtype"] == "uint8":
+        method += "-Uint8Replay"
+        role += "-uint8-replay"
+        output_prefix += "_uint8_replay"
+        protocol = protocol.replace("-Atari-", "-Uint8Replay-Atari-")
+    if args.devices > 1:
+        method += f"-DP{args.devices}"
+        role += f"-fixed-global-batch-ddp{args.devices}"
+        output_prefix += f"_dp{args.devices}"
+        protocol = protocol.replace("-Atari-", f"-DP{args.devices}-Atari-")
     if args.task_prefix_length is not None:
         method += f"-T{args.task_prefix_length}Pilot"
         role += "-pilot"
@@ -407,19 +445,31 @@ def main(*, default_method: str = "moe") -> int:
     )
     dependency_versions = _dinov3_dependency_versions(python, env)
 
-    command = [
-        str(python),
-        "Code/ARROW_and_DV3/Atari/train.py",
-        "--config",
-        str(config_path),
-        "--arrow-replay-ratio",
-        "50-50",
-        "--log-dir",
-        str(output_dir),
-        "--fused-adam",
-        "--tf32",
-        "--evaluate-final",
-    ]
+    command = [str(python)]
+    if args.devices > 1:
+        command.extend(
+            (
+                "-m",
+                "torch.distributed.run",
+                "--standalone",
+                "--nproc-per-node",
+                str(args.devices),
+            )
+        )
+    command.extend(
+        [
+            "Code/ARROW_and_DV3/Atari/train.py",
+            "--config",
+            str(config_path),
+            "--arrow-replay-ratio",
+            "50-50",
+            "--log-dir",
+            str(output_dir),
+            "--fused-adam",
+            "--tf32",
+            "--evaluate-final",
+        ]
+    )
     if args.profile_stages:
         command.append("--profile-stages")
     if args.swanlab_project:
@@ -557,6 +607,9 @@ def main(*, default_method: str = "moe") -> int:
         for buffer in base_replay_storage["buffers"].values():
             buffer["observation_storage_backend"] = "file_mmap"
     task_id_storage_bytes = 2 * source_config["data_n_max"] * 8
+    local_world_model_sequences = source_config["mb_n_size"] // args.devices
+    local_pretrain_sequences = source_config["pretrain_mb_n_size"] // args.devices
+    local_actor_sequences = source_config["ac_train_sync"] // args.devices
 
     launch = {
         "method": method,
@@ -596,8 +649,51 @@ def main(*, default_method: str = "moe") -> int:
             "actor_critic_updates": training_epochs
             * source_config["ac_train_steps"],
         },
+        "distributed_execution": {
+            "enabled": args.devices > 1,
+            "world_size": args.devices,
+            "launcher": (
+                "torch.distributed.run" if args.devices > 1 else "direct_python"
+            ),
+            "backend": "nccl" if args.devices > 1 else None,
+            "gradient_parallelism": (
+                "native PyTorch DistributedDataParallel with averaged gradients"
+                if args.devices > 1
+                else "none"
+            ),
+            "global_batch_policy": "fixed; no data or update budget increase",
+            "world_model_sequences": {
+                "global": source_config["mb_n_size"],
+                "per_rank": local_world_model_sequences,
+            },
+            "pretrain_world_model_sequences": {
+                "global": source_config["pretrain_mb_n_size"],
+                "per_rank": local_pretrain_sequences,
+            },
+            "actor_context_sequences": {
+                "global": source_config["ac_train_sync"],
+                "per_rank": local_actor_sequences,
+            },
+            "replay": (
+                "rank 0 makes one global FIFO/LTDM choice and one global draw; "
+                "the sequence axis is scattered equally to all ranks"
+                if args.devices > 1
+                else "local authoritative ARROW replay"
+            ),
+            "replay_owner": "rank_0" if args.devices > 1 else "local_process",
+            "collection": (
+                "rank_0_only" if args.devices > 1 else "local_process"
+            ),
+            "evaluation": (
+                "tasks partitioned by task_index modulo world_size"
+                if args.devices > 1
+                else "serial_tasks"
+            ),
+            "model_parameter_replicas": args.devices,
+            "optimizer_state_replicas": args.devices,
+        },
         "precision": {
-            "profile": args.precision_profile,
+            "profile": precision_profile_name,
             "autocast_enabled": precision_profile.autocast_enabled,
             "compute_dtype": precision_profile.compute_dtype,
             "parameter_dtype": "float32",
@@ -621,7 +717,14 @@ def main(*, default_method: str = "moe") -> int:
                 * source_config["mb_n_size"],
                 "unchanged": True,
             },
+            "world_model_optimization_batch_per_rank": {
+                "time": source_config["mb_t_size"],
+                "sequences": local_world_model_sequences,
+                "frames": source_config["mb_t_size"]
+                * local_world_model_sequences,
+            },
             "actor_context_batch_frames": 4 * source_config["ac_train_sync"],
+            "actor_context_batch_frames_per_rank": 4 * local_actor_sequences,
             "optimizer_update_budgets_unchanged": True,
         },
         "world_model": {
@@ -743,6 +846,13 @@ def main(*, default_method: str = "moe") -> int:
                 else "cpu"
             ),
             "base_storage": base_replay_storage,
+            "sampled_observation_dtype": "float32",
+            "observation_decode": (
+                "transfer uint8 to the training device, then convert to float32 "
+                "and divide by 255"
+                if config["replay_observation_dtype"] == "uint8"
+                else "stored float32 values are returned unchanged"
+            ),
             "feature_cache": feature_cache,
             "task_id_storage_bytes": task_id_storage_bytes,
             "task_sampling": (
@@ -772,6 +882,9 @@ def main(*, default_method: str = "moe") -> int:
         },
         "determinism": {
             "python_numpy_torch_environment_and_replay_seeded": True,
+            "distributed_torch_seed_rule": (
+                "base_seed + rank * 1000003; rank 0 matches single-GPU stream"
+            ),
             "task_update_scheduler_rng": "owned NumPy Generator",
             "actor_construction_preserves_training_rng": True,
             "torch_deterministic_algorithms": False,

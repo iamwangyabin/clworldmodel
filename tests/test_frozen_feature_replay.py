@@ -124,6 +124,38 @@ class FrozenFeatureReplayTests(unittest.TestCase):
             "encoder output is retained without a dtype round trip",
         )
 
+    def test_bfloat16_on_the_fly_features_accept_uint8_observation_replay(self) -> None:
+        replay = MultiTypeReplay(
+            FifoReplay(2, 2, 3, "cpu", observation_dtype="uint8"),
+            LongTermReplay(2, 2, 3, "cpu", observation_dtype="uint8"),
+            sampling_weights=(0.5, 0.5),
+        )
+        actions = torch.zeros(2, 2, 3)
+        pixels = torch.arange(
+            2 * 2 * 3 * 64 * 64, dtype=torch.int64
+        ).remainder(256).to(torch.uint8)
+        observations = pixels.reshape(2, 2, 3, 64, 64).float().div(255)
+        rewards = torch.zeros(2, 2, 1)
+        continues = torch.ones(2, 2, 1)
+        resets = torch.zeros(2, 2, 1)
+        np.random.seed(43)
+        replay.add(actions, observations, rewards, continues, resets)
+        source = ArrowOnTheFlyFeatureSource(
+            replay,
+            _Encoder(),
+            _Encoder.output_size,
+            dtype=torch.bfloat16,
+            consumer_dtype=torch.bfloat16,
+        )
+
+        random.seed(47)
+        np.random.seed(53)
+        sample = source.minibatch(2, 2, mb_device="cpu")
+
+        self.assertEqual(sample[1].dtype, torch.float32)
+        self.assertEqual(sample[2].dtype, torch.bfloat16)
+        self.assertTrue(torch.all((sample[1] >= 0) & (sample[1] <= 1)))
+
 
 if __name__ == "__main__":
     unittest.main()

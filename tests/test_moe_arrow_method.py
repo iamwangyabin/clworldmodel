@@ -30,7 +30,7 @@ if torch is not None:
     from clworldmodel.continual import ActorCriticBank, allocate_task_updates
     from clworldmodel.models.frozen_dinov3 import FrozenDinoV3Encoder
     from clworldmodel.replay import ArrowFrozenFeatureCache
-    from ac import train_ac_from_wm
+    from ac import ActorCritic, ActorCriticTrainingStep, train_ac_from_wm
     from config import Config
     from replay import FifoReplay, MultiTypeReplay
     from rssm import Representation, Rssm
@@ -121,7 +121,11 @@ class MoeArrowMethodTests(unittest.TestCase):
         data.update(
             {
                 "continual_method": "dino_convbank_arrow",
+                "compute_dtype": "bfloat16",
+                "dinov3_max_batch_size": 512,
+                "dinov3_feature_cache_dtype": "bfloat16",
                 "dinov3_patch_adapter": "conv_3x3_stride2",
+                "replay_observation_dtype": "uint8",
                 "shared_core_mode": "task_banked_shared_adapter",
             }
         )
@@ -232,6 +236,10 @@ class MoeArrowMethodTests(unittest.TestCase):
         config = Config.from_dict(self._convbank_config_data())
         self.assertEqual(config.continual_method, "dino_convbank_arrow")
         self.assertEqual(config.dinov3_patch_adapter, "conv_3x3_stride2")
+        self.assertEqual(config.compute_dtype, "bfloat16")
+        self.assertEqual(config.dinov3_feature_cache_dtype, "bfloat16")
+        self.assertEqual(config.replay_observation_dtype, "uint8")
+        self.assertEqual(config.data_parallel_world_size, 1)
         self.assertEqual(config.shared_core_mode, "task_banked_shared_adapter")
         self.assertEqual(config.task_update_fraction, 1.0)
         self.assertTrue(config.uses_full_task_experts)
@@ -246,15 +254,102 @@ class MoeArrowMethodTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "task_banked_shared_adapter"):
             Config.from_dict(invalid)
 
+        invalid = self._convbank_config_data()
+        invalid["compute_dtype"] = "float32"
+        with self.assertRaisesRegex(ValueError, "requires bfloat16 compute"):
+            Config.from_dict(invalid)
+
+    def test_convbank_config_accepts_fixed_batch_two_and_four_gpu_ddp(self) -> None:
+        for world_size in (2, 4):
+            data = self._convbank_config_data()
+            data["data_parallel_world_size"] = world_size
+            config = Config.from_dict(data)
+            self.assertEqual(config.data_parallel_world_size, world_size)
+            self.assertEqual(config.mb_n_size // world_size, 16 // world_size)
+            self.assertEqual(config.ac_train_sync // world_size, 128 // world_size)
+
+        invalid = self._convbank_config_data()
+        invalid["data_parallel_world_size"] = 3
+        with self.assertRaisesRegex(ValueError, "one of 1, 2, or 4"):
+            Config.from_dict(invalid)
+
+        invalid = self._patchbank_config_data()
+        invalid["data_parallel_world_size"] = 2
+        with self.assertRaisesRegex(ValueError, "validated only for DINO-ConvBank"):
+            Config.from_dict(invalid)
+
+        invalid = self._convbank_config_data()
+        invalid["data_parallel_world_size"] = 4
+        invalid["mb_n_size"] = 15
+        with self.assertRaisesRegex(ValueError, "divide equally"):
+            Config.from_dict(invalid)
+
+        invalid = self._convbank_config_data()
+        invalid["replay_observation_dtype"] = "float32"
+        with self.assertRaisesRegex(ValueError, "requires uint8 observation replay"):
+            Config.from_dict(invalid)
+
+        invalid = self._patchbank_config_data()
+        invalid["replay_observation_dtype"] = "uint8"
+        with self.assertRaisesRegex(ValueError, "reserved for DINO-ConvBank"):
+            Config.from_dict(invalid)
+
+    def test_ddp_actor_step_contains_the_complete_behavior_loss(self) -> None:
+        torch.manual_seed(73)
+        actor_critic = ActorCritic(5, 3)
+        states = torch.randn(2, 4, 5)
+        actions = torch.nn.functional.one_hot(
+            torch.randint(0, 3, (2, 4)), num_classes=3
+        ).float()
+        lam_returns = torch.randn(2, 4, 1)
+        scale = torch.tensor(1.7)
+        entropy_scale = 3e-4
+        training_step = ActorCriticTrainingStep(
+            actor_critic,
+            entropy_scale=entropy_scale,
+            replay_critic_loss_scale=0.0,
+            slow_critic_regularizer=0.0,
+        )
+
+        outputs = training_step(
+            states,
+            actions,
+            lam_returns,
+            scale,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        reinforce, entropy, critic_loss = actor_critic.compute_loss(
+            states, actions, lam_returns, scale
+        )
+        expected_loss = reinforce - entropy_scale * entropy + critic_loss
+
+        self.assertTrue(torch.allclose(outputs[0], expected_loss))
+        self.assertTrue(torch.allclose(outputs[1], reinforce))
+        self.assertTrue(torch.allclose(outputs[2], entropy))
+        self.assertTrue(torch.allclose(outputs[3], critic_loss))
+        self.assertEqual(outputs[4].item(), 0.0)
+        self.assertEqual(outputs[5].item(), 0.0)
+
+        outputs[0].backward()
+        self.assertTrue(
+            any(
+                parameter.grad is not None
+                for parameter in actor_critic.actor.parameters()
+            )
+        )
+        self.assertTrue(
+            any(
+                parameter.grad is not None
+                for parameter in actor_critic.critic.parameters()
+            )
+        )
+
     def test_convbank_bfloat16_profile_removes_cross_dtype_feature_round_trip(self) -> None:
         data = self._convbank_config_data()
-        data.update(
-            {
-                "compute_dtype": "bfloat16",
-                "dinov3_max_batch_size": 512,
-                "dinov3_feature_cache_dtype": "bfloat16",
-            }
-        )
         config = Config.from_dict(data)
 
         self.assertEqual(config.compute_dtype, "bfloat16")
@@ -263,7 +358,7 @@ class MoeArrowMethodTests(unittest.TestCase):
 
         invalid = data.copy()
         invalid["dinov3_feature_cache_dtype"] = "float16"
-        with self.assertRaisesRegex(ValueError, "redundant dtype round trip"):
+        with self.assertRaisesRegex(ValueError, "requires bfloat16 on-the-fly"):
             Config.from_dict(invalid)
 
         invalid = self._convbank_config_data()
@@ -393,6 +488,53 @@ class MoeArrowMethodTests(unittest.TestCase):
                     torch.equal(sequence, features[:, 0])
                     or torch.equal(sequence, features[:, 1])
                 )
+
+    def test_convbank_config_builds_uint8_mapped_observation_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_data = self._convbank_config_data()
+            config_data.update(
+                {
+                    "n_sync": 1,
+                    "gen_seq_len": 4,
+                    "data_n": 2,
+                    "data_n_max": 2,
+                    "data_t": 2,
+                    "action_space": 3,
+                }
+            )
+            replay = Config.from_dict(config_data).get_replay_buffer(
+                Path(directory) / "observations"
+            )
+
+            for sub_replay in replay.replays:
+                self.assertEqual(sub_replay.obss.dtype, torch.uint8)
+                self.assertEqual(sub_replay.observation_dtype, "uint8")
+                self.assertEqual(
+                    sub_replay.observation_storage_path.suffixes[-2:],
+                    [".uint8", ".mmap"],
+                )
+
+            actions = torch.zeros(2, 2, 3)
+            pixels = torch.arange(
+                2 * 2 * 3 * 64 * 64, dtype=torch.int64
+            ).remainder(256).to(torch.uint8)
+            observations = pixels.reshape(2, 2, 3, 64, 64).float().div(255)
+            rewards = torch.zeros(2, 2, 1)
+            continues = torch.ones(2, 2, 1)
+            resets = torch.zeros(2, 2, 1)
+            np.random.seed(37)
+            replay.add(
+                actions,
+                observations,
+                rewards,
+                continues,
+                resets,
+                task_id=0,
+            )
+            np.random.seed(41)
+            sample = replay.minibatch(2, 2, "cpu", task_id=0)
+            self.assertEqual(sample[1].dtype, torch.float32)
+            self.assertTrue(torch.all((sample[1] >= 0) & (sample[1] <= 1)))
 
     def test_hard_routing_updates_only_the_selected_dynamics_expert(self) -> None:
         class Embedder(nn.Module):

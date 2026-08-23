@@ -10,6 +10,12 @@ from rssm import ActionT, ContT, ImageT, ResetT
 from wm import RewardT
 
 
+_OBSERVATION_DTYPES = {
+    "float32": torch.float32,
+    "uint8": torch.uint8,
+}
+
+
 class Replay:
     def __init__(self) -> None:
         self.n_valid = 0
@@ -87,10 +93,11 @@ class Replay:
             ],
             dim=1,
         )
-
         return (
             mb_acts.to(mb_device),
-            mb_obss.to(mb_device),
+            self._decode_observations(
+                mb_obss.to(mb_device), self.obss.dtype
+            ),
             mb_rews.to(mb_device),
             mb_conts.to(mb_device),
             mb_resets.to(mb_device),
@@ -112,6 +119,42 @@ class Replay:
             return ()
         task_ids = self.task_ids[: self.n_valid].detach().cpu().unique().tolist()
         return tuple(sorted(int(task_id) for task_id in task_ids if task_id >= 0))
+
+    @staticmethod
+    def _encode_observations(
+        observations: ImageT, storage_dtype: torch.dtype
+    ) -> ImageT:
+        if storage_dtype == torch.float32:
+            return observations
+        if storage_dtype != torch.uint8:
+            raise TypeError(f"Unsupported observation storage dtype: {storage_dtype}")
+        if observations.dtype == torch.uint8:
+            return observations
+        if not observations.is_floating_point():
+            raise TypeError(
+                "uint8 replay observations must be uint8 pixels or floating-point "
+                "values in [0, 1]"
+            )
+        minimum, maximum = torch.aminmax(observations)
+        if not (
+            bool(torch.isfinite(minimum)) and bool(torch.isfinite(maximum))
+        ):
+            raise ValueError("Replay observations must contain only finite values")
+        if minimum.item() < 0.0 or maximum.item() > 1.0:
+            raise ValueError(
+                "Floating-point observations for uint8 replay must lie in [0, 1]"
+            )
+        return observations.mul(255).round_().to(torch.uint8)
+
+    @staticmethod
+    def _decode_observations(
+        observations: ImageT, storage_dtype: torch.dtype
+    ) -> ImageT:
+        if storage_dtype == torch.float32:
+            return observations
+        if storage_dtype != torch.uint8:
+            raise TypeError(f"Unsupported observation storage dtype: {storage_dtype}")
+        return observations.float().div_(255)
 
 
 def _validated_task_id(
@@ -135,10 +178,17 @@ def _observation_storage(
     n: int,
     store_device: str,
     storage_path: Optional[str | Path],
+    observation_dtype: str,
 ) -> ImageT:
+    try:
+        dtype = _OBSERVATION_DTYPES[observation_dtype]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown replay observation dtype: {observation_dtype!r}"
+        ) from exc
     shape = (t, n, 3, 64, 64)
     if storage_path is None:
-        return torch.zeros(*shape).to(store_device)
+        return torch.zeros(*shape, dtype=dtype, device=store_device)
     if torch.device(store_device).type != "cpu":
         raise ValueError("Mapped replay observations require CPU storage")
     from clworldmodel.replay.mapped_tensor import create_file_backed_tensor
@@ -146,7 +196,7 @@ def _observation_storage(
     return create_file_backed_tensor(
         storage_path,
         shape,
-        dtype=torch.float32,
+        dtype=dtype,
     )
 
 
@@ -160,6 +210,7 @@ class FifoReplay(Replay):
         *,
         store_task_ids: bool = False,
         observation_storage_path: Optional[str | Path] = None,
+        observation_dtype: str = "float32",
     ) -> None:
         super().__init__()
 
@@ -173,7 +224,9 @@ class FifoReplay(Replay):
             n,
             store_device,
             observation_storage_path,
+            observation_dtype,
         )
+        self.observation_dtype = observation_dtype
         self.observation_storage_path = (
             None
             if observation_storage_path is None
@@ -202,10 +255,11 @@ class FifoReplay(Replay):
         data_n = acts.shape[1]
         stored_task_id = _validated_task_id(self.task_ids, task_id)
         slots = [int((self.n_idx + offset) % self.n) for offset in range(data_n)]
+        stored_obss = self._encode_observations(obss, self.obss.dtype)
 
         if self.n_idx + data_n <= self.n:
             self.acts[:, self.n_idx : self.n_idx + data_n] = acts
-            self.obss[:, self.n_idx : self.n_idx + data_n] = obss
+            self.obss[:, self.n_idx : self.n_idx + data_n] = stored_obss
             self.rews[:, self.n_idx : self.n_idx + data_n] = rews
             self.conts[:, self.n_idx : self.n_idx + data_n] = conts
             self.resets[:, self.n_idx : self.n_idx + data_n] = resets
@@ -215,7 +269,7 @@ class FifoReplay(Replay):
             n1 = self.n - self.n_idx
             n2 = data_n - n1
             self.acts[:, self.n_idx :] = acts[:, :n1]
-            self.obss[:, self.n_idx :] = obss[:, :n1]
+            self.obss[:, self.n_idx :] = stored_obss[:, :n1]
             self.rews[:, self.n_idx :] = rews[:, :n1]
             self.conts[:, self.n_idx :] = conts[:, :n1]
             self.resets[:, self.n_idx :] = resets[:, :n1]
@@ -223,7 +277,7 @@ class FifoReplay(Replay):
                 self.task_ids[self.n_idx :] = stored_task_id
 
             self.acts[:, :n2] = acts[:, -n2:]
-            self.obss[:, :n2] = obss[:, -n2:]
+            self.obss[:, :n2] = stored_obss[:, -n2:]
             self.rews[:, :n2] = rews[:, -n2:]
             self.conts[:, :n2] = conts[:, -n2:]
             self.resets[:, :n2] = resets[:, -n2:]
@@ -248,6 +302,7 @@ class LongTermReplay(Replay):
         *,
         store_task_ids: bool = False,
         observation_storage_path: Optional[str | Path] = None,
+        observation_dtype: str = "float32",
     ) -> None:
         super().__init__()
 
@@ -259,7 +314,9 @@ class LongTermReplay(Replay):
             n,
             store_device,
             observation_storage_path,
+            observation_dtype,
         )
+        self.observation_dtype = observation_dtype
         self.observation_storage_path = (
             None
             if observation_storage_path is None
@@ -290,6 +347,7 @@ class LongTermReplay(Replay):
         data_n = acts.shape[1]
         stored_task_id = _validated_task_id(self.task_ids, task_id)
         slots = [-1 for _ in range(data_n)]
+        stored_obss = self._encode_observations(obss, self.obss.dtype)
 
         for n in range(data_n):
             least_prio, least_index = self.collection[0]
@@ -300,7 +358,7 @@ class LongTermReplay(Replay):
                 self.n_valid = min(self.n, self.n_valid + 1)
 
                 self.acts[:, least_index] = acts[:, n]
-                self.obss[:, least_index] = obss[:, n]
+                self.obss[:, least_index] = stored_obss[:, n]
                 self.rews[:, least_index] = rews[:, n]
                 self.conts[:, least_index] = conts[:, n]
                 self.resets[:, least_index] = resets[:, n]
@@ -341,6 +399,13 @@ class MultiTypeReplay(Replay):
         resets: ResetT,
         task_id: Optional[int] = None,
     ) -> tuple[list[int], ...]:
+        observation_dtypes = {
+            replay.obss.dtype
+            for replay in self.replays
+            if hasattr(replay, "obss")
+        }
+        if len(observation_dtypes) == 1:
+            obss = self._encode_observations(obss, observation_dtypes.pop())
         return tuple(
             replay.add(acts, obss, rews, conts, resets, task_id=task_id)
             for replay in self.replays

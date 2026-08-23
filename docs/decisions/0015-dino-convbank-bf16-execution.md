@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted for implementation and pilot validation. No speed or return claim has
-been established yet.
+Superseded by Decision 0016 for current launches. This file preserves the
+historical decision that first introduced the separately named BF16 profile;
+no speed or return claim was established under its FP32-default policy.
 
 ## Context
 

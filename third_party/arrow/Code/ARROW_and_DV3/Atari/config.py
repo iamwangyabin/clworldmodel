@@ -54,6 +54,8 @@ ActorNetwork = Literal[
 ]
 ActorCriticOptimizer = Literal["adam", "laprop"]
 ComputeDType = Literal["float32", "bfloat16"]
+ReplayObservationDType = Literal["float32", "uint8"]
+DataParallelWorldSize = Literal[1, 2, 4]
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -177,6 +179,7 @@ class Config(Serialisable):
 
     # Present in every published Atari config, including ARROW and DV3.
     img_size: int = 64
+    replay_observation_dtype: ReplayObservationDType = "float32"
     sac_lr: float = 3e-4
     sac_batch_size: int = 256
     sac_dv3_data_n_max: int = 1024
@@ -226,6 +229,7 @@ class Config(Serialisable):
     mlp_layers: int = 2
     wall_time_optimisation: bool = False
     compute_dtype: ComputeDType = "float32"
+    data_parallel_world_size: DataParallelWorldSize = 1
 
     actor_network: ActorNetwork = "mlp"
     actor_kan_hidden_features: int = 64
@@ -321,6 +325,11 @@ class Config(Serialisable):
             raise ValueError("epochs must be positive")
         if self.compute_dtype not in {"float32", "bfloat16"}:
             raise ValueError(f"Unknown compute dtype: {self.compute_dtype!r}")
+        if self.replay_observation_dtype not in {"float32", "uint8"}:
+            raise ValueError(
+                "Unknown replay observation dtype: "
+                f"{self.replay_observation_dtype!r}"
+            )
         assert self.n_sync * self.gen_seq_len == self.data_n * self.data_t
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
@@ -338,6 +347,51 @@ class Config(Serialisable):
         is_dino_convbank = self.continual_method == "dino_convbank_arrow"
         is_dino_pixelbank = is_dino_patchbank or is_dino_convbank
         uses_task_experts = is_moe_arrow or is_dino_fullbank or is_dino_pixelbank
+        if self.data_parallel_world_size not in {1, 2, 4}:
+            raise ValueError("data_parallel_world_size must be one of 1, 2, or 4")
+        if self.data_parallel_world_size > 1:
+            if not is_dino_convbank:
+                raise ValueError(
+                    "multi-GPU data parallelism is validated only for "
+                    "DINO-ConvBank-ARROW"
+                )
+            distributed_batch_sizes = {
+                "mb_n_size": self.mb_n_size,
+                "pretrain_mb_n_size": self.pretrain_mb_n_size,
+                "ac_train_sync": self.ac_train_sync,
+            }
+            indivisible = {
+                name: value
+                for name, value in distributed_batch_sizes.items()
+                if value < self.data_parallel_world_size
+                or value % self.data_parallel_world_size
+            }
+            if indivisible:
+                raise ValueError(
+                    "fixed global sequence batches must divide equally across "
+                    f"data-parallel ranks: {indivisible}"
+                )
+        if is_dino_convbank:
+            if self.compute_dtype != "bfloat16":
+                raise ValueError(
+                    "DINO-ConvBank-ARROW requires bfloat16 compute"
+                )
+            if self.dinov3_max_batch_size != 512:
+                raise ValueError(
+                    "DINO-ConvBank-ARROW requires a 512-frame DINO execution chunk"
+                )
+            if self.dinov3_feature_cache_dtype != "bfloat16":
+                raise ValueError(
+                    "DINO-ConvBank-ARROW requires bfloat16 on-the-fly features"
+                )
+            if self.replay_observation_dtype != "uint8":
+                raise ValueError(
+                    "DINO-ConvBank-ARROW requires uint8 observation replay"
+                )
+        elif self.replay_observation_dtype != "float32":
+            raise ValueError(
+                "uint8 observation replay is reserved for DINO-ConvBank-ARROW"
+            )
         if uses_task_experts:
             if self.algorithm != "arrow":
                 raise ValueError("Task-aware expert methods require ARROW mixed replay")
@@ -1009,12 +1063,16 @@ class Config(Serialisable):
             if storage_root is not None:
                 storage_root.mkdir(parents=True, exist_ok=True)
             replays = []
+            observation_dtype = self.replay_observation_dtype
             for index, rc in enumerate(self.replay_buffers):
                 observation_storage_path = (
                     None
                     if storage_root is None
                     else storage_root
-                    / f"{index}_{rc.rb_type.__name__}_observations.float32.mmap"
+                    / (
+                        f"{index}_{rc.rb_type.__name__}_observations."
+                        f"{observation_dtype}.mmap"
+                    )
                 )
                 replays.append(
                     rc.rb_type(
@@ -1024,9 +1082,16 @@ class Config(Serialisable):
                         rc.rb_device,
                         store_task_ids=self.uses_task_experts,
                         observation_storage_path=observation_storage_path,
+                        observation_dtype=observation_dtype,
                     )
                 )
             return MultiTypeReplay(*replays, sampling_weights=sampling_weights)
         if self.algorithm == "dv3" or self.algorithm == "sac":
             rc = self.replay_buffers[0]
-            return rc.rb_type(self.data_t, self.sac_dv3_data_n_max, self.action_space, rc.rb_device)
+            return rc.rb_type(
+                self.data_t,
+                self.sac_dv3_data_n_max,
+                self.action_space,
+                rc.rb_device,
+                observation_dtype=self.replay_observation_dtype,
+            )

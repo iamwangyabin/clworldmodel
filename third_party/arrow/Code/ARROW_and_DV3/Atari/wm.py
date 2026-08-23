@@ -576,6 +576,27 @@ class WorldModel(nn.Module):
             [residual.consolidation_penalty() for residual in residuals]
         ).sum()
 
+    def forward(
+        self,
+        actions: ActionT,
+        xs: ImageT,
+        rews: RewardT,
+        conts: ContT,
+        resets: ResetT,
+        observation_features: Optional[torch.Tensor] = None,
+        task_id: Optional[int | torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Expose the training loss through `forward` for native PyTorch DDP."""
+        return self.compute_loss(
+            actions,
+            xs,
+            rews,
+            conts,
+            resets,
+            observation_features=observation_features,
+            task_id=task_id,
+        )
+
     def compute_loss(
         self,
         actions: ActionT,

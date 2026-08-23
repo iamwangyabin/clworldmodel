@@ -2,9 +2,12 @@
 
 ## Status and purpose
 
-This document freezes the opt-in `dino_convbank_arrow` protocol. Its reported
-ARROW-50 name is `DINO-ConvBank-ARROW-50`. It is a task-aware experimental
+This document freezes the opt-in `dino_convbank_arrow` protocol. Its current
+reported ARROW-50 name is
+`DINO-ConvBank-ARROW-50-BF16AMP-Uint8Replay`. It is a task-aware experimental
 method, not a published ARROW reproduction and not yet a performance result.
+The launcher requires BF16 execution and uint8 observation replay for this
+method; the superseded FP32/TF32 V4 profile is not a valid current run group.
 
 The preceding DINO-PatchBank-v3 pilot retained every frozen DINO coordinate but
 sent a 98,304-dimensional vector directly into each posterior. That made the
@@ -15,12 +18,13 @@ otherwise unchanged Dreamer posterior.
 
 ## Visual and latent path
 
-Replay stores only the unchanged float32 Atari observations. A sampled batch is
-encoded on the accelerator by the frozen local DINOv3 ViT-S/16. Under the
-canonical `fp32-tf32` profile, encoder outputs round through float16 and return
-to float32, as in V3. The separately named `bf16-amp` execution profile keeps
-DINO output and adapter input in bfloat16 and therefore removes that redundant
-round trip. The new adapter then runs inside the RSSM:
+Replay stores the unchanged discrete `64 x 64` RGB Atari pixels as uint8. After
+the selected pixels move to the training device, replay converts them to
+float32 and divides by 255, reproducing the model-facing `[0,1]` values used by
+the prior float32 replay. The sampled batch is then encoded by the frozen local
+DINOv3 ViT-S/16 under required BF16 autocast. DINO output and adapter input stay
+bfloat16, so there is no intermediate float16-to-float32 feature round trip.
+The adapter then runs inside the RSSM:
 
 ```text
 o_t [3,64,64]
@@ -99,17 +103,25 @@ same as V3. Replay observations remain run-local file-backed mmap tensors under
 cgroup. There is no DINO feature mmap or sidecar; frozen features and adapted
 features exist only for the sampled minibatch.
 
+ARROW-50 stores 524,288 observation frames. Uint8 observation mmap storage is
+therefore `6,442,450,944` bytes instead of the prior float32
+`25,769,803,776` bytes. The unchanged float32 action, reward, continuation, and
+reset tensors add `44,040,192` bytes. Quantization occurs only at the replay
+storage boundary: Atari observations originate as uint8 pixels, and focused
+tests require exact sampled-value, FIFO wraparound, and LTDM-retention parity
+after float32 division by 255.
+
 The launch manifest records both visual widths, exact adapter parameters,
 posterior parameters per task, replay bytes, and the fact that the adapter is
 shared and plastic across task boundaries.
 
-## Execution precision profiles
+## Required execution precision
 
-The default `fp32-tf32` profile is unchanged and remains the V4 reference. The
-opt-in `bf16-amp` profile is named
-`DINO-ConvBank-ARROW-v4-BF16AMP-Atari-TaskAware`; it changes numerical
-execution, so its results must not be silently merged with the FP32 profile.
-It makes only the following runtime changes:
+The only current execution profile is named
+`DINO-ConvBank-ARROW-v4-BF16AMP-Uint8Replay-Atari-TaskAware`. Omitting
+`--precision-profile` selects `bf16-amp` for `dino-convbank`; explicitly asking
+for `fp32-tf32` is an error. Historical FP32/TF32 pilot artifacts remain a
+separate superseded result group and must not be merged with this protocol.
 
 - CUDA matrix and convolution kernels in DINO, RSSM, decoder, actor, and critic
   run under bfloat16 autocast.
@@ -119,15 +131,53 @@ It makes only the following runtime changes:
   lambda returns, actor log probabilities, and value targets explicitly compute
   in float32.
 - On-the-fly DINO features stay bfloat16 through the shared convolution adapter
-  instead of allocating a float16-to-float32 conversion.
-- The DINO execution chunk grows from 128 to 512 frames. The optimization batch
+  without allocating a float16-to-float32 conversion.
+- The DINO execution chunk is 512 frames. The optimization batch
   remains exactly `T=32, N=16`, or 512 frames per world-model update; this is
   execution batching, not more samples or updates.
 
 Environment interactions, replay capacity and sampling, update counts, loss
 weights, task routing, evaluation, and checkpoints are unchanged. The profile
 requires a CUDA accelerator with native BF16 support and fails before model
-allocation otherwise.
+allocation otherwise. Model parameters and Adam state deliberately remain
+float32 master state; "BF16 training" here refers to model kernel execution,
+not unsafe BF16 optimizer accumulation.
+
+## Fixed-global-batch data parallel execution
+
+The launcher accepts `--devices 1`, `--devices 2`, or `--devices 4`. Values 2
+and 4 use one process per CUDA device through `torch.distributed.run`, NCCL, and
+native PyTorch DistributedDataParallel. They create separately named
+`DP2`/`DP4` execution groups. Multi-GPU execution is currently rejected for all
+other methods.
+
+This profile partitions the existing independent sequence axis; it does not
+increase the research batch:
+
+| Stage | Global shape | 2-GPU local shape | 4-GPU local shape |
+| --- | --- | --- | --- |
+| Regular world model | `T=32, N=16` | `T=32, N=8` | `T=32, N=4` |
+| Pretrain world model | `T=32, N=16` | `T=32, N=8` | `T=32, N=4` |
+| Actor replay context | `T=4, N=128` | `T=4, N=64` | `T=4, N=32` |
+
+Rank 0 is the sole owner of the file-backed FIFO/LTDM buffers. On every model
+or Actor-Critic update it makes exactly one global ARROW sub-buffer choice and
+one global sequence draw, preserving whole-minibatch FIFO/LTDM semantics. The
+sampled tensor is split contiguously along `N` and scattered to the ranks. Each
+rank then recomputes DINO features only for its local observations. DDP averages
+equal-sized local mean-loss gradients, and Actor-Critic return quantiles are
+computed after gathering the local returns into the original global batch.
+
+Environment collection remains on rank 0 because the fixed `n_sync=2` collector
+is small and changing it would alter the interaction protocol. Evaluation is
+parallelized by assigning task index `k` to rank `k mod world_size`; raw and
+scaled task statistics are reduced before rank-0 logging. Rank 0 alone writes
+TensorBoard, SwanLab, mmap accounting, evaluations, and checkpoints.
+
+Each rank holds a full frozen DINO, world model, active Actor-Critic, optimizer,
+and optimizer state. This is data parallelism, not model sharding, so every GPU
+must independently fit the complete local state. Replay scatter and rank-0
+collection limit scaling; neither 2x nor 4x speedup is a protocol claim.
 
 ## Execution and gates
 
@@ -139,19 +189,30 @@ python scripts/run_moe_arrow_atari.py \
   --seed 0 \
   --task-prefix-length 1 \
   --dinov3-model-path /absolute/local/model/path \
+  --precision-profile bf16-amp \
   --profile-stages
 ```
 
-The BF16 execution pilot adds the explicit profile flag:
+The corresponding 2- and 4-GPU dry runs are:
 
 ```bash
 python scripts/run_moe_arrow_atari.py \
   --method dino-convbank \
+  --devices 2 \
   --seed 0 \
   --task-prefix-length 1 \
   --dinov3-model-path /absolute/local/model/path \
-  --precision-profile bf16-amp \
-  --profile-stages
+  --profile-stages \
+  --dry-run
+
+python scripts/run_moe_arrow_atari.py \
+  --method dino-convbank \
+  --devices 4 \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dinov3-model-path /absolute/local/model/path \
+  --profile-stages \
+  --dry-run
 ```
 
 Training must start from a clean commit already synchronized with its configured

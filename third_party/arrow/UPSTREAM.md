@@ -211,6 +211,31 @@ documented here, covered by focused parity tests, and followed by regenerating
     128 to the unchanged 512-frame optimization batch. Focused tests cover
     config isolation, launcher budget and dtype accounting, BF16 feature flow,
     FP32-sensitive math, and unchanged FP32 defaults.
+32. Supersede the DINO-ConvBank FP32 default with the separately reported
+    `DINO-ConvBank-ARROW-v4-BF16AMP-Uint8Replay-Atari-TaskAware` execution and
+    storage profile. The DINO-ConvBank launcher now selects and requires BF16
+    autocast with a 512-frame encoder chunk while retaining FP32 parameters,
+    Adam state, and sensitive probability/target math. Add an explicit replay
+    observation dtype whose default remains float32 for all prior methods;
+    DINO-ConvBank alone stores source Atari pixels as uint8 mmap tensors and
+    restores the prior float32 `[0,1]` model interface after sampling. FIFO
+    overwrite order, LTDM random-key decisions, task filtering, replay
+    capacity, and update budgets remain unchanged. Focused tests cover exact
+    sampled-value parity, FIFO wraparound, LTDM retention, mmap bytes, config
+    isolation, launcher accounting, and FP32 rejection.
+33. Add separately named fixed-global-batch `DP2` and `DP4` execution profiles
+    for DINO-ConvBank only. The launcher uses `torch.distributed.run`, NCCL, and
+    native PyTorch DistributedDataParallel. Rank 0 retains sole ownership of
+    collection and the authoritative FIFO/LTDM replay; it makes one unchanged
+    global buffer choice and index draw, then scatters equal sequence-axis
+    slices to all ranks. The regular world-model `N=16` becomes local `N=8/4`,
+    and Actor-Critic context `N=128` becomes local `N=64/32`, so global sample
+    counts and optimizer-update budgets remain fixed. Frozen DINO encoding and
+    model losses run per rank, Actor-Critic normalization uses gathered global
+    returns, DDP averages gradients, evaluation tasks are sharded, and only
+    rank 0 writes artifacts. Focused CPU tests cover partitioning, configuration
+    isolation, torchrun commands, and manifest budgets; target-GPU 2/4-rank
+    smoke runs remain required before official use.
 
 ## Known issues at import
 
@@ -220,10 +245,10 @@ documented here, covered by focused parity tests, and followed by regenerating
 2. `--arrow-replay-ratio` defaults to `50-50` rather than `None`, which makes
    the CLI overwrite a value loaded from a config even when no override was
    supplied.
-3. The world model and actor use unconditional `.cuda()` calls, and the
-   published replay configuration stores approximately 24 GiB of float32
+3. The upstream world model and actor use unconditional `.cuda()` calls, and
+   the published replay configuration stores approximately 24 GiB of float32
    observations on the accelerator.
 4. The upstream commit has no automated test suite or CI definition.
 
-Items 1 and 2 are corrected by the documented local changes. Items 3 and 4
-remain constraints of the vendored implementation.
+Items 1 through 3 are corrected by the documented local compatibility and
+runtime profiles; item 4 remains a constraint of the upstream implementation.

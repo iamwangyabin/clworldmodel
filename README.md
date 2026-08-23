@@ -387,16 +387,46 @@ python scripts/run_moe_arrow_atari.py \
   --method dino-convbank \
   --seed 0 \
   --task-prefix-length 1 \
-  --precision-profile fp32-tf32 \
   --dry-run
 ```
 
-An opt-in `--precision-profile bf16-amp` execution variant uses BF16 autocast,
-keeps parameters and Adam state in FP32, retains sensitive probability and
-target math in FP32, batches all 512 sampled frames into one DINO execution
-chunk, and avoids the old feature dtype round trip. It does not increase the
-optimization batch, interaction budget, or update count. The FP32 profile
-remains the default, and the two profiles are reported separately.
+The same fixed protocol can use native PyTorch DDP on two or four local CUDA
+devices:
+
+```bash
+python scripts/run_moe_arrow_atari.py \
+  --method dino-convbank \
+  --devices 2 \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+
+python scripts/run_moe_arrow_atari.py \
+  --method dino-convbank \
+  --devices 4 \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+```
+
+The global world-model batch remains `T=32, N=16` and the global Actor-Critic
+context remains `T=4, N=128`. Their local sequence counts are `8/64` on two
+GPUs and `4/32` on four GPUs. Rank 0 makes the single global ARROW replay draw
+and scatters its sequence axis; all ranks run DINO and model training locally,
+then DDP averages gradients. Collection stays on rank 0, while evaluation tasks
+are partitioned across ranks. Each GPU must still fit a complete model and
+optimizer replica, and actual scaling must be measured rather than assumed.
+
+The method selects and requires the `bf16-amp` profile; the explicit flag is
+optional, while requesting `fp32-tf32` is rejected. It uses BF16 autocast,
+keeps parameters and Adam state in FP32, retains sensitive
+probability and target math in FP32, batches all 512 sampled frames into one
+DINO execution chunk, and avoids the old feature dtype round trip. Its replay
+stores the original `64 x 64` discrete pixels as uint8 mmap tensors, reducing
+observation storage from 24 GiB to 6 GiB, then restores float32 `[0,1]` values
+on the training device. Explicit FP32 execution is rejected. These execution
+and storage changes do not alter the optimization batch, interaction budget,
+update count, FIFO/LTDM capacity, or sampling decisions.
 
 This protocol remains experimental and has no validated multi-seed result. See
 `docs/protocols/dino_convbank_arrow_v4_atari.md` for the exact gradient path,

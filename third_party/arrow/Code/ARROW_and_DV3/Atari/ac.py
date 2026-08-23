@@ -463,6 +463,74 @@ class ActorCritic(nn.Module):
             return critic_loss
 
 
+class ActorCriticTrainingStep(nn.Module):
+    """Put the complete differentiable behavior loss behind one DDP forward."""
+
+    def __init__(
+        self,
+        actor_critic: ActorCritic,
+        *,
+        entropy_scale: float,
+        replay_critic_loss_scale: float,
+        slow_critic_regularizer: float,
+    ) -> None:
+        super().__init__()
+        self.actor_critic = actor_critic
+        self.entropy_scale = entropy_scale
+        self.replay_critic_loss_scale = replay_critic_loss_scale
+        self.slow_critic_regularizer = slow_critic_regularizer
+
+    def forward(
+        self,
+        states: AcStateT,
+        actions: ActionT,
+        lam_returns: ReturnT,
+        scale: torch.Tensor,
+        actor_baseline_values: Optional[ReturnT],
+        slow_critic_preds_log: Optional[RewardSymlogCatT],
+        replay_states: Optional[AcStateT],
+        replay_targets: Optional[ReturnT],
+        slow_replay_preds_log: Optional[RewardSymlogCatT],
+    ) -> tuple[torch.Tensor, ...]:
+        reinforce, entropy, critic_loss = self.actor_critic.compute_loss(
+            states,
+            actions,
+            lam_returns,
+            scale,
+            actor_baseline_values=actor_baseline_values,
+            slow_critic_preds_log=slow_critic_preds_log,
+            slow_critic_regularizer=self.slow_critic_regularizer,
+        )
+        replay_critic_loss = torch.zeros((), device=states.device)
+        if self.replay_critic_loss_scale:
+            if replay_states is None or replay_targets is None:
+                raise ValueError(
+                    "replay critic inputs are required by its configured loss"
+                )
+            replay_critic_loss = self.actor_critic.compute_replay_critic_loss(
+                replay_states,
+                replay_targets,
+                slow_critic_preds_log=slow_replay_preds_log,
+                slow_critic_regularizer=self.slow_critic_regularizer,
+            )
+        consolidation_loss = self.actor_critic.consolidation_penalty()
+        loss = (
+            reinforce
+            - self.entropy_scale * entropy
+            + critic_loss
+            + self.replay_critic_loss_scale * replay_critic_loss
+            + consolidation_loss
+        )
+        return (
+            loss,
+            reinforce,
+            entropy,
+            critic_loss,
+            replay_critic_loss,
+            consolidation_loss,
+        )
+
+
 @dataclass(frozen=True)
 class ReplayValueBatch:
     states: AcStateT
@@ -810,6 +878,7 @@ def train_ac_from_wm(
     protect_residual_updates: bool = False,
     feature_cache: Optional[object] = None,
     task_id: Optional[int] = None,
+    distributed_context: Optional[object] = None,
 ) -> tuple[ActorCriticOpt, torch.Tensor, dict[str, float]]:
     if aco is None:
         aco = build_actor_critic_opt(
@@ -866,6 +935,19 @@ def train_ac_from_wm(
         raise ValueError("Slow critic targets require an initialized slow critic")
     for g in opt.param_groups:
         g["lr"] = lr
+    distributed_enabled = bool(
+        distributed_context is not None
+        and getattr(distributed_context, "enabled", False)
+    )
+    distributed_training_step = None
+    if distributed_enabled:
+        training_step = ActorCriticTrainingStep(
+            ac,
+            entropy_scale=entropy_scale,
+            replay_critic_loss_scale=replay_critic_loss_scale,
+            slow_critic_regularizer=slow_critic_regularizer,
+        )
+        distributed_training_step = distributed_context.wrap_module(training_step)
     scale_ema = aco.return_scale_ema if persistent_return_norm else None
     lam_returns_mean_ema = aco.return_mean_ema if persistent_return_norm else None
 
@@ -910,8 +992,15 @@ def train_ac_from_wm(
             task_id=task_id,
         )
 
-        scale = torch.quantile(lam_returns, 0.95) - torch.quantile(lam_returns, 0.05)
-        lam_returns_mean = lam_returns.mean()
+        statistics_returns = (
+            distributed_context.all_gather_sequence_batch(lam_returns)
+            if distributed_enabled
+            else lam_returns
+        )
+        scale = torch.quantile(statistics_returns, 0.95) - torch.quantile(
+            statistics_returns, 0.05
+        )
+        lam_returns_mean = statistics_returns.mean()
         if scale_ema is None:
             scale_ema = scale
             lam_returns_mean_ema = lam_returns_mean
@@ -923,60 +1012,112 @@ def train_ac_from_wm(
             )
 
         one = torch.tensor(1, device=scale.device)
-        slow_critic_preds_log = None
         compute_dtype = getattr(wm, "compute_dtype", "float32")
-        with _autocast_context(states.device, compute_dtype):
-            if aco.slow_critic is not None:
-                with torch.no_grad():
-                    slow_critic_preds_log = aco.slow_critic(states)
+        if distributed_enabled:
+            slow_critic_preds_log = None
             actor_baseline_values = None
-            if use_slow_critic_targets:
-                actor_baseline_values = ac.value_from_log_probs(
-                    slow_critic_preds_log
-                )
-            reinforce, entropy, critic_loss = ac.compute_loss(
-                states,
-                actions,
-                lam_returns,
-                torch.max(one, scale_ema),
-                actor_baseline_values=actor_baseline_values,
-                slow_critic_preds_log=slow_critic_preds_log,
-                slow_critic_regularizer=slow_critic_regularizer,
-            )
-        replay_critic_loss = torch.zeros((), device=states.device)
-        if replay_critic_loss_scale:
+            replay_states = None
+            replay_targets = None
+            slow_replay_preds_log = None
             with _autocast_context(states.device, compute_dtype):
-                with torch.no_grad():
-                    replay_bootstrap_values = ac.value(
-                        replay_value_batch.states,
-                        critic=aco.slow_critic if use_slow_critic_targets else None,
+                if aco.slow_critic is not None:
+                    with torch.no_grad():
+                        slow_critic_preds_log = aco.slow_critic(states)
+                if use_slow_critic_targets:
+                    actor_baseline_values = ac.value_from_log_probs(
+                        slow_critic_preds_log
                     )
-                    replay_targets = replay_lambda_returns(
-                        replay_value_batch.rewards,
-                        replay_value_batch.continues,
-                        replay_bootstrap_values,
-                        discount=discount,
-                        lam=lam,
-                    )
-                    slow_replay_preds_log = (
-                        aco.slow_critic(replay_value_batch.states[:-1])
-                        if aco.slow_critic is not None
-                        else None
-                    )
-                replay_critic_loss = ac.compute_replay_critic_loss(
-                    replay_value_batch.states[:-1],
+                if replay_critic_loss_scale:
+                    with torch.no_grad():
+                        replay_bootstrap_values = ac.value(
+                            replay_value_batch.states,
+                            critic=aco.slow_critic if use_slow_critic_targets else None,
+                        )
+                        replay_targets = replay_lambda_returns(
+                            replay_value_batch.rewards,
+                            replay_value_batch.continues,
+                            replay_bootstrap_values,
+                            discount=discount,
+                            lam=lam,
+                        )
+                        replay_states = replay_value_batch.states[:-1]
+                        slow_replay_preds_log = (
+                            aco.slow_critic(replay_states)
+                            if aco.slow_critic is not None
+                            else None
+                        )
+                (
+                    loss,
+                    reinforce,
+                    entropy,
+                    critic_loss,
+                    replay_critic_loss,
+                    consolidation_loss,
+                ) = distributed_training_step(
+                    states,
+                    actions,
+                    lam_returns,
+                    torch.max(one, scale_ema),
+                    actor_baseline_values,
+                    slow_critic_preds_log,
+                    replay_states,
                     replay_targets,
-                    slow_critic_preds_log=slow_replay_preds_log,
+                    slow_replay_preds_log,
+                )
+        else:
+            slow_critic_preds_log = None
+            with _autocast_context(states.device, compute_dtype):
+                if aco.slow_critic is not None:
+                    with torch.no_grad():
+                        slow_critic_preds_log = aco.slow_critic(states)
+                actor_baseline_values = None
+                if use_slow_critic_targets:
+                    actor_baseline_values = ac.value_from_log_probs(
+                        slow_critic_preds_log
+                    )
+                reinforce, entropy, critic_loss = ac.compute_loss(
+                    states,
+                    actions,
+                    lam_returns,
+                    torch.max(one, scale_ema),
+                    actor_baseline_values=actor_baseline_values,
+                    slow_critic_preds_log=slow_critic_preds_log,
                     slow_critic_regularizer=slow_critic_regularizer,
                 )
-        consolidation_loss = ac.consolidation_penalty()
-        loss = (
-            reinforce
-            - entropy_scale * entropy
-            + critic_loss
-            + replay_critic_loss_scale * replay_critic_loss
-            + consolidation_loss
-        )
+            replay_critic_loss = torch.zeros((), device=states.device)
+            if replay_critic_loss_scale:
+                with _autocast_context(states.device, compute_dtype):
+                    with torch.no_grad():
+                        replay_bootstrap_values = ac.value(
+                            replay_value_batch.states,
+                            critic=aco.slow_critic if use_slow_critic_targets else None,
+                        )
+                        replay_targets = replay_lambda_returns(
+                            replay_value_batch.rewards,
+                            replay_value_batch.continues,
+                            replay_bootstrap_values,
+                            discount=discount,
+                            lam=lam,
+                        )
+                        slow_replay_preds_log = (
+                            aco.slow_critic(replay_value_batch.states[:-1])
+                            if aco.slow_critic is not None
+                            else None
+                        )
+                    replay_critic_loss = ac.compute_replay_critic_loss(
+                        replay_value_batch.states[:-1],
+                        replay_targets,
+                        slow_critic_preds_log=slow_replay_preds_log,
+                        slow_critic_regularizer=slow_critic_regularizer,
+                    )
+            consolidation_loss = ac.consolidation_penalty()
+            loss = (
+                reinforce
+                - entropy_scale * entropy
+                + critic_loss
+                + replay_critic_loss_scale * replay_critic_loss
+                + consolidation_loss
+            )
         if not torch.isfinite(loss):
             raise FloatingPointError(
                 "Non-finite actor-critic loss: "
@@ -1019,7 +1160,7 @@ def train_ac_from_wm(
             "critic_replay_loss": replay_critic_loss,
             "kan_consolidation_loss": consolidation_loss,
             "total_loss": loss,
-            "return_mean": lam_returns.mean(),
+            "return_mean": lam_returns_mean,
             "return_scale": torch.max(one, scale_ema),
             "gradient_norm": gradient_norm,
         }
@@ -1040,6 +1181,8 @@ def train_ac_from_wm(
     if persistent_return_norm:
         aco.return_scale_ema = scale_ema.detach()
         aco.return_mean_ema = lam_returns_mean_ema.detach()
+    if distributed_enabled:
+        metric_totals = distributed_context.mean_float_mapping(metric_totals)
     metrics = {name: total / steps for name, total in metric_totals.items()}
     metrics["replay_critic_loss_scale"] = replay_critic_loss_scale
     return aco, lam_returns_mean_ema, metrics
