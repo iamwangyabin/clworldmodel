@@ -406,8 +406,8 @@ class Config(Serialisable):
                 )
         elif self.replay_observation_dtype != "float32":
             raise ValueError(
-                "uint8 observation replay is reserved for the named optimized "
-                "DINO-ConvBank and CNN-FullBank protocols"
+                "uint8 observation replay is reserved for DINO-ConvBank and "
+                "CNN-FullBank optimized protocols"
             )
         if uses_task_experts:
             if self.algorithm != "arrow":
@@ -752,10 +752,10 @@ class Config(Serialisable):
         }:
             raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
         if self.shared_core_mode == "task_isolated" and not (
-            is_dino_fullbank or is_dino_patchbank
+            is_cnn_fullbank or is_dino_fullbank or is_dino_patchbank
         ):
             raise ValueError(
-                "shared_core_mode='task_isolated' is reserved for DINO task banks"
+                "shared_core_mode='task_isolated' is reserved for full task banks"
             )
         if (
             self.shared_core_mode == "task_banked_shared_adapter"
