@@ -193,6 +193,55 @@ python scripts/run_moe_arrow_atari.py \
   --profile-stages
 ```
 
+The initial seed-0 DP4 continual run failed the Task-1 acquisition gate. Its
+raw MsPacman mean was `1139.375` after 90 completed training epochs, below the
+fixed `2000` threshold. The largest periodic-checkpoint mean was `1717.5` at
+epoch 40, but a transient peak is not the acquisition result. The run was
+aborted after 122 completed epochs rather than spending the remaining
+continual-training budget on an unqualified representation and policy.
+
+### Task-1 acquisition tuning pilot
+
+Two named seed-0 ablations test the hypothesis that the default Actor-Critic
+optimization is too aggressive for the frozen-DINO representation. They run on
+disjoint two-GPU groups so both candidates can be evaluated without changing
+the fixed global batch, 90-epoch task duration, environment interactions,
+world-model updates, Actor-Critic updates, replay capacity, or evaluation
+schedule.
+
+| Profile | Actor-Critic LR | Entropy scale | Controlled purpose |
+| --- | ---: | ---: | --- |
+| `aclr5e5` | `5e-5` | `3e-4` | Test whether halving LR prevents the observed post-peak policy regression |
+| `aclr5e5-ent1e4` | `5e-5` | `1e-4` | Conditional test of lower entropy regularization after halving LR |
+
+The frozen DINO encoder, shared convolution adapter, world-model learning rate
+`1e-4`, seed, collection stream, and all other resolved settings remain fixed.
+The acquisition gate is the 16-rollout `raw_return_mean` in
+`final_evaluation.json` after all 90 completed epochs. It passes only at
+`>=2000`; intermediate peaks do not pass. Seed 0 is used for candidate
+selection only. A selected profile requires fresh confirmation seeds before it
+can support a method claim.
+
+```bash
+python scripts/run_moe_arrow_atari.py \
+  --method dino-convbank \
+  --devices 2 \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --task1-tuning-profile aclr5e5 \
+  --dinov3-model-path /absolute/local/model/path \
+  --profile-stages
+
+python scripts/run_moe_arrow_atari.py \
+  --method dino-convbank \
+  --devices 2 \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --task1-tuning-profile aclr5e5-ent1e4 \
+  --dinov3-model-path /absolute/local/model/path \
+  --profile-stages
+```
+
 The corresponding 2- and 4-GPU dry runs are:
 
 ```bash

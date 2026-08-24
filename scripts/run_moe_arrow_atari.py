@@ -106,6 +106,35 @@ PRECISION_PROFILES = {
 }
 
 
+TASK1_TUNING_PROFILES = {
+    "aclr5e5": {
+        "protocol_suffix": "Task1AcLR5e5",
+        "output_suffix": "task1_aclr5e5",
+        "config_overrides": {
+            "ac_lr": 5e-5,
+            "ac_entropy_scale": 3e-4,
+        },
+        "hypothesis": (
+            "Halving the actor-critic learning rate will reduce the post-peak "
+            "policy regression observed on MsPacman while retaining the "
+            "published entropy scale."
+        ),
+    },
+    "aclr5e5-ent1e4": {
+        "protocol_suffix": "Task1AcLR5e5Ent1e4",
+        "output_suffix": "task1_aclr5e5_ent1e4",
+        "config_overrides": {
+            "ac_lr": 5e-5,
+            "ac_entropy_scale": 1e-4,
+        },
+        "hypothesis": (
+            "Conditional on the halved actor-critic learning rate, reducing "
+            "entropy regularization will improve final MsPacman exploitation."
+        ),
+    },
+}
+
+
 MOE_ARROW_VARIANT = LaunchVariant(
     method="MoE-ARROW-50",
     code_id="moe_arrow",
@@ -284,6 +313,14 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
             "BF16 AMP; other methods default to FP32/TF32"
         ),
     )
+    parser.add_argument(
+        "--task1-tuning-profile",
+        choices=tuple(TASK1_TUNING_PROFILES),
+        help=(
+            "Named MsPacman acquisition ablation. Requires dino-convbank and "
+            "--task-prefix-length 1; data and update budgets remain fixed"
+        ),
+    )
     parser.add_argument("--swanlab-project")
     parser.add_argument("--swanlab-experiment-name")
     parser.add_argument("--dry-run", action="store_true")
@@ -298,6 +335,7 @@ def _resolved_config(
     variant: LaunchVariant = MOE_ARROW_VARIANT,
     precision_profile: PrecisionProfile = PRECISION_PROFILES["fp32-tf32"],
     data_parallel_world_size: int = 1,
+    config_overrides: dict[str, float] | None = None,
 ) -> dict:
     config = json.loads(json.dumps(source))
     config.update(
@@ -341,6 +379,8 @@ def _resolved_config(
     )
     for replay_config in config["replay_buffers"]:
         replay_config["rb_device"] = "cpu"
+    if config_overrides is not None:
+        config.update(config_overrides)
     return config
 
 
@@ -361,6 +401,15 @@ def main(*, default_method: str = "moe") -> int:
         )
     if args.devices > 1 and args.method != "dino-convbank":
         parser.error("--devices 2/4 is validated only for dino-convbank")
+    if args.task1_tuning_profile is not None:
+        if args.method != "dino-convbank":
+            parser.error(
+                "--task1-tuning-profile is validated only for dino-convbank"
+            )
+        if args.task_prefix_length != 1:
+            parser.error(
+                "--task1-tuning-profile requires --task-prefix-length 1"
+            )
     if args.dinov3_model_path is None:
         parser.error("--dinov3-model-path or DINOV3_MODEL_PATH is required")
     if args.cpu_threads is not None and args.cpu_threads < 1:
@@ -384,6 +433,16 @@ def main(*, default_method: str = "moe") -> int:
         if args.task_prefix_length is None
         else swap_sched * args.task_prefix_length
     )
+    tuning_profile = (
+        TASK1_TUNING_PROFILES[args.task1_tuning_profile]
+        if args.task1_tuning_profile is not None
+        else None
+    )
+    config_overrides = (
+        dict(tuning_profile["config_overrides"])
+        if tuning_profile is not None
+        else None
+    )
     config = _resolved_config(
         source_config,
         model_path=model_path,
@@ -391,6 +450,7 @@ def main(*, default_method: str = "moe") -> int:
         variant=variant,
         precision_profile=precision_profile,
         data_parallel_world_size=args.devices,
+        config_overrides=config_overrides,
     )
     allocated_experts = int(config["rssm_num_experts"])
 
@@ -413,6 +473,12 @@ def main(*, default_method: str = "moe") -> int:
         role += f"-fixed-global-batch-ddp{args.devices}"
         output_prefix += f"_dp{args.devices}"
         protocol = protocol.replace("-Atari-", f"-DP{args.devices}-Atari-")
+    if tuning_profile is not None:
+        tuning_suffix = str(tuning_profile["protocol_suffix"])
+        method += f"-{tuning_suffix}"
+        role += "-task1-acquisition-ablation"
+        output_prefix += f"_{tuning_profile['output_suffix']}"
+        protocol = protocol.replace("-Atari-", f"-{tuning_suffix}-Atari-")
     if args.task_prefix_length is not None:
         method += f"-T{args.task_prefix_length}Pilot"
         role += "-pilot"
@@ -649,6 +715,26 @@ def main(*, default_method: str = "moe") -> int:
             "actor_critic_updates": training_epochs
             * source_config["ac_train_steps"],
         },
+        "hyperparameter_tuning": (
+            {
+                "profile": args.task1_tuning_profile,
+                "classification": "task1_acquisition_pilot",
+                "hypothesis": tuning_profile["hypothesis"],
+                "config_overrides": config_overrides,
+                "world_model_learning_rate": config["wm_lr"],
+                "fixed_data_and_update_budgets": True,
+                "acquisition_gate": {
+                    "task": "ALE/MsPacman-v5",
+                    "after_completed_epochs": 90,
+                    "rollouts": 16,
+                    "metric": "raw_return_mean",
+                    "minimum": 2000.0,
+                    "use_intermediate_peak": False,
+                },
+            }
+            if tuning_profile is not None
+            else None
+        ),
         "distributed_execution": {
             "enabled": args.devices > 1,
             "world_size": args.devices,
@@ -801,6 +887,8 @@ def main(*, default_method: str = "moe") -> int:
                 else "uniform across replay-available old tasks"
             ),
             "old_task_parameters_frozen": variant.full_task_experts,
+            "learning_rate": config.get("ac_lr", 1e-4),
+            "entropy_scale": config.get("ac_entropy_scale", 3e-4),
             "total_updates_unchanged": True,
         },
         "observation": {

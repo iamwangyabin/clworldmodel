@@ -553,7 +553,120 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(base_storage["observation_bytes"], 6_442_450_944)
         self.assertEqual(base_storage["allocated_tensor_bytes"], 6_486_491_136)
         self.assertEqual(launch["replay"]["sampled_observation_dtype"], "float32")
+        self.assertIsNone(launch["hyperparameter_tuning"])
         self.assertFalse(output_dir.exists())
+
+    def test_dino_convbank_task1_tuning_profiles_are_named_and_budget_matched(
+        self,
+    ) -> None:
+        profiles = {
+            "aclr5e5": {
+                "protocol_suffix": "Task1AcLR5e5",
+                "ac_lr": 5e-5,
+                "entropy_scale": 3e-4,
+            },
+            "aclr5e5-ent1e4": {
+                "protocol_suffix": "Task1AcLR5e5Ent1e4",
+                "ac_lr": 5e-5,
+                "entropy_scale": 1e-4,
+            },
+        }
+
+        for profile, expected in profiles.items():
+            with self.subTest(profile=profile):
+                launch, output_dir = self._karrow_dry_run(
+                    "--task-prefix-length",
+                    "1",
+                    "--method",
+                    "dino-convbank",
+                    "--devices",
+                    "2",
+                    "--task1-tuning-profile",
+                    profile,
+                    script="scripts/run_moe_arrow_atari.py",
+                )
+
+                suffix = expected["protocol_suffix"]
+                self.assertEqual(
+                    launch["method"],
+                    "DINO-ConvBank-ARROW-50-BF16AMP-Uint8Replay-DP2-"
+                    f"{suffix}-T1Pilot",
+                )
+                self.assertEqual(
+                    launch["protocol"],
+                    "DINO-ConvBank-ARROW-v4-BF16AMP-Uint8Replay-DP2-"
+                    f"{suffix}-Atari-TaskAware",
+                )
+                tuning = launch["hyperparameter_tuning"]
+                self.assertEqual(tuning["profile"], profile)
+                self.assertEqual(
+                    tuning["config_overrides"],
+                    {
+                        "ac_lr": expected["ac_lr"],
+                        "ac_entropy_scale": expected["entropy_scale"],
+                    },
+                )
+                self.assertTrue(tuning["fixed_data_and_update_budgets"])
+                self.assertEqual(
+                    tuning["acquisition_gate"],
+                    {
+                        "task": "ALE/MsPacman-v5",
+                        "after_completed_epochs": 90,
+                        "rollouts": 16,
+                        "metric": "raw_return_mean",
+                        "minimum": 2000.0,
+                        "use_intermediate_peak": False,
+                    },
+                )
+                self.assertEqual(
+                    launch["actor_critic"]["learning_rate"], expected["ac_lr"]
+                )
+                self.assertEqual(
+                    launch["actor_critic"]["entropy_scale"],
+                    expected["entropy_scale"],
+                )
+                self.assertEqual(
+                    launch["training_scope"]["world_model_updates"], 90_000
+                )
+                self.assertEqual(
+                    launch["training_scope"]["actor_critic_updates"], 72_000
+                )
+                self.assertFalse(output_dir.exists())
+
+    def test_dino_convbank_task1_tuning_requires_one_task_scope(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model_dir = root / "dinov3"
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(
+                json.dumps({"hidden_size": 384, "patch_size": 16}),
+                encoding="utf-8",
+            )
+            (model_dir / "model.safetensors").write_bytes(b"test-weights")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--dinov3-model-path",
+                    str(model_dir),
+                    "--method",
+                    "dino-convbank",
+                    "--task1-tuning-profile",
+                    "aclr5e5",
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "requires --task-prefix-length 1",
+            result.stderr,
+        )
 
     def test_dino_convbank_explicit_bfloat16_records_required_profile(self) -> None:
         launch, output_dir = self._karrow_dry_run(
