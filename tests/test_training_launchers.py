@@ -708,6 +708,62 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--batch-profile x4-full-updates", result.stderr)
 
+    def test_cnn_fullbank_extended_training_audit_keeps_actor_constant(self) -> None:
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary) / "cnn_fullbank_extended_audit_run"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--task-prefix-length",
+                    "1",
+                    "--devices",
+                    "4",
+                    "--batch-profile",
+                    "x4-full-updates",
+                    "--task-duration-multiplier",
+                    "2",
+                    "--evaluation-audit-profile",
+                    "fixed-cohort-snapshots",
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+        self.assertIn("FixedEvalAudit", launch["method"])
+        self.assertIn("TaskDurationX2", launch["method"])
+        self.assertIsNone(launch["actor_stability"])
+        self.assertEqual(launch["actor_critic"]["schedule"], "constant")
+        self.assertEqual(launch["actor_critic"]["learning_rate"], 1e-4)
+        self.assertEqual(launch["actor_critic"]["entropy_scale"], 3e-4)
+        self.assertIsNone(launch["actor_critic"]["decay_start_task_epoch"])
+        self.assertEqual(launch["actor_critic"]["final_learning_rate"], 1e-4)
+        self.assertEqual(launch["actor_critic"]["final_entropy_scale"], 3e-4)
+        scope = launch["training_scope"]
+        self.assertEqual(scope["epochs"], 180)
+        self.assertEqual(scope["world_model_updates"], 180_000)
+        self.assertEqual(scope["actor_critic_updates"], 144_000)
+        audit = launch["evaluation_audit"]
+        self.assertEqual(audit["profile"], "fixed-cohort-snapshots")
+        self.assertFalse(audit["gradient_updates_changed"])
+        self.assertFalse(audit["environment_interactions_changed"])
+        self.assertTrue(audit["exact_evaluated_weights_retained"])
+        self.assertEqual(
+            launch["evaluation"]["seed_protocol"],
+            "fixed_validation_heldout_final",
+        )
+        self.assertIn("--evaluation-snapshot-dir", launch["command"])
+
     def test_cnn_fullbank_x4_extended_duration_records_extra_budget_and_scratch(
         self,
     ) -> None:

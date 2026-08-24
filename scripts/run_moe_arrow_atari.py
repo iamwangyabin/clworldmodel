@@ -110,6 +110,14 @@ class ActorStabilityProfile:
     hypothesis: str
 
 
+@dataclass(frozen=True)
+class EvaluationAuditProfile:
+    protocol_suffix: str
+    output_suffix: str
+    config_overrides: dict[str, str]
+    hypothesis: str
+
+
 PRECISION_PROFILES = {
     "fp32-tf32": PrecisionProfile(
         compute_dtype="float32",
@@ -223,6 +231,22 @@ ACTOR_STABILITY_PROFILES = {
             "reduce late policy drift. Reusing one periodic validation seed cohort, "
             "holding out the final cohort, and saving exact evaluated task-bank "
             "weights separates regression from evaluation-seed noise."
+        ),
+    ),
+}
+
+
+EVALUATION_AUDIT_PROFILES = {
+    "fixed-cohort-snapshots": EvaluationAuditProfile(
+        protocol_suffix="FixedEvalAudit",
+        output_suffix="fixed_eval_audit",
+        config_overrides={
+            "evaluation_seed_protocol": "fixed_validation_heldout_final",
+        },
+        hypothesis=(
+            "Reusing one periodic validation cohort and retaining exact evaluated "
+            "weights will distinguish optimization progress from Atari seed-cohort "
+            "noise without changing gradients, interaction, or update budgets."
         ),
     ),
 }
@@ -512,6 +536,13 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--evaluation-audit-profile",
+        choices=tuple(EVALUATION_AUDIT_PROFILES),
+        help=(
+            "Named fixed-cohort evaluation and exact inference-snapshot protocol"
+        ),
+    )
+    parser.add_argument(
         "--task-duration-multiplier",
         type=int,
         choices=(1, 2, 4),
@@ -679,6 +710,15 @@ def main(*, default_method: str = "moe") -> int:
                 "--actor-stability-profile requires four devices and "
                 "--batch-profile x4-full-updates"
             )
+    if args.evaluation_audit_profile is not None:
+        if args.method != "cnn-fullbank":
+            parser.error(
+                "--evaluation-audit-profile is validated only for cnn-fullbank"
+            )
+        if args.task_prefix_length != 1:
+            parser.error(
+                "--evaluation-audit-profile currently requires a Task 1 pilot"
+            )
     if args.task_duration_multiplier > 1:
         if args.method != "cnn-fullbank" or args.batch_profile is None:
             parser.error(
@@ -740,6 +780,11 @@ def main(*, default_method: str = "moe") -> int:
         if args.actor_stability_profile is not None
         else None
     )
+    evaluation_audit_profile = (
+        EVALUATION_AUDIT_PROFILES[args.evaluation_audit_profile]
+        if args.evaluation_audit_profile is not None
+        else None
+    )
     config_overrides: dict[str, int | float | str] = {}
     if tuning_profile is not None:
         config_overrides.update(tuning_profile["config_overrides"])
@@ -747,6 +792,8 @@ def main(*, default_method: str = "moe") -> int:
         config_overrides.update(batch_profile.config_overrides)
     if actor_stability_profile is not None:
         config_overrides.update(actor_stability_profile.config_overrides)
+    if evaluation_audit_profile is not None:
+        config_overrides.update(evaluation_audit_profile.config_overrides)
     config = _resolved_config(
         source_config,
         model_path=model_path,
@@ -796,6 +843,13 @@ def main(*, default_method: str = "moe") -> int:
         protocol = protocol.replace(
             "-Atari-", f"-{actor_stability_profile.protocol_suffix}-Atari-"
         )
+    if evaluation_audit_profile is not None:
+        method += f"-{evaluation_audit_profile.protocol_suffix}"
+        role += "-evaluation-audit"
+        output_prefix += f"_{evaluation_audit_profile.output_suffix}"
+        protocol = protocol.replace(
+            "-Atari-", f"-{evaluation_audit_profile.protocol_suffix}-Atari-"
+        )
     if args.task_duration_multiplier > 1:
         duration_suffix = f"TaskDurationX{args.task_duration_multiplier}"
         method += f"-{duration_suffix}"
@@ -830,7 +884,10 @@ def main(*, default_method: str = "moe") -> int:
     )
     evaluation_snapshot_dir = (
         output_dir / "evaluation_snapshots"
-        if actor_stability_profile is not None
+        if (
+            actor_stability_profile is not None
+            or evaluation_audit_profile is not None
+        )
         else None
     )
 
@@ -1201,6 +1258,23 @@ def main(*, default_method: str = "moe") -> int:
             if actor_stability_profile is not None
             else None
         ),
+        "evaluation_audit": (
+            {
+                "profile": args.evaluation_audit_profile,
+                "classification": "fixed_cohort_evaluation_audit",
+                "hypothesis": evaluation_audit_profile.hypothesis,
+                "config_overrides": dict(
+                    evaluation_audit_profile.config_overrides
+                ),
+                "gradient_updates_changed": False,
+                "environment_interactions_changed": False,
+                "periodic_validation_cohort_reused": True,
+                "heldout_final_cohort": True,
+                "exact_evaluated_weights_retained": True,
+            }
+            if evaluation_audit_profile is not None
+            else None
+        ),
         "distributed_execution": {
             "enabled": args.devices > 1,
             "world_size": args.devices,
@@ -1384,15 +1458,25 @@ def main(*, default_method: str = "moe") -> int:
             "learning_rate": config.get("ac_lr", 1e-4),
             "entropy_scale": config.get("ac_entropy_scale", 3e-4),
             "schedule": config.get("ac_schedule", "constant"),
-            "decay_start_task_epoch": config.get(
-                "ac_decay_start_task_epoch", 40
+            "decay_start_task_epoch": (
+                config.get("ac_decay_start_task_epoch", 40)
+                if config.get("ac_schedule") == "task_cosine_decay"
+                else None
             ),
-            "decay_end_task_epoch": config.get(
-                "ac_decay_end_task_epoch", 90
+            "decay_end_task_epoch": (
+                config.get("ac_decay_end_task_epoch", 90)
+                if config.get("ac_schedule") == "task_cosine_decay"
+                else None
             ),
-            "final_learning_rate": config.get("ac_final_lr", 2.5e-5),
-            "final_entropy_scale": config.get(
-                "ac_final_entropy_scale", 5e-5
+            "final_learning_rate": (
+                config.get("ac_final_lr", 2.5e-5)
+                if config.get("ac_schedule") == "task_cosine_decay"
+                else config.get("ac_lr", 1e-4)
+            ),
+            "final_entropy_scale": (
+                config.get("ac_final_entropy_scale", 5e-5)
+                if config.get("ac_schedule") == "task_cosine_decay"
+                else config.get("ac_entropy_scale", 3e-4)
             ),
             "total_updates_unchanged": (
                 batch_profile is None

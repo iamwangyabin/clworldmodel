@@ -138,6 +138,22 @@ they omit replay, optimizers, RNG, task-scheduler state, and counters required
 to continue training equivalently. The held-out final score remains the Task 1
 acquisition gate.
 
+### Extended-training evaluation audit
+
+The separate `--evaluation-audit-profile fixed-cohort-snapshots` option enables
+the same fixed validation cohort, disjoint held-out final cohort, exact
+evaluation snapshots, and best-validation pointer without changing Actor-Critic
+hyperparameters. It is the correct profile for testing the narrower hypothesis
+that the large-batch model is undertrained rather than unstable.
+
+The next controlled seed-0 audit combines `x4-full-updates`,
+`--task-duration-multiplier 2`, and this evaluation audit. It trains MsPacman
+for 180 epochs while keeping WM/Actor-Critic learning rates at `1e-4`, entropy
+scale at `3e-4`, and all per-epoch batch and update settings unchanged. Relative
+to the failed 90-epoch run it doubles environment interaction, Adam updates,
+and optimization sample use. It is therefore an extended-budget acquisition
+ablation, not a replacement result under the 90-epoch protocol.
+
 ### Extended-duration acquisition
 
 `--task-duration-multiplier 2` is a separately named task-1 acquisition
@@ -173,7 +189,8 @@ python scripts/run_moe_arrow_atari.py \
   --method cnn-fullbank \
   --devices 4 \
   --batch-profile x4-full-updates \
-  --actor-stability-profile late-cosine-40-90 \
+  --task-duration-multiplier 2 \
+  --evaluation-audit-profile fixed-cohort-snapshots \
   --replay-mmap-root /dev/shm/clworldmodel-replay \
   --seed 0 \
   --task-prefix-length 1 \
