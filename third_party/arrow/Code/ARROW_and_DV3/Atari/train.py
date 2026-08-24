@@ -1,11 +1,12 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import random
 import socket
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
@@ -75,9 +76,13 @@ def _require_cuda_compute_support(compute_dtype: str) -> None:
 
 def _environment_seed_streams(
     seed: int,
-) -> tuple[np.random.Generator, np.random.Generator]:
-    collection_seed, evaluation_seed = np.random.SeedSequence(seed).spawn(2)
-    return np.random.default_rng(collection_seed), np.random.default_rng(evaluation_seed)
+) -> tuple[np.random.Generator, np.random.Generator, np.random.Generator]:
+    collection_seed, validation_seed, final_seed = np.random.SeedSequence(seed).spawn(3)
+    return (
+        np.random.default_rng(collection_seed),
+        np.random.default_rng(validation_seed),
+        np.random.default_rng(final_seed),
+    )
 
 
 def _next_environment_seed(seed_rng: np.random.Generator) -> int:
@@ -229,14 +234,15 @@ def _evaluate_policy_tasks(
     wm: WorldModel,
     aco: Optional[ActorCriticOpt],
     eval_funcs,
-    environment_seed_rng: np.random.Generator,
+    task_seeds: Sequence[int],
     actor_critic_bank=None,
     distributed_context=None,
 ) -> tuple[list[float], list[float]]:
+    if len(task_seeds) != len(eval_funcs):
+        raise ValueError(
+            "Evaluation task functions and fixed task seeds must have equal length"
+        )
     if distributed_context is not None and distributed_context.enabled:
-        task_seeds = [
-            _next_environment_seed(environment_seed_rng) for _ in eval_funcs
-        ]
         local_values = torch.zeros(
             len(eval_funcs), 2, dtype=torch.float64, device=distributed_context.device
         )
@@ -280,7 +286,7 @@ def _evaluate_policy_tasks(
     means = []
     stds = []
     with _preserve_training_rng_state():
-        for task_id, env_fns in enumerate(eval_funcs):
+        for task_id, (env_fns, task_seed) in enumerate(zip(eval_funcs, task_seeds)):
             task_aco = (
                 actor_critic_bank.get_optional(task_id)
                 if actor_critic_bank is not None
@@ -299,12 +305,38 @@ def _evaluate_policy_tasks(
                 env_fns=env_fns,
                 env_repeat=config.env_repeat,
                 n_rollouts=16,
-                seed=_next_environment_seed(environment_seed_rng),
+                seed=task_seed,
                 **evaluation_kwargs,
             )
             means.append(mean)
             stds.append(std)
     return means, stds
+
+
+def _actor_critic_schedule_values(
+    config: Config, epoch: int
+) -> tuple[float, float, int]:
+    """Resolve actor hyperparameters from task age without using evaluation data."""
+    if epoch < 0:
+        raise ValueError("Epoch must be non-negative")
+    if config.ac_schedule == "constant":
+        return config.ac_lr, config.ac_entropy_scale, epoch + 1
+    swap_sched = config.esc.kwargs.get("swap_sched")
+    if not isinstance(swap_sched, int) or swap_sched < 1:
+        raise ValueError("Actor scheduling requires a positive task duration")
+    task_epoch = epoch % swap_sched + 1
+    if config.ac_schedule != "task_cosine_decay":
+        raise ValueError(f"Unknown actor-critic schedule: {config.ac_schedule!r}")
+
+    start = config.ac_decay_start_task_epoch
+    end = config.ac_decay_end_task_epoch
+    progress = min(1.0, max(0.0, (task_epoch - start) / (end - start)))
+    remaining = 0.5 * (1.0 + math.cos(math.pi * progress))
+    learning_rate = config.ac_final_lr + (config.ac_lr - config.ac_final_lr) * remaining
+    entropy_scale = config.ac_final_entropy_scale + (
+        config.ac_entropy_scale - config.ac_final_entropy_scale
+    ) * remaining
+    return learning_rate, entropy_scale, task_epoch
 
 
 def _raw_return_statistics(
@@ -1041,6 +1073,117 @@ def _save_analysis_snapshot(
     return path
 
 
+def _save_task_bank_evaluation_snapshot(
+    snapshot_dir: Path,
+    *,
+    config: Config,
+    wm: WorldModel,
+    actor_critic_bank,
+    completed_epochs: int,
+    world_model_updates: int,
+    actor_critic_updates: int,
+    total_env_steps: int,
+    task_seeds: Sequence[int],
+    scaled_means: Sequence[float],
+    scaled_stds: Sequence[float],
+    raw_means: Sequence[float],
+    raw_stds: Sequence[float],
+    cohort: str,
+) -> Path:
+    """Save the exact task-bank weights evaluated by a fixed seed cohort."""
+    if actor_critic_bank is None:
+        raise ValueError("Task-bank evaluation snapshots require an actor bank")
+    lengths = {
+        len(task_seeds),
+        len(scaled_means),
+        len(scaled_stds),
+        len(raw_means),
+        len(raw_stds),
+    }
+    if len(lengths) != 1:
+        raise ValueError("Evaluation snapshot metrics must have matching lengths")
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    path = snapshot_dir / f"{cohort}_completed_{completed_epochs:04d}.pt"
+    if path.exists():
+        raise FileExistsError(f"Refusing to overwrite evaluation snapshot: {path}")
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    payload = {
+        "schema_version": 1,
+        "artifact_kind": "task_bank_evaluation_snapshot",
+        "resumable": False,
+        "cohort": cohort,
+        "completed_epochs": completed_epochs,
+        "world_model_updates": world_model_updates,
+        "actor_critic_updates": actor_critic_updates,
+        "total_raw_environment_frames": total_env_steps,
+        "algorithm": config.algorithm,
+        "seed": config.seed,
+        "task_base_seeds": [int(seed) for seed in task_seeds],
+        "evaluation": [
+            {
+                "task_index": task_index,
+                "scaled_return_mean": float(scaled_mean),
+                "scaled_return_std": float(scaled_std),
+                "raw_return_mean": float(raw_mean),
+                "raw_return_std": float(raw_std),
+            }
+            for task_index, (
+                scaled_mean,
+                scaled_std,
+                raw_mean,
+                raw_std,
+            ) in enumerate(zip(scaled_means, scaled_stds, raw_means, raw_stds))
+        ],
+        "omitted_state": [
+            "optimizers",
+            "replay",
+            "RNG",
+            "environment schedule",
+            "step schedulers",
+        ],
+        "config": config.to_dict(),
+        "world_model_state_dict": _cpu_state_dict(wm),
+        "actor_critic_bank_state_dict": actor_critic_bank.inference_state_dict(),
+    }
+    torch.save(payload, temporary_path)
+    os.replace(temporary_path, path)
+    digest = _sha256(path)
+    digest_path = path.with_suffix(path.suffix + ".sha256")
+    temporary_digest_path = digest_path.with_suffix(digest_path.suffix + ".tmp")
+    temporary_digest_path.write_text(f"{digest}  {path.name}\n", encoding="ascii")
+    os.replace(temporary_digest_path, digest_path)
+    print(
+        "[evaluation-snapshot] "
+        f"cohort={cohort} completed_epochs={completed_epochs} path={path} "
+        f"sha256={digest}"
+    )
+    return path
+
+
+def _write_best_validation_snapshot(
+    snapshot_dir: Path,
+    *,
+    snapshot_path: Path,
+    completed_epochs: int,
+    seen_task_count: int,
+    seen_task_raw_mean: float,
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "selection_data": "fixed_periodic_validation_cohort",
+        "selection_rule": "maximum_mean_raw_return_over_seen_tasks",
+        "final_evaluation_data_used": False,
+        "snapshot": snapshot_path.name,
+        "completed_epochs": completed_epochs,
+        "seen_task_count": seen_task_count,
+        "seen_task_raw_return_mean": seen_task_raw_mean,
+    }
+    path = snapshot_dir / "best_validation_snapshot.json"
+    temporary_path = path.with_suffix(".json.tmp")
+    temporary_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary_path, path)
+
+
 def _init_swanlab(
     project: Optional[str], experiment_name: Optional[str], config: Config
 ):
@@ -1136,6 +1279,15 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--evaluation-snapshot-dir",
+        type=Path,
+        help=(
+            "Save the exact task-bank inference weights used for each periodic "
+            "fixed-cohort evaluation and the held-out final evaluation. These "
+            "snapshots omit replay, optimizers, RNG, and schedule state."
+        ),
+    )
+    parser.add_argument(
         "--init-analysis-snapshot",
         type=Path,
         help=(
@@ -1185,6 +1337,11 @@ if __name__ == "__main__":
         if args.analysis_snapshot_dir is not None
         else None
     )
+    evaluation_snapshot_dir = (
+        args.evaluation_snapshot_dir.resolve()
+        if args.evaluation_snapshot_dir is not None
+        else None
+    )
     torch.set_float32_matmul_precision("high" if args.tf32 else "highest")
     if args.config is not None:
         config = Config.from_file(Path(args.config))
@@ -1230,6 +1387,15 @@ if __name__ == "__main__":
             "Task-bank analysis snapshots are disabled until replay, all actor "
             "optimizers, and task-router state are saved resumably"
         )
+    if evaluation_snapshot_dir is not None:
+        if not config.uses_task_experts:
+            raise ValueError(
+                "Evaluation snapshots are currently implemented only for task-bank methods"
+            )
+        if config.evaluation_seed_protocol != "fixed_validation_heldout_final":
+            raise ValueError(
+                "Evaluation snapshots require fixed validation and held-out final seeds"
+            )
     milestone_completed_epochs = set(args.milestone_completed_epoch)
     invalid_milestones = sorted(
         epoch
@@ -1337,6 +1503,8 @@ if __name__ == "__main__":
     print(
         "Actor-critic training: "
         f"optimizer={config.ac_optimizer} lr={config.ac_lr} "
+        f"schedule={config.ac_schedule} final_lr={config.ac_final_lr} "
+        f"final_entropy_scale={config.ac_final_entropy_scale} "
         f"dream_steps={config.ac_dream_steps} agc={config.ac_agc_clip} "
         f"grad_clip={config.ac_grad_clip}"
     )
@@ -1347,8 +1515,29 @@ if __name__ == "__main__":
     random.seed(config.seed)
     np.random.seed(config.seed)
     torch.random.manual_seed(config.seed)
-    collection_environment_seed_rng, evaluation_environment_seed_rng = (
-        _environment_seed_streams(config.seed)
+    (
+        collection_environment_seed_rng,
+        validation_environment_seed_rng,
+        final_environment_seed_rng,
+    ) = _environment_seed_streams(config.seed)
+    fixed_evaluation_cohorts = (
+        config.evaluation_seed_protocol == "fixed_validation_heldout_final"
+    )
+    validation_task_seeds = (
+        tuple(
+            _next_environment_seed(validation_environment_seed_rng)
+            for _ in config.esc.env_configs
+        )
+        if fixed_evaluation_cohorts
+        else ()
+    )
+    final_task_seeds = (
+        tuple(
+            _next_environment_seed(final_environment_seed_rng)
+            for _ in config.esc.env_configs
+        )
+        if fixed_evaluation_cohorts
+        else ()
     )
     print("Training with seed: ", config.seed)
     if torch.cuda.is_available():
@@ -1604,6 +1793,31 @@ if __name__ == "__main__":
     log_dir = Path(log_dir)
     if distributed_context.is_primary:
         config.save(log_dir / "config.json")
+        evaluation_seed_manifest = {
+            "schema_version": 1,
+            "protocol": config.evaluation_seed_protocol,
+            "periodic_validation": {
+                "task_base_seeds": list(validation_task_seeds),
+                "reused_at_every_checkpoint": fixed_evaluation_cohorts,
+                "training_rng_state_restored": True,
+            },
+            "final_evaluation": {
+                "task_base_seeds": list(final_task_seeds),
+                "held_out_from_periodic_validation": fixed_evaluation_cohorts,
+                "training_rng_state_restored": True,
+            },
+            "cohorts_disjoint_by_seed_sequence": fixed_evaluation_cohorts,
+            "evaluation_transitions_enter_replay": False,
+        }
+        evaluation_seed_path = log_dir / "evaluation_seed_manifest.json"
+        temporary_evaluation_seed_path = evaluation_seed_path.with_suffix(
+            ".json.tmp"
+        )
+        temporary_evaluation_seed_path.write_text(
+            json.dumps(evaluation_seed_manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary_evaluation_seed_path, evaluation_seed_path)
         if resume_payload is not None:
             resume_metadata = {
                 "schema_version": 1,
@@ -1661,6 +1875,7 @@ if __name__ == "__main__":
     total_env_steps = 0        # number of *real* environment interactions so far
 
     best_rews_mean = float("-inf")
+    best_validation_seen_task_raw_mean = float("-inf")
     global_step = 0            # gradient updates so far  training iterations
     shared_core_frozen = resume_payload is not None
     capture_kan_parameter_values = None
@@ -1858,12 +2073,20 @@ if __name__ == "__main__":
         # Evaluation games
         eval_started = _stage_clock(profile_stages)
         if epoch % 10 == 0 or epoch + 1 in milestone_completed_epochs:
+            periodic_task_seeds = (
+                validation_task_seeds
+                if fixed_evaluation_cohorts
+                else tuple(
+                    _next_environment_seed(validation_environment_seed_rng)
+                    for _ in envs.eval_funcs()
+                )
+            )
             eval_results_mean, eval_results_std = _evaluate_policy_tasks(
                 config,
                 wm,
                 aco,
                 envs.eval_funcs(),
-                evaluation_environment_seed_rng,
+                periodic_task_seeds,
                 actor_critic_bank=actor_critic_bank,
                 distributed_context=distributed_context,
             )
@@ -1896,6 +2119,42 @@ if __name__ == "__main__":
                 print(f"Eval stds: {eval_results_std}")
                 print(f"Eval raw means: {eval_raw_mean}")
                 print(f"Eval raw stds: {eval_raw_std}")
+                if evaluation_snapshot_dir is not None and epoch > 0:
+                    snapshot_path = _save_task_bank_evaluation_snapshot(
+                        evaluation_snapshot_dir,
+                        config=config,
+                        wm=wm,
+                        actor_critic_bank=actor_critic_bank,
+                        completed_epochs=epoch,
+                        world_model_updates=global_step,
+                        actor_critic_updates=epoch * config.ac_train_steps,
+                        total_env_steps=total_env_steps,
+                        task_seeds=periodic_task_seeds,
+                        scaled_means=eval_results_mean,
+                        scaled_stds=eval_results_std,
+                        raw_means=eval_raw_mean,
+                        raw_stds=eval_raw_std,
+                        cohort="periodic_validation",
+                    )
+                    swap_sched = int(config.esc.kwargs["swap_sched"])
+                    seen_task_count = min(
+                        len(eval_raw_mean), epoch // swap_sched + 1
+                    )
+                    seen_task_raw_mean = float(
+                        np.mean(eval_raw_mean[:seen_task_count])
+                    )
+                    if (
+                        seen_task_raw_mean
+                        > best_validation_seen_task_raw_mean
+                    ):
+                        best_validation_seen_task_raw_mean = seen_task_raw_mean
+                        _write_best_validation_snapshot(
+                            evaluation_snapshot_dir,
+                            snapshot_path=snapshot_path,
+                            completed_epochs=epoch,
+                            seen_task_count=seen_task_count,
+                            seen_task_raw_mean=seen_task_raw_mean,
+                        )
 
         eval_seconds = _stage_elapsed(eval_started, profile_stages)
 
@@ -2070,6 +2329,33 @@ if __name__ == "__main__":
         world_model_seconds = _stage_elapsed(world_model_started, profile_stages)
         actor_started = _stage_clock(profile_stages)
 
+        scheduled_ac_lr, scheduled_entropy_scale, actor_task_epoch = (
+            _actor_critic_schedule_values(config, epoch)
+        )
+        actor_update_counter_before_epoch = epoch * config.ac_train_steps
+        writer.add_scalar(
+            "ActorCriticSchedule/learning_rate",
+            scheduled_ac_lr,
+            actor_update_counter_before_epoch,
+        )
+        writer.add_scalar(
+            "ActorCriticSchedule/entropy_scale",
+            scheduled_entropy_scale,
+            actor_update_counter_before_epoch,
+        )
+        writer.add_scalar(
+            "ActorCriticSchedule/task_epoch",
+            actor_task_epoch,
+            actor_update_counter_before_epoch,
+        )
+        if distributed_context.is_primary:
+            print(
+                "[actor-schedule] "
+                f"epoch={epoch} task_epoch={actor_task_epoch} "
+                f"kind={config.ac_schedule} lr={scheduled_ac_lr:.8g} "
+                f"entropy_scale={scheduled_entropy_scale:.8g}"
+            )
+
         actor_critic_kwargs = {
             "dream_steps": config.ac_dream_steps,
             "actor_network": config.actor_network,
@@ -2098,7 +2384,7 @@ if __name__ == "__main__":
             "grad_clip": config.ac_grad_clip,
             "discount": config.ac_discount,
             "lam": config.ac_lambda,
-            "entropy_scale": config.ac_entropy_scale,
+            "entropy_scale": scheduled_entropy_scale,
             "return_norm_decay": config.ac_return_norm_decay,
             "persistent_return_norm": config.ac_persistent_return_norm,
             "slow_critic_regularizer": config.ac_slow_critic_regularizer,
@@ -2168,7 +2454,7 @@ if __name__ == "__main__":
                     task_steps,
                     local_ac_train_sync,
                     aco=actor_critic_bank.get(task_id),
-                    lr=config.ac_lr,
+                    lr=scheduled_ac_lr,
                     task_id=task_id,
                     **actor_critic_kwargs,
                 )
@@ -2197,7 +2483,11 @@ if __name__ == "__main__":
                 replay,
                 config.ac_train_steps,
                 local_ac_train_sync,
-                lr=config.ac_fresh_lr,
+                lr=(
+                    config.ac_fresh_lr
+                    if config.ac_schedule == "constant"
+                    else scheduled_ac_lr
+                ),
                 **actor_critic_kwargs,
             )
         else:
@@ -2207,7 +2497,7 @@ if __name__ == "__main__":
                 config.ac_train_steps,
                 local_ac_train_sync,
                 aco=aco,
-                lr=config.ac_lr,
+                lr=scheduled_ac_lr,
                 **actor_critic_kwargs,
             )
 
@@ -2327,12 +2617,20 @@ if __name__ == "__main__":
             )
             eval_funcs = eval_funcs[:seen_tasks]
             task_configs = task_configs[:seen_tasks]
+        final_eval_task_seeds = (
+            final_task_seeds[: len(eval_funcs)]
+            if fixed_evaluation_cohorts
+            else tuple(
+                _next_environment_seed(validation_environment_seed_rng)
+                for _ in eval_funcs
+            )
+        )
         final_scaled_means, final_scaled_stds = _evaluate_policy_tasks(
             config,
             wm,
             aco,
             eval_funcs,
-            evaluation_environment_seed_rng,
+            final_eval_task_seeds,
             actor_critic_bank=actor_critic_bank,
             distributed_context=distributed_context,
         )
@@ -2342,6 +2640,14 @@ if __name__ == "__main__":
         final_evaluation = {
             "schema_version": 1,
             "evaluation_after_completed_epochs": config.epochs,
+            "seed_cohort": (
+                "heldout_final"
+                if fixed_evaluation_cohorts
+                else "advancing_evaluation_stream"
+            ),
+            "seed_cohort_used_for_periodic_validation": (
+                not fixed_evaluation_cohorts
+            ),
             "policy": (
                 "deterministic_argmax_and_latent_mode"
                 if config.uses_task_experts
@@ -2408,6 +2714,23 @@ if __name__ == "__main__":
             print(f"Final eval scaled stds: {final_scaled_stds}")
             print(f"Final eval raw means: {final_raw_means}")
             print(f"Final eval raw stds: {final_raw_stds}")
+            if evaluation_snapshot_dir is not None:
+                _save_task_bank_evaluation_snapshot(
+                    evaluation_snapshot_dir,
+                    config=config,
+                    wm=wm,
+                    actor_critic_bank=actor_critic_bank,
+                    completed_epochs=config.epochs,
+                    world_model_updates=global_step,
+                    actor_critic_updates=config.epochs * config.ac_train_steps,
+                    total_env_steps=total_env_steps,
+                    task_seeds=final_eval_task_seeds,
+                    scaled_means=final_scaled_means,
+                    scaled_stds=final_scaled_stds,
+                    raw_means=final_raw_means,
+                    raw_stds=final_raw_stds,
+                    cohort="heldout_final",
+                )
     writer.close()
     if swanlab_run is not None:
         import swanlab

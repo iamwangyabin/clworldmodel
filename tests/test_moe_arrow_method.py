@@ -239,6 +239,45 @@ class MoeArrowMethodTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires bfloat16"):
             Config.from_dict(invalid)
 
+    def test_cnn_fullbank_task_cosine_schedule_is_explicit_and_isolated(self) -> None:
+        data = self._cnn_fullbank_config_data()
+        data.update(
+            {
+                "ac_schedule": "task_cosine_decay",
+                "ac_decay_start_task_epoch": 40,
+                "ac_decay_end_task_epoch": 90,
+                "ac_final_lr": 2.5e-5,
+                "ac_final_entropy_scale": 5e-5,
+                "evaluation_seed_protocol": "fixed_validation_heldout_final",
+            }
+        )
+        config = Config.from_dict(data)
+
+        self.assertEqual(config.ac_schedule, "task_cosine_decay")
+        self.assertEqual(config.ac_decay_end_task_epoch, 90)
+        self.assertEqual(
+            config.evaluation_seed_protocol,
+            "fixed_validation_heldout_final",
+        )
+
+        invalid = self._fullbank_config_data()
+        for key in (
+            "ac_schedule",
+            "ac_decay_start_task_epoch",
+            "ac_decay_end_task_epoch",
+            "ac_final_lr",
+            "ac_final_entropy_scale",
+            "evaluation_seed_protocol",
+        ):
+            invalid[key] = data[key]
+        with self.assertRaisesRegex(ValueError, "only for current-only CNN-FullBank"):
+            Config.from_dict(invalid)
+
+        invalid = data.copy()
+        invalid["ac_decay_end_task_epoch"] = 91
+        with self.assertRaisesRegex(ValueError, "finish within each sequential task"):
+            Config.from_dict(invalid)
+
         invalid = self._cnn_fullbank_config_data()
         invalid["replay_observation_dtype"] = "float32"
         with self.assertRaisesRegex(ValueError, "requires uint8"):

@@ -102,6 +102,14 @@ class BatchProfile:
     optimizer_update_multiplier: float
 
 
+@dataclass(frozen=True)
+class ActorStabilityProfile:
+    protocol_suffix: str
+    output_suffix: str
+    config_overrides: dict[str, int | float | str]
+    hypothesis: str
+
+
 PRECISION_PROFILES = {
     "fp32-tf32": PrecisionProfile(
         compute_dtype="float32",
@@ -193,6 +201,29 @@ BATCH_PROFILES = {
         classification="compute_saturation_large_batch_ablation",
         learning_rate_rule="unchanged_from_fixed_batch",
         optimizer_update_multiplier=1.0,
+    ),
+}
+
+
+ACTOR_STABILITY_PROFILES = {
+    "late-cosine-40-90": ActorStabilityProfile(
+        protocol_suffix="ActorLateCosine40To90",
+        output_suffix="actor_late_cosine_40_90",
+        config_overrides={
+            "ac_schedule": "task_cosine_decay",
+            "ac_decay_start_task_epoch": 40,
+            "ac_decay_end_task_epoch": 90,
+            "ac_final_lr": 2.5e-5,
+            "ac_final_entropy_scale": 5e-5,
+            "evaluation_seed_protocol": "fixed_validation_heldout_final",
+        },
+        hypothesis=(
+            "After 40 task-local epochs, cosine-decaying the Actor-Critic learning "
+            "rate from 1e-4 to 2.5e-5 and entropy scale from 3e-4 to 5e-5 will "
+            "reduce late policy drift. Reusing one periodic validation seed cohort, "
+            "holding out the final cohort, and saving exact evaluated task-bank "
+            "weights separates regression from evaluation-seed noise."
+        ),
     ),
 }
 
@@ -473,6 +504,14 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--actor-stability-profile",
+        choices=tuple(ACTOR_STABILITY_PROFILES),
+        help=(
+            "Named CNN-FullBank actor stabilization and evaluation-cohort "
+            "protocol. Requires x4-full-updates on four devices"
+        ),
+    )
+    parser.add_argument(
         "--task-duration-multiplier",
         type=int,
         choices=(1, 2, 4),
@@ -505,7 +544,7 @@ def _resolved_config(
     precision_profile: PrecisionProfile = PRECISION_PROFILES["fp32-tf32"],
     data_parallel_world_size: int = 1,
     task_duration_epochs: int | None = None,
-    config_overrides: dict[str, int | float] | None = None,
+    config_overrides: dict[str, int | float | str] | None = None,
 ) -> dict:
     config = json.loads(json.dumps(source))
     config.update(
@@ -573,6 +612,12 @@ def _resolved_config(
             "dinov3_feature_std_floor": DINOV3_FEATURE_STD_FLOOR,
             "replay_observation_dtype": variant.replay_observation_dtype,
             "actor_network": "mlp",
+            "ac_schedule": "constant",
+            "ac_decay_start_task_epoch": 40,
+            "ac_decay_end_task_epoch": 90,
+            "ac_final_lr": 2.5e-5,
+            "ac_final_entropy_scale": 5e-5,
+            "evaluation_seed_protocol": "advancing",
             "fresh_ac": False,
             "random_policy": variant.random_policy,
             "residual_correction": "none",
@@ -624,6 +669,16 @@ def main(*, default_method: str = "moe") -> int:
             parser.error("--batch-profile is validated only for cnn-fullbank")
         if args.devices != 4:
             parser.error("--batch-profile requires --devices 4")
+    if args.actor_stability_profile is not None:
+        if args.method != "cnn-fullbank":
+            parser.error(
+                "--actor-stability-profile is validated only for cnn-fullbank"
+            )
+        if args.devices != 4 or args.batch_profile != "x4-full-updates":
+            parser.error(
+                "--actor-stability-profile requires four devices and "
+                "--batch-profile x4-full-updates"
+            )
     if args.task_duration_multiplier > 1:
         if args.method != "cnn-fullbank" or args.batch_profile is None:
             parser.error(
@@ -680,11 +735,18 @@ def main(*, default_method: str = "moe") -> int:
         if args.batch_profile is not None
         else None
     )
-    config_overrides: dict[str, int | float] = {}
+    actor_stability_profile = (
+        ACTOR_STABILITY_PROFILES[args.actor_stability_profile]
+        if args.actor_stability_profile is not None
+        else None
+    )
+    config_overrides: dict[str, int | float | str] = {}
     if tuning_profile is not None:
         config_overrides.update(tuning_profile["config_overrides"])
     if batch_profile is not None:
         config_overrides.update(batch_profile.config_overrides)
+    if actor_stability_profile is not None:
+        config_overrides.update(actor_stability_profile.config_overrides)
     config = _resolved_config(
         source_config,
         model_path=model_path,
@@ -727,6 +789,13 @@ def main(*, default_method: str = "moe") -> int:
         protocol = protocol.replace(
             "-Atari-", f"-{batch_profile.protocol_suffix}-Atari-"
         )
+    if actor_stability_profile is not None:
+        method += f"-{actor_stability_profile.protocol_suffix}"
+        role += "-actor-stability-pilot"
+        output_prefix += f"_{actor_stability_profile.output_suffix}"
+        protocol = protocol.replace(
+            "-Atari-", f"-{actor_stability_profile.protocol_suffix}-Atari-"
+        )
     if args.task_duration_multiplier > 1:
         duration_suffix = f"TaskDurationX{args.task_duration_multiplier}"
         method += f"-{duration_suffix}"
@@ -758,6 +827,11 @@ def main(*, default_method: str = "moe") -> int:
         replay_mmap_root / output_dir.name
         if replay_mmap_root is not None
         else output_dir / "mmap_replay"
+    )
+    evaluation_snapshot_dir = (
+        output_dir / "evaluation_snapshots"
+        if actor_stability_profile is not None
+        else None
     )
 
     env = os.environ.copy()
@@ -808,6 +882,10 @@ def main(*, default_method: str = "moe") -> int:
             "--evaluate-final",
         ]
     )
+    if evaluation_snapshot_dir is not None:
+        command.extend(
+            ("--evaluation-snapshot-dir", str(evaluation_snapshot_dir))
+        )
     if args.profile_stages:
         command.append("--profile-stages")
     if args.swanlab_project:
@@ -1106,6 +1184,23 @@ def main(*, default_method: str = "moe") -> int:
             if batch_profile is not None
             else None
         ),
+        "actor_stability": (
+            {
+                "profile": args.actor_stability_profile,
+                "classification": "task_local_late_actor_stability_pilot",
+                "hypothesis": actor_stability_profile.hypothesis,
+                "config_overrides": dict(
+                    actor_stability_profile.config_overrides
+                ),
+                "schedule_axis": "completed epochs within each task",
+                "schedule_uses_evaluation_results": False,
+                "world_model_hyperparameters_unchanged": True,
+                "actor_critic_update_count_unchanged": True,
+                "actor_context_frame_use_unchanged": True,
+            }
+            if actor_stability_profile is not None
+            else None
+        ),
         "distributed_execution": {
             "enabled": args.devices > 1,
             "world_size": args.devices,
@@ -1288,6 +1383,17 @@ def main(*, default_method: str = "moe") -> int:
             "old_task_parameters_frozen": variant.full_task_experts,
             "learning_rate": config.get("ac_lr", 1e-4),
             "entropy_scale": config.get("ac_entropy_scale", 3e-4),
+            "schedule": config.get("ac_schedule", "constant"),
+            "decay_start_task_epoch": config.get(
+                "ac_decay_start_task_epoch", 40
+            ),
+            "decay_end_task_epoch": config.get(
+                "ac_decay_end_task_epoch", 90
+            ),
+            "final_learning_rate": config.get("ac_final_lr", 2.5e-5),
+            "final_entropy_scale": config.get(
+                "ac_final_entropy_scale", 5e-5
+            ),
             "total_updates_unchanged": (
                 batch_profile is None
                 or batch_profile.optimizer_update_multiplier == 1.0
@@ -1452,9 +1558,29 @@ def main(*, default_method: str = "moe") -> int:
             "policy": "deterministic_argmax_and_latent_mode",
             "all_configured_tasks_at_periodic_checkpoints": True,
             "evaluation_data_enters_replay": False,
+            "seed_protocol": config.get(
+                "evaluation_seed_protocol", "advancing"
+            ),
+            "periodic_validation_cohort_reused": (
+                config.get("evaluation_seed_protocol")
+                == "fixed_validation_heldout_final"
+            ),
+            "final_cohort_held_out": (
+                config.get("evaluation_seed_protocol")
+                == "fixed_validation_heldout_final"
+            ),
         },
         "checkpointing": {
             "final_world_model_and_actor_bank": True,
+            "evaluation_snapshot_dir": (
+                str(evaluation_snapshot_dir)
+                if evaluation_snapshot_dir is not None
+                else None
+            ),
+            "exact_periodic_evaluated_task_bank_weights": (
+                evaluation_snapshot_dir is not None
+            ),
+            "best_validation_pointer": evaluation_snapshot_dir is not None,
             "resumable": False,
             "reason": "replay and optimizer states are not serialized by vendored ARROW",
         },

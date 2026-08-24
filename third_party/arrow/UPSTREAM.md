@@ -249,6 +249,18 @@ documented here, covered by focused parity tests, and followed by regenerating
     tests cover strict config isolation, encoder copy/routing/gradients, frozen
     old encoders and decoders, 2/4-device acceptance, no-DINO launching, exact
     parameter accounting, and unchanged global budgets.
+35. Add the opt-in CNN-FullBank `task_cosine_decay` Actor-Critic schedule and
+    fixed-cohort evaluation snapshots for the separately named late-stability
+    pilot. The default schedule and advancing evaluation-seed stream remain
+    unchanged. The pilot keeps all interaction, replay, batch, sampled-frame,
+    and update budgets, holds Actor-Critic LR/entropy constant through task
+    epoch 40, and cosine decays them to fixed endpoints at task epoch 90. A
+    fixed periodic-validation cohort is disjoint from the held-out final
+    cohort. Exact evaluated world-model and complete Actor-Critic-bank weights
+    are atomically saved with checksums and explicitly omit the state required
+    for resumable training. Focused tests cover seed-stream separation, the
+    task-local schedule and reset, non-resumable snapshot payloads, protocol
+    rejection, and launcher accounting.
 
 ## Known issues at import
 

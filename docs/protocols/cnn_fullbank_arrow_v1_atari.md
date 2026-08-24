@@ -106,6 +106,38 @@ the run consumes roughly four times the optimization FLOPs and sample uses.
 Measure examples per second and acquisition alongside epoch wall time; this is
 additional training compute, not a transparent four-GPU speedup.
 
+### Late actor-stability pilot
+
+The first `x4-full-updates` seed-0 Task 1 pilot reached a periodic MsPacman raw
+mean of `2008.125 +/- 397.794` after 50 completed epochs, then finished at
+`1563.75 +/- 433.732` after 90. That run did not pass the predeclared final
+gate. Its periodic evaluations also advanced to a new environment-seed cohort
+at every checkpoint, so the peak-to-final difference combines policy change
+with evaluation-cohort noise.
+
+`--actor-stability-profile late-cosine-40-90` is a separately named controlled
+pilot. It preserves environment interaction, replay, world-model updates,
+Actor-Critic updates, global batches, and sampled-frame use. During each
+90-epoch task it keeps the Actor-Critic learning rate and entropy coefficient at
+`1e-4` and `3e-4` through task epoch 40, then cosine decays them to `2.5e-5`
+and `5e-5` at task epoch 90. The schedule depends only on task-local update
+position, never on evaluation return.
+
+This profile also makes evaluation auditable:
+
+- every periodic checkpoint reuses one fixed validation seed cohort;
+- final evaluation uses a disjoint held-out seed cohort;
+- the two cohort seed lists are persisted in `evaluation_seed_manifest.json`;
+- exact world-model and complete Actor-Critic-bank inference weights for each
+  evaluated checkpoint are atomically saved under `evaluation_snapshots/`; and
+- `best_validation_snapshot.json` points to the maximum mean raw return over
+  seen tasks, but does not turn that validation result into a final test claim.
+
+These snapshots are diagnostic inference artifacts, not resumable checkpoints:
+they omit replay, optimizers, RNG, task-scheduler state, and counters required
+to continue training equivalently. The held-out final score remains the Task 1
+acquisition gate.
+
 ### Extended-duration acquisition
 
 `--task-duration-multiplier 2` is a separately named task-1 acquisition
@@ -141,6 +173,7 @@ python scripts/run_moe_arrow_atari.py \
   --method cnn-fullbank \
   --devices 4 \
   --batch-profile x4-full-updates \
+  --actor-stability-profile late-cosine-40-90 \
   --replay-mmap-root /dev/shm/clworldmodel-replay \
   --seed 0 \
   --task-prefix-length 1 \

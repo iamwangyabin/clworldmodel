@@ -610,7 +610,6 @@ class TrainingLauncherTests(unittest.TestCase):
             "compute-saturation x4; batches grow while optimizer update counts "
             "remain fixed",
         )
-
         precision = launch["precision"]
         self.assertTrue(precision["optimizer_update_budgets_unchanged"])
         self.assertFalse(precision["optimization_sample_budgets_unchanged"])
@@ -625,6 +624,89 @@ class TrainingLauncherTests(unittest.TestCase):
             launch["actor_critic"]["total_context_frame_uses_unchanged"]
         )
         self.assertFalse(output_dir.exists())
+
+    def test_cnn_fullbank_late_actor_stability_is_predeclared_and_snapshotted(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary) / "cnn_fullbank_actor_stability_run"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--task-prefix-length",
+                    "1",
+                    "--devices",
+                    "4",
+                    "--batch-profile",
+                    "x4-full-updates",
+                    "--actor-stability-profile",
+                    "late-cosine-40-90",
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+        self.assertIn("ActorLateCosine40To90", launch["method"])
+        stability = launch["actor_stability"]
+        self.assertEqual(stability["profile"], "late-cosine-40-90")
+        self.assertFalse(stability["schedule_uses_evaluation_results"])
+        self.assertTrue(stability["actor_critic_update_count_unchanged"])
+        actor = launch["actor_critic"]
+        self.assertEqual(actor["schedule"], "task_cosine_decay")
+        self.assertEqual(actor["decay_start_task_epoch"], 40)
+        self.assertEqual(actor["decay_end_task_epoch"], 90)
+        self.assertEqual(actor["final_learning_rate"], 2.5e-5)
+        self.assertEqual(actor["final_entropy_scale"], 5e-5)
+        evaluation = launch["evaluation"]
+        self.assertEqual(
+            evaluation["seed_protocol"], "fixed_validation_heldout_final"
+        )
+        self.assertTrue(evaluation["periodic_validation_cohort_reused"])
+        self.assertTrue(evaluation["final_cohort_held_out"])
+        checkpointing = launch["checkpointing"]
+        snapshot_dir = (output_dir / "evaluation_snapshots").resolve()
+        self.assertEqual(
+            checkpointing["evaluation_snapshot_dir"], str(snapshot_dir)
+        )
+        self.assertTrue(checkpointing["exact_periodic_evaluated_task_bank_weights"])
+        command = launch["command"]
+        index = command.index("--evaluation-snapshot-dir")
+        self.assertEqual(command[index + 1], str(snapshot_dir))
+
+    def test_actor_stability_requires_compute_saturated_cnn_dp4(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/run_moe_arrow_atari.py",
+                "--seed",
+                "0",
+                "--method",
+                "cnn-fullbank",
+                "--task-prefix-length",
+                "1",
+                "--devices",
+                "4",
+                "--actor-stability-profile",
+                "late-cosine-40-90",
+                "--dry-run",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--batch-profile x4-full-updates", result.stderr)
 
     def test_cnn_fullbank_x4_extended_duration_records_extra_budget_and_scratch(
         self,

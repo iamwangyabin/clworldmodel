@@ -54,6 +54,11 @@ ActorNetwork = Literal[
     "fast_kan_ac_stable",
 ]
 ActorCriticOptimizer = Literal["adam", "laprop"]
+ActorCriticSchedule = Literal["constant", "task_cosine_decay"]
+EvaluationSeedProtocol = Literal[
+    "advancing",
+    "fixed_validation_heldout_final",
+]
 ComputeDType = Literal["float32", "bfloat16"]
 ReplayObservationDType = Literal["float32", "uint8"]
 DataParallelWorldSize = Literal[1, 2, 4]
@@ -231,6 +236,7 @@ class Config(Serialisable):
     wall_time_optimisation: bool = False
     compute_dtype: ComputeDType = "float32"
     data_parallel_world_size: DataParallelWorldSize = 1
+    evaluation_seed_protocol: EvaluationSeedProtocol = "advancing"
 
     actor_network: ActorNetwork = "mlp"
     actor_kan_hidden_features: int = 64
@@ -251,6 +257,11 @@ class Config(Serialisable):
 
     ac_optimizer: ActorCriticOptimizer = "adam"
     ac_lr: float = 1e-4
+    ac_schedule: ActorCriticSchedule = "constant"
+    ac_decay_start_task_epoch: int = 40
+    ac_decay_end_task_epoch: int = 90
+    ac_final_lr: float = 2.5e-5
+    ac_final_entropy_scale: float = 5e-5
     ac_fresh_lr: float = 4e-4
     ac_optimizer_eps: float = 1e-8
     ac_optimizer_beta1: float = 0.9
@@ -358,6 +369,13 @@ class Config(Serialisable):
         )
         if self.data_parallel_world_size not in {1, 2, 4}:
             raise ValueError("data_parallel_world_size must be one of 1, 2, or 4")
+        if self.evaluation_seed_protocol not in {
+            "advancing",
+            "fixed_validation_heldout_final",
+        }:
+            raise ValueError(
+                f"Unknown evaluation seed protocol: {self.evaluation_seed_protocol!r}"
+            )
         if self.data_parallel_world_size > 1:
             if not (is_dino_convbank or is_cnn_fullbank):
                 raise ValueError(
@@ -931,6 +949,36 @@ class Config(Serialisable):
             raise ValueError(f"Unknown actor-critic optimizer: {self.ac_optimizer!r}")
         if self.ac_lr <= 0 or self.ac_fresh_lr <= 0:
             raise ValueError("Actor-critic learning rates must be positive")
+        if self.ac_schedule not in {"constant", "task_cosine_decay"}:
+            raise ValueError(f"Unknown actor-critic schedule: {self.ac_schedule!r}")
+        if self.ac_schedule == "task_cosine_decay":
+            if self.ac_decay_start_task_epoch < 0:
+                raise ValueError("Actor-critic decay start must be non-negative")
+            if self.ac_decay_end_task_epoch <= self.ac_decay_start_task_epoch:
+                raise ValueError("Actor-critic decay end must exceed its start")
+            if self.ac_final_lr <= 0 or self.ac_final_lr > self.ac_lr:
+                raise ValueError(
+                    "Actor-critic final learning rate must lie in (0, ac_lr]"
+                )
+            if not 0 <= self.ac_final_entropy_scale <= self.ac_entropy_scale:
+                raise ValueError(
+                    "Actor-critic final entropy scale must lie in "
+                    "[0, ac_entropy_scale]"
+                )
+            if not is_cnn_fullbank or self.dino_fullbank_current_task_fraction != 1.0:
+                raise ValueError(
+                    "task_cosine_decay is validated only for current-only "
+                    "CNN-FullBank actor training"
+                )
+            swap_sched = self.esc.kwargs.get("swap_sched")
+            if (
+                self.esc.env_schedule_type is not SequentialEnvironments
+                or not isinstance(swap_sched, int)
+                or swap_sched < self.ac_decay_end_task_epoch
+            ):
+                raise ValueError(
+                    "task_cosine_decay must finish within each sequential task"
+                )
         if self.ac_optimizer_eps <= 0:
             raise ValueError("Actor-critic optimizer epsilon must be positive")
         if not 0 <= self.ac_optimizer_beta1 < 1 or not 0 <= self.ac_optimizer_beta2 < 1:

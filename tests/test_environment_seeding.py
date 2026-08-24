@@ -6,6 +6,8 @@ import random
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -28,17 +30,104 @@ if torch is not None:
 @unittest.skipIf(torch is None, "requires the pinned PyTorch experiment environment")
 class EnvironmentSeedingTests(unittest.TestCase):
     def test_collection_and_evaluation_seed_streams_are_stable_and_disjoint(self) -> None:
-        collect_a, evaluate_a = train._environment_seed_streams(123456789)
-        collect_b, evaluate_b = train._environment_seed_streams(123456789)
+        collect_a, validate_a, final_a = train._environment_seed_streams(123456789)
+        collect_b, validate_b, final_b = train._environment_seed_streams(123456789)
 
         collect_values_a = [train._next_environment_seed(collect_a) for _ in range(4)]
         collect_values_b = [train._next_environment_seed(collect_b) for _ in range(4)]
-        evaluate_values_a = [train._next_environment_seed(evaluate_a) for _ in range(4)]
-        evaluate_values_b = [train._next_environment_seed(evaluate_b) for _ in range(4)]
+        validate_values_a = [train._next_environment_seed(validate_a) for _ in range(4)]
+        validate_values_b = [train._next_environment_seed(validate_b) for _ in range(4)]
+        final_values_a = [train._next_environment_seed(final_a) for _ in range(4)]
+        final_values_b = [train._next_environment_seed(final_b) for _ in range(4)]
 
         self.assertEqual(collect_values_a, collect_values_b)
-        self.assertEqual(evaluate_values_a, evaluate_values_b)
-        self.assertNotEqual(collect_values_a, evaluate_values_a)
+        self.assertEqual(validate_values_a, validate_values_b)
+        self.assertEqual(final_values_a, final_values_b)
+        cohorts = {
+            tuple(collect_values_a),
+            tuple(validate_values_a),
+            tuple(final_values_a),
+        }
+        self.assertEqual(len(cohorts), 3)
+
+    def test_task_cosine_actor_schedule_restarts_per_task_without_eval_input(
+        self,
+    ) -> None:
+        config = SimpleNamespace(
+            esc=SimpleNamespace(kwargs={"swap_sched": 90}),
+            ac_schedule="task_cosine_decay",
+            ac_lr=1e-4,
+            ac_entropy_scale=3e-4,
+            ac_decay_start_task_epoch=40,
+            ac_decay_end_task_epoch=90,
+            ac_final_lr=2.5e-5,
+            ac_final_entropy_scale=5e-5,
+        )
+
+        self.assertEqual(
+            train._actor_critic_schedule_values(config, 39),
+            (1e-4, 3e-4, 40),
+        )
+        midpoint_lr, midpoint_entropy, task_epoch = (
+            train._actor_critic_schedule_values(config, 64)
+        )
+        self.assertEqual(task_epoch, 65)
+        self.assertAlmostEqual(midpoint_lr, 6.25e-5)
+        self.assertAlmostEqual(midpoint_entropy, 1.75e-4)
+        self.assertEqual(
+            train._actor_critic_schedule_values(config, 89),
+            (2.5e-5, 5e-5, 90),
+        )
+        self.assertEqual(
+            train._actor_critic_schedule_values(config, 90),
+            (1e-4, 3e-4, 1),
+        )
+
+    def test_task_bank_evaluation_snapshot_is_atomic_and_non_resumable(self) -> None:
+        class FakeConfig:
+            algorithm = "arrow"
+            seed = 7
+
+            @staticmethod
+            def to_dict():
+                return {"algorithm": "arrow", "seed": 7}
+
+        world_model = torch.nn.Linear(2, 3)
+        actor_state = {"weight": torch.arange(4, dtype=torch.float32)}
+        actor_bank = SimpleNamespace(
+            inference_state_dict=lambda: {
+                "schema_version": 1,
+                "artifact_kind": "test_actor_bank",
+                "resumable": False,
+                "tasks": {"0": actor_state},
+            }
+        )
+        with TemporaryDirectory() as temporary:
+            path = train._save_task_bank_evaluation_snapshot(
+                Path(temporary),
+                config=FakeConfig(),
+                wm=world_model,
+                actor_critic_bank=actor_bank,
+                completed_epochs=50,
+                world_model_updates=50_000,
+                actor_critic_updates=40_000,
+                total_env_steps=1_000_000,
+                task_seeds=[11],
+                scaled_means=[20.0],
+                scaled_stds=[4.0],
+                raw_means=[2_000.0],
+                raw_stds=[400.0],
+                cohort="periodic_validation",
+            )
+            payload = torch.load(path, map_location="cpu", weights_only=False)
+
+            self.assertFalse(payload["resumable"])
+            self.assertEqual(payload["completed_epochs"], 50)
+            self.assertEqual(payload["task_base_seeds"], [11])
+            self.assertEqual(payload["evaluation"][0]["raw_return_mean"], 2_000.0)
+            self.assertIn("optimizers", payload["omitted_state"])
+            self.assertTrue(path.with_suffix(".pt.sha256").is_file())
+            self.assertFalse(path.with_suffix(".pt.tmp").exists())
 
     def test_worker_reset_and_action_seeds_are_stable_and_disjoint(self) -> None:
         resets_a, actions_a = generate_trajectory._environment_worker_seeds(17, 4)
