@@ -97,6 +97,9 @@ class BatchProfile:
     output_suffix: str
     config_overrides: dict[str, int | float]
     hypothesis: str
+    classification: str
+    learning_rate_rule: str
+    optimizer_update_multiplier: float
 
 
 PRECISION_PROFILES = {
@@ -139,6 +142,9 @@ BATCH_PROFILES = {
             "steps preserves sampled-frame use, reduces DDP synchronizations, "
             "and linear learning-rate scaling preserves update magnitude."
         ),
+        classification="sample_matched_large_batch_ablation",
+        learning_rate_rule="linear_with_global_batch_scale",
+        optimizer_update_multiplier=0.5,
     ),
     "x4-linear-lr": BatchProfile(
         scale=4,
@@ -160,6 +166,33 @@ BATCH_PROFILES = {
             "synchronization, and linear learning-rate scaling preserves "
             "update magnitude."
         ),
+        classification="sample_matched_large_batch_ablation",
+        learning_rate_rule="linear_with_global_batch_scale",
+        optimizer_update_multiplier=0.25,
+    ),
+    "x4-full-updates": BatchProfile(
+        scale=4,
+        protocol_suffix="LargeBatchX4FullUpdates",
+        output_suffix="large_batch_x4_full_updates",
+        config_overrides={
+            "mb_n_size": 64,
+            "pretrain_mb_n_size": 64,
+            "steps_per_batch": 1_000,
+            "pretrain_steps": 30_000,
+            "ac_train_sync": 512,
+            "ac_train_steps": 800,
+            "wm_lr": 1e-4,
+            "ac_lr": 1e-4,
+        },
+        hypothesis=(
+            "Keeping the fixed-batch optimizer update counts and learning "
+            "rates while quadrupling each global batch gives every DP4 rank "
+            "the original single-device local batch, prioritizing accelerator "
+            "occupancy and acquisition over matched optimization sample use."
+        ),
+        classification="compute_saturation_large_batch_ablation",
+        learning_rate_rule="unchanged_from_fixed_batch",
+        optimizer_update_multiplier=1.0,
     ),
 }
 
@@ -434,9 +467,9 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         "--batch-profile",
         choices=tuple(BATCH_PROFILES),
         help=(
-            "Named sample-matched large-batch ablation. Requires cnn-fullbank "
-            "with --devices 4; sampled replay/context frames and environment "
-            "interaction remain fixed while optimizer steps decrease"
+            "Named large-batch ablation. Requires cnn-fullbank with --devices "
+            "4; each profile records whether optimizer steps and sampled "
+            "replay/context-frame budgets change"
         ),
     )
     parser.add_argument(
@@ -681,7 +714,7 @@ def main(*, default_method: str = "moe") -> int:
     if args.devices > 1:
         method += f"-DP{args.devices}"
         role += (
-            f"-sample-matched-large-batch-ddp{args.devices}"
+            f"-{batch_profile.classification.replace('_', '-')}-ddp{args.devices}"
             if batch_profile is not None
             else f"-fixed-global-batch-ddp{args.devices}"
         )
@@ -1003,10 +1036,12 @@ def main(*, default_method: str = "moe") -> int:
                 ),
                 "optimizer_update_multiplier_vs_90_epoch_fixed_batch": {
                     "world_model": (
-                        args.task_duration_multiplier / batch_profile.scale
+                        args.task_duration_multiplier
+                        * batch_profile.optimizer_update_multiplier
                     ),
                     "actor_critic": (
-                        args.task_duration_multiplier / batch_profile.scale
+                        args.task_duration_multiplier
+                        * batch_profile.optimizer_update_multiplier
                     ),
                 },
                 "baseline_comparability": (
@@ -1039,18 +1074,34 @@ def main(*, default_method: str = "moe") -> int:
         "batch_tuning": (
             {
                 "profile": args.batch_profile,
-                "classification": "sample_matched_large_batch_ablation",
+                "classification": batch_profile.classification,
                 "hypothesis": batch_profile.hypothesis,
                 "scale": batch_profile.scale,
                 "config_overrides": batch_profile.config_overrides,
-                "learning_rate_rule": "linear_with_global_batch_scale",
+                "learning_rate_rule": batch_profile.learning_rate_rule,
                 "environment_interaction_budget_unchanged": True,
-                "optimization_sample_budgets_unchanged": True,
-                "optimizer_update_counts_unchanged": False,
-                "world_model_update_multiplier": 1 / batch_profile.scale,
-                "actor_critic_update_multiplier": 1 / batch_profile.scale,
-                "world_model_sampled_replay_frame_use_multiplier": 1.0,
-                "actor_context_frame_use_multiplier": 1.0,
+                "optimization_sample_budgets_unchanged": (
+                    batch_profile.scale
+                    * batch_profile.optimizer_update_multiplier
+                    == 1.0
+                ),
+                "optimizer_update_counts_unchanged": (
+                    batch_profile.optimizer_update_multiplier == 1.0
+                ),
+                "world_model_update_multiplier": (
+                    batch_profile.optimizer_update_multiplier
+                ),
+                "actor_critic_update_multiplier": (
+                    batch_profile.optimizer_update_multiplier
+                ),
+                "world_model_sampled_replay_frame_use_multiplier": (
+                    batch_profile.scale
+                    * batch_profile.optimizer_update_multiplier
+                ),
+                "actor_context_frame_use_multiplier": (
+                    batch_profile.scale
+                    * batch_profile.optimizer_update_multiplier
+                ),
             }
             if batch_profile is not None
             else None
@@ -1068,8 +1119,15 @@ def main(*, default_method: str = "moe") -> int:
                 else "none"
             ),
             "global_batch_policy": (
-                f"sample-matched x{batch_profile.scale}; batches grow and "
-                "optimizer steps shrink by the same factor"
+                (
+                    f"sample-matched x{batch_profile.scale}; batches grow and "
+                    "optimizer steps shrink by the same factor"
+                    if batch_profile.optimizer_update_multiplier < 1.0
+                    else (
+                        f"compute-saturation x{batch_profile.scale}; batches "
+                        "grow while optimizer update counts remain fixed"
+                    )
+                )
                 if batch_profile is not None
                 else "fixed; no data or update budget increase"
             ),
@@ -1136,8 +1194,16 @@ def main(*, default_method: str = "moe") -> int:
             },
             "actor_context_batch_frames": 4 * config["ac_train_sync"],
             "actor_context_batch_frames_per_rank": 4 * local_actor_sequences,
-            "optimizer_update_budgets_unchanged": batch_profile is None,
-            "optimization_sample_budgets_unchanged": True,
+            "optimizer_update_budgets_unchanged": (
+                batch_profile is None
+                or batch_profile.optimizer_update_multiplier == 1.0
+            ),
+            "optimization_sample_budgets_unchanged": (
+                batch_profile is None
+                or batch_profile.scale
+                * batch_profile.optimizer_update_multiplier
+                == 1.0
+            ),
         },
         "world_model": {
             "router": "hard_task_id",
@@ -1222,8 +1288,16 @@ def main(*, default_method: str = "moe") -> int:
             "old_task_parameters_frozen": variant.full_task_experts,
             "learning_rate": config.get("ac_lr", 1e-4),
             "entropy_scale": config.get("ac_entropy_scale", 3e-4),
-            "total_updates_unchanged": batch_profile is None,
-            "total_context_frame_uses_unchanged": True,
+            "total_updates_unchanged": (
+                batch_profile is None
+                or batch_profile.optimizer_update_multiplier == 1.0
+            ),
+            "total_context_frame_uses_unchanged": (
+                batch_profile is None
+                or batch_profile.scale
+                * batch_profile.optimizer_update_multiplier
+                == 1.0
+            ),
         },
         "observation": {
             "encoder": (
