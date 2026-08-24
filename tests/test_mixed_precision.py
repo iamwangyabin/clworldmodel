@@ -89,6 +89,103 @@ class MixedPrecisionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown compute dtype"):
             validate_compute_dtype("float16")
 
+    def test_continuation_probability_and_loss_stay_full_precision(self) -> None:
+        class Embedder(nn.Module):
+            output_size = 4
+
+            def forward(self, images: torch.Tensor) -> torch.Tensor:
+                return images.flatten(1)[:, : self.output_size]
+
+        model = WorldModel(
+            3,
+            (2, 3),
+            4,
+            5,
+            cnn_depth=2,
+            mlp_features=8,
+            mlp_layers=2,
+            image_embedder=Embedder(),
+            compute_dtype="bfloat16",
+        )
+        linear_layers = [
+            module for module in model.continue_fc.modules()
+            if isinstance(module, nn.Linear)
+        ]
+        with torch.no_grad():
+            for layer in linear_layers:
+                layer.weight.zero_()
+                layer.bias.zero_()
+            linear_layers[-1].bias.fill_(10.0)
+
+        model_state = torch.zeros(2, 1, model.zh_transform.out_features)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            logits = model.predict_continue_logits(model_state)
+            probabilities = model.predict_continue(model_state)
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(
+            logits.float(), torch.zeros_like(logits, dtype=torch.float32)
+        )
+
+        self.assertEqual(probabilities.dtype, torch.float32)
+        self.assertTrue((probabilities < 1.0).all())
+        self.assertGreater(loss.item(), 9.0)
+        self.assertLess(loss.item(), 11.0)
+        loss.backward()
+        self.assertTrue(torch.isfinite(linear_layers[-1].bias.grad).all())
+        self.assertGreater(linear_layers[-1].bias.grad.item(), 0.9)
+
+    @unittest.skipUnless(
+        torch is not None
+        and torch.cuda.is_available()
+        and torch.cuda.is_bf16_supported(),
+        "requires a CUDA device with BF16 support",
+    )
+    def test_cuda_bfloat16_continuation_does_not_saturate(self) -> None:
+        class Embedder(nn.Module):
+            output_size = 4
+
+            def forward(self, images: torch.Tensor) -> torch.Tensor:
+                return images.flatten(1)[:, : self.output_size]
+
+        model = WorldModel(
+            3,
+            (2, 3),
+            4,
+            5,
+            cnn_depth=2,
+            mlp_features=8,
+            mlp_layers=2,
+            image_embedder=Embedder(),
+            compute_dtype="bfloat16",
+        ).cuda()
+        linear_layers = [
+            module for module in model.continue_fc.modules()
+            if isinstance(module, nn.Linear)
+        ]
+        with torch.no_grad():
+            for layer in linear_layers:
+                layer.weight.zero_()
+                layer.bias.zero_()
+            linear_layers[-1].bias.fill_(10.0)
+
+        model_state = torch.zeros(
+            2, 1, model.zh_transform.out_features, device="cuda"
+        )
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            logits = model.predict_continue_logits(model_state)
+            probabilities = model.predict_continue(model_state)
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(
+            logits.float(), torch.zeros_like(logits, dtype=torch.float32)
+        )
+
+        self.assertEqual(logits.dtype, torch.bfloat16)
+        self.assertEqual(probabilities.dtype, torch.float32)
+        self.assertTrue((probabilities < 1.0).all())
+        self.assertGreater(loss.item(), 9.0)
+        self.assertLess(loss.item(), 11.0)
+        loss.backward()
+        self.assertTrue(torch.isfinite(linear_layers[-1].bias.grad).all())
+        self.assertGreater(linear_layers[-1].bias.grad.item(), 0.9)
+
     def test_bfloat16_profile_fails_before_allocation_without_cuda_support(self) -> None:
         require_cuda_compute_support("float32")
         with mock.patch.object(torch.cuda, "is_available", return_value=False):

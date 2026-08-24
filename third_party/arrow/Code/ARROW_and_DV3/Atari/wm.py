@@ -281,7 +281,7 @@ class WorldModel(nn.Module):
                 *get_mlp_layers(
                     self.zh_transform.out_features,
                     1,
-                    final_activation=nn.Sigmoid,
+                    final_activation=None,
                     hidden_features=mlp_features,
                     layers=mlp_layers,
                 )
@@ -523,17 +523,22 @@ class WorldModel(nn.Module):
             prediction = prediction + self.reward_residual(model_state)
         return prediction
 
-    def predict_continue(
+    def predict_continue_logits(
         self, model_state: torch.Tensor, task_id: Optional[int | torch.Tensor] = None
     ) -> torch.Tensor:
-        prediction = self._head_for(
+        logits = self._head_for(
             self.continue_fc, self.continue_experts, task_id
         )(model_state)
         if self.continue_residual is not None:
-            prediction = torch.sigmoid(
-                prediction + self.continue_residual(model_state)
-            )
-        return prediction
+            logits = logits + self.continue_residual(model_state)
+        return logits
+
+    def predict_continue(
+        self, model_state: torch.Tensor, task_id: Optional[int | torch.Tensor] = None
+    ) -> torch.Tensor:
+        logits = self.predict_continue_logits(model_state, task_id)
+        with _full_precision_context(logits.device):
+            return torch.sigmoid(logits.float())
 
     def freeze_shared_core(self) -> None:
         """Freeze base functions while leaving residual adapters trainable."""
@@ -761,10 +766,12 @@ class WorldModel(nn.Module):
         rews_pred = self.predict_reward_symlog(zhs, task_id)  # [ T N 1 ]
         rews_loss = (rews_pred.float() - symlog(rews)).square().mean()
 
-        conts_pred = self.predict_continue(zhs, task_id)  # [ T N 1 ]
-        with _full_precision_context(conts_pred.device):
-            conts_loss = torch.nn.functional.binary_cross_entropy(
-                conts_pred.float(), conts.float(), reduction="mean"
+        conts_logits = self.predict_continue_logits(zhs, task_id)  # [ T N 1 ]
+        with _full_precision_context(conts_logits.device):
+            conts_logits = conts_logits.float()
+            conts_pred = torch.sigmoid(conts_logits)
+            conts_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                conts_logits, conts.float(), reduction="mean"
             )
 
         with torch.no_grad():

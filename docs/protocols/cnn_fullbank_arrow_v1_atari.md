@@ -67,6 +67,13 @@ CUDA model kernels run under BF16 autocast. Parameters, Adam state, categorical
 sampling and KL, symlog/symexp, reconstruction and behavior losses, returns,
 and value targets remain float32. BF16 uses no gradient scaler.
 
+The continuation head emits autocast logits but applies its sigmoid and
+Bernoulli loss in float32 using `binary_cross_entropy_with_logits`. This is a
+runtime-correctness requirement, not a changed objective: applying sigmoid in
+BF16 can round a confident continue prediction to exactly one before a terminal
+target reaches the loss, producing a clamped loss of 100 and a misleading
+quantized training trace.
+
 The launcher accepts `--devices 1|2|4`. Two and four devices use native PyTorch
 DDP with one fixed global replay draw split on the sequence axis. The regular
 world-model global batch remains `T=32, N=16`; local `N` is 8 or 4. Actor

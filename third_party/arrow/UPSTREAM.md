@@ -261,6 +261,17 @@ documented here, covered by focused parity tests, and followed by regenerating
     for resumable training. Focused tests cover seed-stream separation, the
     task-local schedule and reset, non-resumable snapshot payloads, protocol
     rejection, and launcher accounting.
+36. Keep the continuation Bernoulli head numerically stable under the opt-in
+    BF16 profiles. The head now exposes logits, computes sigmoid probabilities
+    and `binary_cross_entropy_with_logits` in FP32, and returns FP32 continue
+    probabilities to imagined rollouts. Previously the terminal sigmoid ran
+    inside autocast and could round a large positive logit to exactly `1.0`
+    before the nominal FP32 BCE. A stopped CNN-FullBank diagnostic showed the
+    resulting loss quantized in `100 / (T * N)` increments and 28.8 times the
+    single-device FP32 ARROW reference at world-model step 10,000. Parameter
+    shapes, state-dict tensor keys, update budgets, and FP32 behavior remain
+    unchanged. A focused regression test forces a saturated BF16 logit and
+    verifies a finite FP32 probability, logit-space loss, and gradient.
 
 ## Known issues at import
 
