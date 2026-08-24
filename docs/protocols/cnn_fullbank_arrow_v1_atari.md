@@ -74,6 +74,27 @@ context remains globally `T=4, N=128`; local `N` is 64 or 32. Rank 0 alone owns
 collection, replay, logging, and artifacts. Evaluation tasks are partitioned
 across ranks and reduced to rank 0.
 
+## Large-batch DP4 ablations
+
+The optional `--batch-profile` flag defines named four-GPU throughput
+ablations. These are not the fixed-global-batch baseline. Both profiles keep
+environment interaction, replay capacity, replay selection, and total sampled
+world-model and actor context frames fixed. They increase the sequence batch,
+reduce optimizer steps by the same factor, and apply linear learning-rate
+scaling:
+
+| Profile | WM global/local `N` | WM steps/epoch | Actor global/local `N` | Actor steps/epoch | WM/AC LR |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `x2-linear-lr` | 32 / 8 | 500 | 256 / 64 | 400 | `2e-4` / `2e-4` |
+| `x4-linear-lr` | 64 / 16 | 250 | 512 / 128 | 200 | `4e-4` / `4e-4` |
+
+The hypothesis is that fewer DDP synchronization points and larger local
+matrix operations improve wall-clock throughput. Equal sampled-frame use does
+not make the optimization trajectory identical: there are fewer Adam updates,
+different gradient noise, and scaled learning rates. Speed, finite losses, and
+the final acquisition score must therefore all be measured. A larger batch is
+not assumed to improve return before the 90-epoch gate passes.
+
 ## Evaluation gates
 
 The first run is a one-task, 90-epoch MsPacman pilot with the published data,
@@ -93,6 +114,7 @@ claim.
 python scripts/run_moe_arrow_atari.py \
   --method cnn-fullbank \
   --devices 4 \
+  --batch-profile x4-linear-lr \
   --seed 0 \
   --task-prefix-length 1 \
   --dry-run

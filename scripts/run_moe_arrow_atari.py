@@ -90,6 +90,15 @@ class PrecisionProfile:
     output_suffix: str
 
 
+@dataclass(frozen=True)
+class BatchProfile:
+    scale: int
+    protocol_suffix: str
+    output_suffix: str
+    config_overrides: dict[str, int | float]
+    hypothesis: str
+
+
 PRECISION_PROFILES = {
     "fp32-tf32": PrecisionProfile(
         compute_dtype="float32",
@@ -106,6 +115,51 @@ PRECISION_PROFILES = {
         autocast_enabled=True,
         name_suffix="-BF16AMP",
         output_suffix="_bf16_amp",
+    ),
+}
+
+
+BATCH_PROFILES = {
+    "x2-linear-lr": BatchProfile(
+        scale=2,
+        protocol_suffix="LargeBatchX2LinearLR",
+        output_suffix="large_batch_x2_linear_lr",
+        config_overrides={
+            "mb_n_size": 32,
+            "pretrain_mb_n_size": 32,
+            "steps_per_batch": 500,
+            "pretrain_steps": 15_000,
+            "ac_train_sync": 256,
+            "ac_train_steps": 400,
+            "wm_lr": 2e-4,
+            "ac_lr": 2e-4,
+        },
+        hypothesis=(
+            "Doubling each global optimization batch while halving optimizer "
+            "steps preserves sampled-frame use, reduces DDP synchronizations, "
+            "and linear learning-rate scaling preserves update magnitude."
+        ),
+    ),
+    "x4-linear-lr": BatchProfile(
+        scale=4,
+        protocol_suffix="LargeBatchX4LinearLR",
+        output_suffix="large_batch_x4_linear_lr",
+        config_overrides={
+            "mb_n_size": 64,
+            "pretrain_mb_n_size": 64,
+            "steps_per_batch": 250,
+            "pretrain_steps": 7_500,
+            "ac_train_sync": 512,
+            "ac_train_steps": 200,
+            "wm_lr": 4e-4,
+            "ac_lr": 4e-4,
+        },
+        hypothesis=(
+            "Quadrupling each global optimization batch while quartering "
+            "optimizer steps preserves sampled-frame use, amortizes DDP "
+            "synchronization, and linear learning-rate scaling preserves "
+            "update magnitude."
+        ),
     ),
 }
 
@@ -376,6 +430,15 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
             "--task-prefix-length 1; data and update budgets remain fixed"
         ),
     )
+    parser.add_argument(
+        "--batch-profile",
+        choices=tuple(BATCH_PROFILES),
+        help=(
+            "Named sample-matched large-batch ablation. Requires cnn-fullbank "
+            "with --devices 4; sampled replay/context frames and environment "
+            "interaction remain fixed while optimizer steps decrease"
+        ),
+    )
     parser.add_argument("--swanlab-project")
     parser.add_argument("--swanlab-experiment-name")
     parser.add_argument("--dry-run", action="store_true")
@@ -390,7 +453,7 @@ def _resolved_config(
     variant: LaunchVariant = MOE_ARROW_VARIANT,
     precision_profile: PrecisionProfile = PRECISION_PROFILES["fp32-tf32"],
     data_parallel_world_size: int = 1,
-    config_overrides: dict[str, float] | None = None,
+    config_overrides: dict[str, int | float] | None = None,
 ) -> dict:
     config = json.loads(json.dumps(source))
     config.update(
@@ -502,6 +565,11 @@ def main(*, default_method: str = "moe") -> int:
             parser.error(
                 "--task1-tuning-profile requires --task-prefix-length 1"
             )
+    if args.batch_profile is not None:
+        if args.method != "cnn-fullbank":
+            parser.error("--batch-profile is validated only for cnn-fullbank")
+        if args.devices != 4:
+            parser.error("--batch-profile requires --devices 4")
     if requires_dinov3 and args.dinov3_model_path is None:
         parser.error("--dinov3-model-path or DINOV3_MODEL_PATH is required")
     if args.cpu_threads is not None and args.cpu_threads < 1:
@@ -536,11 +604,16 @@ def main(*, default_method: str = "moe") -> int:
         if args.task1_tuning_profile is not None
         else None
     )
-    config_overrides = (
-        dict(tuning_profile["config_overrides"])
-        if tuning_profile is not None
+    batch_profile = (
+        BATCH_PROFILES[args.batch_profile]
+        if args.batch_profile is not None
         else None
     )
+    config_overrides: dict[str, int | float] = {}
+    if tuning_profile is not None:
+        config_overrides.update(tuning_profile["config_overrides"])
+    if batch_profile is not None:
+        config_overrides.update(batch_profile.config_overrides)
     config = _resolved_config(
         source_config,
         model_path=model_path,
@@ -548,7 +621,7 @@ def main(*, default_method: str = "moe") -> int:
         variant=variant,
         precision_profile=precision_profile,
         data_parallel_world_size=args.devices,
-        config_overrides=config_overrides,
+        config_overrides=config_overrides or None,
     )
     allocated_experts = int(config["rssm_num_experts"])
 
@@ -568,9 +641,20 @@ def main(*, default_method: str = "moe") -> int:
         protocol = protocol.replace("-Atari-", "-Uint8Replay-Atari-")
     if args.devices > 1:
         method += f"-DP{args.devices}"
-        role += f"-fixed-global-batch-ddp{args.devices}"
+        role += (
+            f"-sample-matched-large-batch-ddp{args.devices}"
+            if batch_profile is not None
+            else f"-fixed-global-batch-ddp{args.devices}"
+        )
         output_prefix += f"_dp{args.devices}"
         protocol = protocol.replace("-Atari-", f"-DP{args.devices}-Atari-")
+    if batch_profile is not None:
+        method += f"-{batch_profile.protocol_suffix}"
+        role += "-optimization-batch-ablation"
+        output_prefix += f"_{batch_profile.output_suffix}"
+        protocol = protocol.replace(
+            "-Atari-", f"-{batch_profile.protocol_suffix}-Atari-"
+        )
     if tuning_profile is not None:
         tuning_suffix = str(tuning_profile["protocol_suffix"])
         method += f"-{tuning_suffix}"
@@ -790,9 +874,17 @@ def main(*, default_method: str = "moe") -> int:
         for buffer in base_replay_storage["buffers"].values():
             buffer["observation_storage_backend"] = "file_mmap"
     task_id_storage_bytes = 2 * source_config["data_n_max"] * 8
-    local_world_model_sequences = source_config["mb_n_size"] // args.devices
-    local_pretrain_sequences = source_config["pretrain_mb_n_size"] // args.devices
-    local_actor_sequences = source_config["ac_train_sync"] // args.devices
+    local_world_model_sequences = config["mb_n_size"] // args.devices
+    local_pretrain_sequences = config["pretrain_mb_n_size"] // args.devices
+    local_actor_sequences = config["ac_train_sync"] // args.devices
+    world_model_updates = training_epochs * config["steps_per_batch"]
+    actor_critic_updates = training_epochs * config["ac_train_steps"]
+    world_model_sampled_replay_frame_uses = (
+        world_model_updates * config["mb_t_size"] * config["mb_n_size"]
+    )
+    actor_context_frame_uses = (
+        actor_critic_updates * 4 * config["ac_train_sync"]
+    )
 
     launch = {
         "method": method,
@@ -831,17 +923,19 @@ def main(*, default_method: str = "moe") -> int:
             "tasks": [task["name"] for task in visited_tasks],
             "agent_decisions": agent_decisions,
             "raw_environment_frames": raw_environment_frames,
-            "world_model_updates": training_epochs
-            * source_config["steps_per_batch"],
-            "actor_critic_updates": training_epochs
-            * source_config["ac_train_steps"],
+            "world_model_updates": world_model_updates,
+            "actor_critic_updates": actor_critic_updates,
+            "world_model_sampled_replay_frame_uses": (
+                world_model_sampled_replay_frame_uses
+            ),
+            "actor_context_frame_uses": actor_context_frame_uses,
         },
         "hyperparameter_tuning": (
             {
                 "profile": args.task1_tuning_profile,
                 "classification": "task1_acquisition_pilot",
                 "hypothesis": tuning_profile["hypothesis"],
-                "config_overrides": config_overrides,
+                "config_overrides": dict(tuning_profile["config_overrides"]),
                 "world_model_learning_rate": config["wm_lr"],
                 "fixed_data_and_update_budgets": True,
                 "acquisition_gate": {
@@ -856,6 +950,25 @@ def main(*, default_method: str = "moe") -> int:
             if tuning_profile is not None
             else None
         ),
+        "batch_tuning": (
+            {
+                "profile": args.batch_profile,
+                "classification": "sample_matched_large_batch_ablation",
+                "hypothesis": batch_profile.hypothesis,
+                "scale": batch_profile.scale,
+                "config_overrides": batch_profile.config_overrides,
+                "learning_rate_rule": "linear_with_global_batch_scale",
+                "environment_interaction_budget_unchanged": True,
+                "optimization_sample_budgets_unchanged": True,
+                "optimizer_update_counts_unchanged": False,
+                "world_model_update_multiplier": 1 / batch_profile.scale,
+                "actor_critic_update_multiplier": 1 / batch_profile.scale,
+                "world_model_sampled_replay_frame_use_multiplier": 1.0,
+                "actor_context_frame_use_multiplier": 1.0,
+            }
+            if batch_profile is not None
+            else None
+        ),
         "distributed_execution": {
             "enabled": args.devices > 1,
             "world_size": args.devices,
@@ -868,17 +981,22 @@ def main(*, default_method: str = "moe") -> int:
                 if args.devices > 1
                 else "none"
             ),
-            "global_batch_policy": "fixed; no data or update budget increase",
+            "global_batch_policy": (
+                f"sample-matched x{batch_profile.scale}; batches grow and "
+                "optimizer steps shrink by the same factor"
+                if batch_profile is not None
+                else "fixed; no data or update budget increase"
+            ),
             "world_model_sequences": {
-                "global": source_config["mb_n_size"],
+                "global": config["mb_n_size"],
                 "per_rank": local_world_model_sequences,
             },
             "pretrain_world_model_sequences": {
-                "global": source_config["pretrain_mb_n_size"],
+                "global": config["pretrain_mb_n_size"],
                 "per_rank": local_pretrain_sequences,
             },
             "actor_context_sequences": {
-                "global": source_config["ac_train_sync"],
+                "global": config["ac_train_sync"],
                 "per_rank": local_actor_sequences,
             },
             "replay": (
@@ -920,21 +1038,20 @@ def main(*, default_method: str = "moe") -> int:
                 config["dinov3_max_batch_size"] if requires_dinov3 else None
             ),
             "world_model_optimization_batch": {
-                "time": source_config["mb_t_size"],
-                "sequences": source_config["mb_n_size"],
-                "frames": source_config["mb_t_size"]
-                * source_config["mb_n_size"],
-                "unchanged": True,
+                "time": config["mb_t_size"],
+                "sequences": config["mb_n_size"],
+                "frames": config["mb_t_size"] * config["mb_n_size"],
+                "unchanged": batch_profile is None,
             },
             "world_model_optimization_batch_per_rank": {
-                "time": source_config["mb_t_size"],
+                "time": config["mb_t_size"],
                 "sequences": local_world_model_sequences,
-                "frames": source_config["mb_t_size"]
-                * local_world_model_sequences,
+                "frames": config["mb_t_size"] * local_world_model_sequences,
             },
-            "actor_context_batch_frames": 4 * source_config["ac_train_sync"],
+            "actor_context_batch_frames": 4 * config["ac_train_sync"],
             "actor_context_batch_frames_per_rank": 4 * local_actor_sequences,
-            "optimizer_update_budgets_unchanged": True,
+            "optimizer_update_budgets_unchanged": batch_profile is None,
+            "optimization_sample_budgets_unchanged": True,
         },
         "world_model": {
             "router": "hard_task_id",
@@ -1019,7 +1136,8 @@ def main(*, default_method: str = "moe") -> int:
             "old_task_parameters_frozen": variant.full_task_experts,
             "learning_rate": config.get("ac_lr", 1e-4),
             "entropy_scale": config.get("ac_entropy_scale", 3e-4),
-            "total_updates_unchanged": True,
+            "total_updates_unchanged": batch_profile is None,
+            "total_context_frame_uses_unchanged": True,
         },
         "observation": {
             "encoder": (

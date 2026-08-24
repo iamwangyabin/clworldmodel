@@ -470,6 +470,103 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(launch["runtime_dependencies"], {})
         self.assertFalse(output_dir.exists())
 
+    def test_cnn_fullbank_x4_batch_profile_is_sample_matched(self) -> None:
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary) / "cnn_fullbank_large_batch_run"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--task-prefix-length",
+                    "1",
+                    "--devices",
+                    "4",
+                    "--batch-profile",
+                    "x4-linear-lr",
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+        self.assertEqual(
+            launch["method"],
+            "CNN-FullBank-ARROW-50-BF16AMP-Uint8Replay-DP4-"
+            "LargeBatchX4LinearLR-T1Pilot",
+        )
+        self.assertEqual(
+            launch["protocol"],
+            "CNN-FullBank-ARROW-v1-BF16AMP-Uint8Replay-DP4-"
+            "LargeBatchX4LinearLR-Atari-TaskAware",
+        )
+        batch_tuning = launch["batch_tuning"]
+        self.assertEqual(batch_tuning["profile"], "x4-linear-lr")
+        self.assertEqual(batch_tuning["scale"], 4)
+        self.assertTrue(batch_tuning["optimization_sample_budgets_unchanged"])
+        self.assertFalse(batch_tuning["optimizer_update_counts_unchanged"])
+        self.assertEqual(batch_tuning["world_model_update_multiplier"], 0.25)
+        self.assertEqual(batch_tuning["actor_critic_update_multiplier"], 0.25)
+
+        execution = launch["distributed_execution"]
+        self.assertEqual(
+            execution["world_model_sequences"], {"global": 64, "per_rank": 16}
+        )
+        self.assertEqual(
+            execution["actor_context_sequences"],
+            {"global": 512, "per_rank": 128},
+        )
+        precision = launch["precision"]
+        self.assertEqual(
+            precision["world_model_optimization_batch"],
+            {"time": 32, "sequences": 64, "frames": 2_048, "unchanged": False},
+        )
+        self.assertEqual(precision["actor_context_batch_frames"], 2_048)
+        self.assertFalse(precision["optimizer_update_budgets_unchanged"])
+        self.assertTrue(precision["optimization_sample_budgets_unchanged"])
+
+        scope = launch["training_scope"]
+        self.assertEqual(scope["world_model_updates"], 22_500)
+        self.assertEqual(scope["actor_critic_updates"], 18_000)
+        self.assertEqual(scope["world_model_sampled_replay_frame_uses"], 46_080_000)
+        self.assertEqual(scope["actor_context_frame_uses"], 36_864_000)
+        self.assertEqual(launch["actor_critic"]["learning_rate"], 4e-4)
+        self.assertFalse(output_dir.exists())
+
+    def test_batch_profile_requires_cnn_fullbank_dp4(self) -> None:
+        invalid_argument_sets = (
+            ("--method", "cnn-fullbank", "--devices", "2"),
+            ("--method", "dino-convbank", "--devices", "4"),
+        )
+        for arguments in invalid_argument_sets:
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "scripts/run_moe_arrow_atari.py",
+                        "--seed",
+                        "0",
+                        *arguments,
+                        "--batch-profile",
+                        "x4-linear-lr",
+                        "--dry-run",
+                    ],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("--batch-profile", result.stderr)
+
     def test_dino_patchbank_dry_run_records_full_patches_and_pixel_decoder(self) -> None:
         launch, output_dir = self._karrow_dry_run(
             "--task-prefix-length",
