@@ -236,6 +236,19 @@ documented here, covered by focused parity tests, and followed by regenerating
     rank 0 writes artifacts. Focused CPU tests cover partitioning, configuration
     isolation, torchrun commands, and manifest budgets; target-GPU 2/4-rank
     smoke runs remain required before official use.
+34. Add the opt-in, separately named
+    `CNN-FullBank-ARROW-v1-BF16AMP-Uint8Replay-Atari-TaskAware` path. It restores
+    the vendored four-layer Dreamer CNN and pixel reconstruction objective while
+    extending the hard task route to own the image encoder as well as posterior,
+    recurrent dynamics, prior, decoder, reward/continue heads, and Actor-Critic.
+    A new task copies the preceding complete world-model route once; its
+    Actor-Critic is fresh, only the current route receives the unchanged update
+    budgets, and all old parameters remain frozen. The method requires uint8
+    file-backed observation replay and BF16 autocast and reuses the fixed-global-
+    batch 1/2/4-device DDP execution without DINO or a feature sidecar. Focused
+    tests cover strict config isolation, encoder copy/routing/gradients, frozen
+    old encoders and decoders, 2/4-device acceptance, no-DINO launching, exact
+    parameter accounting, and unchanged global budgets.
 
 ## Known issues at import
 

@@ -148,8 +148,8 @@ not unsafe BF16 optimizer accumulation.
 The launcher accepts `--devices 1`, `--devices 2`, or `--devices 4`. Values 2
 and 4 use one process per CUDA device through `torch.distributed.run`, NCCL, and
 native PyTorch DistributedDataParallel. They create separately named
-`DP2`/`DP4` execution groups. Multi-GPU execution is currently rejected for all
-other methods.
+`DP2`/`DP4` execution groups. Multi-GPU execution is otherwise available only
+to the separately named CNN-FullBank protocol; other methods are rejected.
 
 This profile partitions the existing independent sequence axis; it does not
 increase the research batch:

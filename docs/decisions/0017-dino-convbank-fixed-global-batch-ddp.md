@@ -1,5 +1,8 @@
 # Decision 0017: Add fixed-global-batch DDP to DINO-ConvBank
 
+Scope note: Decision 0018 later validates the same fixed-global-batch execution
+contract for the separately named CNN-FullBank method.
+
 ## Status
 
 Accepted for 2- and 4-GPU DINO-ConvBank execution. This is an execution profile,

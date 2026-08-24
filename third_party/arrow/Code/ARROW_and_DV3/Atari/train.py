@@ -427,12 +427,33 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
     else:
         observation_head_name = "feature_predictor"
         observation_head = wm.feature_predictor
+    observation_encoders_per_task = {
+        str(task_id): _parameter_accounting(
+            wm.rssm.image_embedder_for(task_id)
+        )
+        for task_id in range(wm.rssm.num_task_experts)
+        if wm.rssm.task_banked_image_encoder
+    }
     return {
         "schema_version": 1,
         "observation_objective": wm.observation_objective,
         "world_model": _parameter_accounting(wm),
         "world_model_parameter_and_buffer_state": _module_state_accounting(wm),
         "observation_encoder": _parameter_accounting(wm.rssm.image_embedder),
+        "observation_encoder_topology": (
+            "per_task_bank"
+            if wm.rssm.task_banked_image_encoder
+            else "shared"
+        ),
+        "observation_encoders_per_task": observation_encoders_per_task,
+        "aggregate_observation_encoder_parameters": (
+            sum(
+                accounting["parameters"]
+                for accounting in observation_encoders_per_task.values()
+            )
+            if observation_encoders_per_task
+            else _parameter_accounting(wm.rssm.image_embedder)["parameters"]
+        ),
         "observation_adapter_kind": wm.rssm.observation_adapter_kind,
         "observation_adapter": _parameter_accounting(
             wm.rssm.observation_adapter
@@ -1272,6 +1293,14 @@ if __name__ == "__main__":
             "warm_start=previous_task_once current_fraction="
             f"{config.moe_arrow_current_task_fraction}"
         )
+    elif config.continual_method == "cnn_fullbank_arrow":
+        print(
+            "CNN-FullBank-ARROW routing: "
+            f"experts={config.rssm_num_experts} actor_bank=per_task "
+            "world_model_warm_start=previous_task_once actor_init=fresh "
+            "visual_encoder=per_task_dreamerv3_cnn observation=pixels "
+            f"current_fraction={config.dino_fullbank_current_task_fraction}"
+        )
     elif config.continual_method == "dino_fullbank_arrow":
         print(
             "DINO-FullBank-ARROW routing: "
@@ -1363,6 +1392,7 @@ if __name__ == "__main__":
         residual_consolidation=config.residual_consolidation,
         num_task_experts=config.rssm_num_experts,
         full_task_experts=config.uses_full_task_experts,
+        task_banked_image_encoder=config.task_banked_image_encoder,
     ).to(device)
     resume_world_model_opened: list[str] = []
     resume_state_report: dict[str, dict[str, list[str]]] = {}
@@ -1401,12 +1431,13 @@ if __name__ == "__main__":
     envs = config.get_env_schedule()
     replay_storage_directory = None
     if config.continual_method in {
+        "cnn_fullbank_arrow",
         "dino_patchbank_arrow",
         "dino_convbank_arrow",
     } and (not distributed_context.enabled or distributed_context.is_primary):
         if log_dir is None:
             raise ValueError(
-                "DINO patch task banks require --log-dir for mapped observation replay"
+                "Pixel task banks require --log-dir for mapped observation replay"
             )
         mmap_root = log_dir / "mmap_replay"
         replay_storage_directory = mmap_root / "observations"
@@ -1490,7 +1521,11 @@ if __name__ == "__main__":
             shuffled_task_schedule,
         )
 
-        if config.continual_method == "dino_patchbank_arrow":
+        if config.continual_method == "cnn_fullbank_arrow":
+            actor_bank_artifact_kind = (
+                "cnn_fullbank_arrow_actor_critic_bank_inference_state"
+            )
+        elif config.continual_method == "dino_patchbank_arrow":
             actor_bank_artifact_kind = (
                 "dino_patchbank_arrow_actor_critic_bank_inference_state"
             )
@@ -1894,7 +1929,9 @@ if __name__ == "__main__":
             for task_id, update_count in world_model_allocation.items():
                 writer.add_scalar(
                     (
-                        f"DINOPatchBankArrow/world_model_updates_task_{task_id}"
+                        f"CNNFullBankArrow/world_model_updates_task_{task_id}"
+                        if config.continual_method == "cnn_fullbank_arrow"
+                        else f"DINOPatchBankArrow/world_model_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
                         else f"DINOConvBankArrow/world_model_updates_task_{task_id}"
                         if config.continual_method == "dino_convbank_arrow"
@@ -2110,7 +2147,9 @@ if __name__ == "__main__":
             for task_id, task_steps in actor_allocation.items():
                 writer.add_scalar(
                     (
-                        f"DINOPatchBankArrow/actor_critic_updates_task_{task_id}"
+                        f"CNNFullBankArrow/actor_critic_updates_task_{task_id}"
+                        if config.continual_method == "cnn_fullbank_arrow"
+                        else f"DINOPatchBankArrow/actor_critic_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
                         else f"DINOConvBankArrow/actor_critic_updates_task_{task_id}"
                         if config.continual_method == "dino_convbank_arrow"

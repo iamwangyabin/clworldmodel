@@ -35,6 +35,8 @@ ablations at different stages of evidence:
 - the stopped negative/inconclusive `DINO-PatchBank-ARROW-v3` Task-1 pilot and
   the implementation-ready `DINO-ConvBank-ARROW-v4` lightweight posterior
   interface;
+- the implementation-ready `CNN-FullBank-ARROW-v1` task-aware method, which
+  restores the original CNN and banks the complete world model per task;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -298,6 +300,31 @@ loss collapsed while KL reached the free-bits floor, and Task 1 itself remained
 weak. See
 `docs/protocols/moe_arrow_v1_atari.md` for routing equations, fixed budgets,
 storage accounting, the pilot record, and claim limits.
+
+## CNN task bank: CNN-FullBank-ARROW-v1
+
+`CNN-FullBank-ARROW-50` restores the original DreamerV3 CNN and pixel
+reconstruction path. Every scheduled task owns its CNN encoder, posterior,
+recurrent dynamics, latent prior, decoder, reward/continue heads, and an
+independent MLP Actor-Critic. A new task copies the previous complete world
+model once, starts a fresh Actor-Critic, and then freezes every old route.
+
+The named runtime profile uses BF16 autocast, uint8 file-backed replay, and a
+fixed global batch on one, two, or four GPUs. It does not require DINO:
+
+```bash
+python scripts/run_moe_arrow_atari.py \
+  --method cnn-fullbank \
+  --devices 4 \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+```
+
+This is a task-aware upper bound. Its first acquisition gate is a final
+90-epoch MsPacman raw mean of at least 2,000, not an intermediate peak. See
+`docs/protocols/cnn_fullbank_arrow_v1_atari.md` for complete routing, storage,
+precision, DDP, and evaluation semantics.
 
 ## Corrected task-aware method: DINO-FullBank-ARROW-v2
 

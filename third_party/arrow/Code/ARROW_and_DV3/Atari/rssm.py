@@ -107,6 +107,7 @@ class Rssm(nn.Module):
         dinov3_patch_adapter: str = "none",
         num_task_experts: int = 1,
         full_task_experts: bool = False,
+        task_banked_image_encoder: bool = False,
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
         residual_grid_size: int = 8,
@@ -124,6 +125,14 @@ class Rssm(nn.Module):
             raise ValueError("num_task_experts must be positive")
         if full_task_experts and num_task_experts < 2:
             raise ValueError("Full task experts require at least two task routes")
+        if task_banked_image_encoder and not full_task_experts:
+            raise ValueError(
+                "A task-banked image encoder requires complete task experts"
+            )
+        if task_banked_image_encoder and dinov3_patch_adapter != "none":
+            raise ValueError(
+                "A task-banked image encoder does not use a shared observation adapter"
+            )
         if num_task_experts > 1 and residual_correction != "none":
             raise ValueError(
                 "Task-routed RSSM experts do not compose with residual corrections"
@@ -132,6 +141,7 @@ class Rssm(nn.Module):
         self.h_dim = h_dim
         self.num_task_experts = num_task_experts
         self.full_task_experts = full_task_experts
+        self.task_banked_image_encoder = task_banked_image_encoder
 
         self.recurrent = Recurrent(
             ls,
@@ -174,6 +184,10 @@ class Rssm(nn.Module):
             raise ValueError(f"Unknown observation encoder: {observation_encoder!r}")
         if not hasattr(self.image_embedder, "output_size"):
             raise TypeError("Image embedder must declare output_size")
+        self.image_embedder_experts = nn.ModuleList(
+            copy.deepcopy(self.image_embedder)
+            for _ in range(num_task_experts - 1 if task_banked_image_encoder else 0)
+        )
         self.observation_adapter_kind = dinov3_patch_adapter
         self.observation_adapter: nn.Module = nn.Identity()
         self.observation_embedding_size = self.image_embedder.output_size
@@ -240,6 +254,8 @@ class Rssm(nn.Module):
     def freeze_shared_core(self) -> None:
         """Freeze base RSSM functions while leaving residual adapters plastic."""
         self.image_embedder.requires_grad_(False)
+        for image_embedder in self.image_embedder_experts:
+            image_embedder.requires_grad_(False)
         self.observation_adapter.requires_grad_(False)
         self.recurrent.freeze_shared_core()
         for recurrent in self.recurrent_experts:
@@ -274,6 +290,14 @@ class Rssm(nn.Module):
         task_index = self._task_index(task_id)
         return self.recurrent if task_index == 0 else self.recurrent_experts[task_index - 1]
 
+    def image_embedder_for(
+        self, task_id: Optional[int | torch.Tensor]
+    ) -> nn.Module:
+        task_index = self._task_index(task_id)
+        if task_index == 0 or not self.task_banked_image_encoder:
+            return self.image_embedder
+        return self.image_embedder_experts[task_index - 1]
+
     def transition_for(self, task_id: Optional[int | torch.Tensor]) -> "Transition":
         task_index = self._task_index(task_id)
         return self.transition if task_index == 0 else self.transition_experts[task_index - 1]
@@ -303,6 +327,10 @@ class Rssm(nn.Module):
         if self.full_task_experts:
             self.representation_for(target_task_id).load_state_dict(
                 self.representation_for(source_task_id).state_dict()
+            )
+        if self.task_banked_image_encoder:
+            self.image_embedder_for(target_task_id).load_state_dict(
+                self.image_embedder_for(source_task_id).state_dict()
             )
 
     def __call__(
@@ -345,7 +373,9 @@ class Rssm(nn.Module):
             # No time dimension
             h = self.recurrent_for(task_id)(prev_z, prev_a, prev_h)
             if x is not None:
-                e = self.adapt_observation_embeddings(self.image_embedder(x))
+                e = self.adapt_observation_embeddings(
+                    self.image_embedder_for(task_id)(x)
+                )
                 z_log_dist = self.representation_for(task_id)(e, h)
             else:
                 z_log_dist = self.prior(h, task_id)
@@ -375,7 +405,7 @@ class Rssm(nn.Module):
             return torch.stack(z_log_dists), torch.stack(z_samples), torch.stack(hs)
         elif len(prev_a.shape) == 3:
             # Special batched impl
-            embeddings = self.embed_observations(x)
+            embeddings = self.embed_observations(x, task_id=task_id)
             return self.observe_embeddings(
                 prev_z,
                 prev_a,
@@ -388,7 +418,11 @@ class Rssm(nn.Module):
             )
         raise ValueError
 
-    def embed_observations(self, x: ImageT) -> EmbedT:
+    def embed_observations(
+        self,
+        x: ImageT,
+        task_id: Optional[int | torch.Tensor] = None,
+    ) -> EmbedT:
         """Encode a [T, N, C, H, W] observation sequence exactly once."""
         if len(x.shape) != 5:
             raise ValueError(
@@ -396,7 +430,9 @@ class Rssm(nn.Module):
                 f"got {tuple(x.shape)}"
             )
         t, n = x.shape[:2]
-        raw_embeddings = self.image_embedder(x.reshape(-1, *x.shape[-3:]))
+        raw_embeddings = self.image_embedder_for(task_id)(
+            x.reshape(-1, *x.shape[-3:])
+        )
         return self.adapt_observation_embeddings(raw_embeddings).view(t, n, -1)
 
     def adapt_observation_embeddings(self, embeddings: EmbedT) -> EmbedT:

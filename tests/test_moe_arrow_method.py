@@ -98,6 +98,31 @@ class MoeArrowMethodTests(unittest.TestCase):
         return data
 
     @classmethod
+    def _cnn_fullbank_config_data(cls) -> dict:
+        data = cls._published_config_data()
+        data.update(
+            {
+                "continual_method": "cnn_fullbank_arrow",
+                "rssm_num_experts": len(data["esc"]["env_configs"]),
+                "dino_fullbank_current_task_fraction": 1.0,
+                "observation_objective": "reconstruction",
+                "observation_encoder": "cnn",
+                "task_banked_image_encoder": True,
+                "dinov3_model_path": None,
+                "compute_dtype": "bfloat16",
+                "replay_observation_dtype": "uint8",
+                "random_policy": "new",
+                "actor_network": "mlp",
+                "fresh_ac": False,
+                "residual_correction": "none",
+                "shared_core_mode": "task_isolated",
+            }
+        )
+        for replay_config in data["replay_buffers"]:
+            replay_config["rb_device"] = "cpu"
+        return data
+
+    @classmethod
     def _patchbank_config_data(cls) -> dict:
         data = cls._fullbank_config_data()
         data.update(
@@ -184,6 +209,39 @@ class MoeArrowMethodTests(unittest.TestCase):
         invalid = self._fullbank_config_data()
         invalid["dinov3_feature_cache_dtype"] = "bfloat16"
         with self.assertRaisesRegex(ValueError, "only for on-the-fly replay"):
+            Config.from_dict(invalid)
+
+    def test_cnn_fullbank_config_banks_the_complete_pixel_world_model(self) -> None:
+        config = Config.from_dict(self._cnn_fullbank_config_data())
+        self.assertEqual(config.continual_method, "cnn_fullbank_arrow")
+        self.assertEqual(config.observation_encoder, "cnn")
+        self.assertTrue(config.task_banked_image_encoder)
+        self.assertTrue(config.uses_full_task_experts)
+        self.assertEqual(config.task_update_fraction, 1.0)
+        self.assertEqual(config.compute_dtype, "bfloat16")
+        self.assertEqual(config.replay_observation_dtype, "uint8")
+
+        for world_size in (2, 4):
+            data = self._cnn_fullbank_config_data()
+            data["data_parallel_world_size"] = world_size
+            self.assertEqual(
+                Config.from_dict(data).data_parallel_world_size,
+                world_size,
+            )
+
+        invalid = self._cnn_fullbank_config_data()
+        invalid["task_banked_image_encoder"] = False
+        with self.assertRaisesRegex(ValueError, "task_banked_image_encoder"):
+            Config.from_dict(invalid)
+
+        invalid = self._cnn_fullbank_config_data()
+        invalid["compute_dtype"] = "float32"
+        with self.assertRaisesRegex(ValueError, "requires bfloat16"):
+            Config.from_dict(invalid)
+
+        invalid = self._cnn_fullbank_config_data()
+        invalid["replay_observation_dtype"] = "float32"
+        with self.assertRaisesRegex(ValueError, "requires uint8"):
             Config.from_dict(invalid)
 
     def test_patchbank_config_retains_all_patches_and_pixel_reconstruction(self) -> None:
@@ -927,6 +985,89 @@ class MoeArrowMethodTests(unittest.TestCase):
                 selected_feature_weight,
             )
         )
+
+    def test_cnn_fullbank_routes_copies_and_freezes_the_selected_encoder(self) -> None:
+        class TrainableEmbedder(nn.Module):
+            output_size = 6
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.channel_scale = nn.Parameter(torch.ones(3))
+
+            def forward(self, images: torch.Tensor) -> torch.Tensor:
+                pooled = images.mean((-2, -1)) * self.channel_scale
+                return pooled.repeat(1, 2)
+
+        torch.manual_seed(37)
+        world_model = WorldModel(
+            3,
+            (2, 3),
+            4,
+            5,
+            cnn_depth=4,
+            mlp_features=8,
+            mlp_layers=2,
+            observation_objective="reconstruction",
+            num_task_experts=2,
+            full_task_experts=True,
+            task_banked_image_encoder=True,
+            image_embedder=TrainableEmbedder(),
+        )
+        source_encoder = world_model.rssm.image_embedder_for(0)
+        target_encoder = world_model.rssm.image_embedder_for(1)
+        self.assertIsNot(source_encoder, target_encoder)
+
+        with torch.no_grad():
+            source_encoder.channel_scale.fill_(2.0)
+        world_model.activate_task_expert(0)
+        self.assertTrue(world_model.initialize_task_expert(1, 0))
+        torch.testing.assert_close(
+            target_encoder.channel_scale,
+            source_encoder.channel_scale,
+        )
+        world_model.activate_task_expert(1)
+        self.assertFalse(any(p.requires_grad for p in source_encoder.parameters()))
+        self.assertTrue(all(p.requires_grad for p in target_encoder.parameters()))
+
+        source_before = source_encoder.channel_scale.detach().clone()
+        target_before = target_encoder.channel_scale.detach().clone()
+        optimizer = torch.optim.Adam(world_model.parameters(), lr=1e-3)
+        actions = torch.nn.functional.one_hot(
+            torch.tensor([[0, 1], [2, 3], [1, 0]]), num_classes=4
+        ).float()
+        observations = torch.rand(3, 2, 3, 64, 64)
+        rewards = torch.randn(3, 2, 1)
+        continues = torch.ones(3, 2, 1)
+        resets = torch.zeros(3, 2, 1)
+
+        loss, metrics = world_model.compute_loss(
+            actions,
+            observations,
+            rewards,
+            continues,
+            resets,
+            task_id=1,
+        )
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIn("Loss/recon", metrics)
+        self.assertIsNone(source_encoder.channel_scale.grad)
+        self.assertGreater(target_encoder.channel_scale.grad.abs().sum().item(), 0)
+        self.assertTrue(
+            all(p.grad is None for p in world_model.decoder_for(0).parameters())
+        )
+        self.assertTrue(
+            any(p.grad is not None for p in world_model.decoder_for(1).parameters())
+        )
+        optimizer.step()
+        torch.testing.assert_close(
+            source_encoder.channel_scale,
+            source_before,
+            rtol=0,
+            atol=0,
+        )
+        self.assertFalse(torch.equal(target_encoder.channel_scale, target_before))
 
     def test_patchbank_routes_pixel_decoders_and_precomputed_full_features(self) -> None:
         class Embedder(nn.Module):

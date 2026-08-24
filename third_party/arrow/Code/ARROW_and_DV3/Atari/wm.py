@@ -141,6 +141,7 @@ class WorldModel(nn.Module):
         residual_consolidation: str = "none",
         num_task_experts: int = 1,
         full_task_experts: bool = False,
+        task_banked_image_encoder: bool = False,
         image_embedder: Optional[nn.Module] = None,
         compute_dtype: str = "float32",
     ) -> None:
@@ -217,6 +218,7 @@ class WorldModel(nn.Module):
             dinov3_patch_adapter=dinov3_patch_adapter,
             num_task_experts=num_task_experts,
             full_task_experts=full_task_experts,
+            task_banked_image_encoder=task_banked_image_encoder,
             residual_correction=residual_correction,
             residual_bottleneck_features=residual_bottleneck_features,
             residual_grid_size=residual_grid_size,
@@ -488,7 +490,10 @@ class WorldModel(nn.Module):
         ):
             raise ValueError(f"Task expert {task_index} has not been initialized")
 
-        self.rssm.image_embedder.requires_grad_(False)
+        for index in range(self.rssm.num_task_experts):
+            self.rssm.image_embedder_for(index).requires_grad_(
+                self.rssm.task_banked_image_encoder and index == task_index
+            )
         self.rssm.observation_adapter.requires_grad_(
             self.rssm.observation_adapter_kind != "none"
         )
@@ -620,7 +625,7 @@ class WorldModel(nn.Module):
             "dinov3_posterior_feature",
         }:
             raw_or_adapted = (
-                self.rssm.embed_observations(xs)
+                self.rssm.embed_observations(xs, task_id=task_id)
                 if observation_features is None
                 else observation_features
             )

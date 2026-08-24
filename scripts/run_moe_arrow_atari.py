@@ -51,6 +51,7 @@ FULL_PATCH_FEATURE_DIM = 384
 CONV_ADAPTER_OUTPUT_CHANNELS = 64
 CONV_ADAPTER_OUTPUT_GRID_SIZE = 8
 RSSM_LATENT_SHAPE = (32, 32)
+CNN_ENCODER_OUTPUT_SIZE = 4_096
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,9 @@ class LaunchVariant:
     output_prefix: str
     current_task_fraction: float
     observation_objective: str
+    observation_encoder: str
+    task_banked_image_encoder: bool
+    replay_observation_dtype: str
     feature_loss: str
     random_policy: str
     shared_core_mode: str
@@ -143,6 +147,9 @@ MOE_ARROW_VARIANT = LaunchVariant(
     output_prefix="moe_arrow_ar50",
     current_task_fraction=0.5,
     observation_objective="dinov3_next_feature",
+    observation_encoder="dinov3_vits16",
+    task_banked_image_encoder=False,
+    replay_observation_dtype="float32",
     feature_loss="cosine",
     random_policy="first",
     shared_core_mode="trainable",
@@ -157,6 +164,33 @@ MOE_ARROW_VARIANT = LaunchVariant(
     observation_description="one-step prior prediction of stopped spatial features",
 )
 
+CNN_FULLBANK_VARIANT = LaunchVariant(
+    method="CNN-FullBank-ARROW-50",
+    code_id="cnn_fullbank_arrow",
+    protocol="CNN-FullBank-ARROW-v1-Atari-TaskAware",
+    role="fully-task-banked-dreamerv3-arrow-method",
+    output_prefix="cnn_fullbank_arrow_ar50",
+    current_task_fraction=1.0,
+    observation_objective="reconstruction",
+    observation_encoder="cnn",
+    task_banked_image_encoder=True,
+    replay_observation_dtype="uint8",
+    feature_loss="cosine",
+    random_policy="new",
+    shared_core_mode="task_isolated",
+    full_task_experts=True,
+    patch_pool_size=0,
+    patch_feature_dim=0,
+    patch_projection="none",
+    patch_projection_seed=0,
+    replay_feature_mode="cached",
+    patch_adapter="none",
+    pixel_decoder=True,
+    observation_description=(
+        "DreamerV3 pixel reconstruction from a task-banked CNN encoder"
+    ),
+)
+
 DINO_FULLBANK_VARIANT = LaunchVariant(
     method="DINO-FullBank-ARROW-50",
     code_id="dino_fullbank_arrow",
@@ -165,6 +199,9 @@ DINO_FULLBANK_VARIANT = LaunchVariant(
     output_prefix="dino_fullbank_arrow_ar50",
     current_task_fraction=1.0,
     observation_objective="dinov3_posterior_feature",
+    observation_encoder="dinov3_vits16",
+    task_banked_image_encoder=False,
+    replay_observation_dtype="float32",
     feature_loss="batch_standardized_smooth_l1",
     random_policy="new",
     shared_core_mode="task_isolated",
@@ -187,6 +224,9 @@ DINO_PATCHBANK_VARIANT = LaunchVariant(
     output_prefix="dino_patchbank_arrow_ar50",
     current_task_fraction=1.0,
     observation_objective="reconstruction",
+    observation_encoder="dinov3_vits16",
+    task_banked_image_encoder=False,
+    replay_observation_dtype="float32",
     feature_loss="cosine",
     random_policy="new",
     shared_core_mode="task_isolated",
@@ -209,6 +249,9 @@ DINO_CONVBANK_VARIANT = LaunchVariant(
     output_prefix="dino_convbank_arrow_ar50",
     current_task_fraction=1.0,
     observation_objective="reconstruction",
+    observation_encoder="dinov3_vits16",
+    task_banked_image_encoder=False,
+    replay_observation_dtype="uint8",
     feature_loss="cosine",
     random_policy="new",
     shared_core_mode="task_banked_shared_adapter",
@@ -227,6 +270,7 @@ DINO_CONVBANK_VARIANT = LaunchVariant(
 
 LAUNCH_VARIANTS = {
     "moe": MOE_ARROW_VARIANT,
+    "cnn-fullbank": CNN_FULLBANK_VARIANT,
     "dino-fullbank": DINO_FULLBANK_VARIANT,
     "dino-patchbank": DINO_PATCHBANK_VARIANT,
     "dino-convbank": DINO_CONVBANK_VARIANT,
@@ -259,6 +303,17 @@ def _posterior_parameter_count(
     return parameters
 
 
+def _cnn_encoder_parameter_count(*, img_channels: int, channels: int) -> int:
+    channel_widths = [channels * 2**index for index in range(4)]
+    input_widths = [img_channels, *channel_widths[:-1]]
+    convolution_parameters = sum(
+        input_width * output_width * 4 * 4 + output_width
+        for input_width, output_width in zip(input_widths, channel_widths)
+    )
+    layer_norm_parameters = sum(2 * width for width in channel_widths)
+    return convolution_parameters + layer_norm_parameters
+
+
 def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Launch a task-aware DINO/ARROW method with one expert and actor per game"
@@ -268,8 +323,8 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         choices=tuple(LAUNCH_VARIANTS),
         default=default_method,
         help=(
-            "moe is the original partial-expert route; dino-fullbank, "
-            "dino-patchbank, and dino-convbank select named task-bank protocols"
+            "moe is the original partial-expert route; cnn-fullbank and the "
+            "DINO variants select named task-bank protocols"
         ),
     )
     parser.add_argument("--seed", type=int, choices=range(5), default=0)
@@ -299,7 +354,7 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         default=1,
         help=(
             "Number of CUDA devices. Two- and four-device native DDP are "
-            "validated only for DINO-ConvBank"
+            "validated for DINO-ConvBank and CNN-FullBank"
         ),
     )
     parser.add_argument("--cpu-threads", type=int)
@@ -309,8 +364,8 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         choices=tuple(PRECISION_PROFILES),
         default=None,
         help=(
-            "Explicit execution precision. DINO-ConvBank defaults to and requires "
-            "BF16 AMP; other methods default to FP32/TF32"
+            "Explicit execution precision. DINO-ConvBank and CNN-FullBank default "
+            "to and require BF16 AMP; other methods default to FP32/TF32"
         ),
     )
     parser.add_argument(
@@ -330,7 +385,7 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
 def _resolved_config(
     source: dict,
     *,
-    model_path: Path,
+    model_path: Path | None,
     epochs: int,
     variant: LaunchVariant = MOE_ARROW_VARIANT,
     precision_profile: PrecisionProfile = PRECISION_PROFILES["fp32-tf32"],
@@ -348,27 +403,60 @@ def _resolved_config(
             "moe_arrow_current_task_fraction": 0.5,
             "dino_fullbank_current_task_fraction": 1.0,
             "observation_objective": variant.observation_objective,
-            "observation_encoder": "dinov3_vits16",
-            "dinov3_model_path": str(model_path),
+            "observation_encoder": variant.observation_encoder,
+            "task_banked_image_encoder": variant.task_banked_image_encoder,
+            "dinov3_model_path": (
+                str(model_path)
+                if variant.observation_encoder == "dinov3_vits16"
+                else None
+            ),
             "dinov3_input_size": DINOV3_INPUT_SIZE,
-            "dinov3_max_batch_size": precision_profile.dinov3_max_batch_size,
-            "dinov3_feature_cache_dtype": precision_profile.feature_dtype,
+            "dinov3_max_batch_size": (
+                precision_profile.dinov3_max_batch_size
+                if variant.observation_encoder == "dinov3_vits16"
+                else DINOV3_MAX_BATCH_SIZE
+            ),
+            "dinov3_feature_cache_dtype": (
+                precision_profile.feature_dtype
+                if variant.observation_encoder == "dinov3_vits16"
+                else DINOV3_CACHE_DTYPE
+            ),
             "dinov3_replay_feature_mode": variant.replay_feature_mode,
             "dinov3_feature_loss_scale": DINOV3_FEATURE_LOSS_SCALE,
-            "dinov3_feature_mode": "patch_grid",
-            "dinov3_patch_pool_size": variant.patch_pool_size,
-            "dinov3_patch_feature_dim": variant.patch_feature_dim,
-            "dinov3_patch_projection": variant.patch_projection,
+            "dinov3_feature_mode": (
+                "patch_grid"
+                if variant.observation_encoder == "dinov3_vits16"
+                else "cls"
+            ),
+            "dinov3_patch_pool_size": (
+                variant.patch_pool_size
+                if variant.observation_encoder == "dinov3_vits16"
+                else DINOV3_PATCH_POOL_SIZE
+            ),
+            "dinov3_patch_feature_dim": (
+                variant.patch_feature_dim
+                if variant.observation_encoder == "dinov3_vits16"
+                else 384
+            ),
+            "dinov3_patch_projection": (
+                variant.patch_projection
+                if variant.observation_encoder == "dinov3_vits16"
+                else "none"
+            ),
             "dinov3_patch_projection_frames": 0,
-            "dinov3_patch_projection_seed": variant.patch_projection_seed,
-            "dinov3_patch_adapter": variant.patch_adapter,
+            "dinov3_patch_projection_seed": (
+                variant.patch_projection_seed
+                if variant.observation_encoder == "dinov3_vits16"
+                else 0
+            ),
+            "dinov3_patch_adapter": (
+                variant.patch_adapter
+                if variant.observation_encoder == "dinov3_vits16"
+                else "none"
+            ),
             "dinov3_feature_loss_kind": variant.feature_loss,
             "dinov3_feature_std_floor": DINOV3_FEATURE_STD_FLOOR,
-            "replay_observation_dtype": (
-                "uint8"
-                if variant.code_id == "dino_convbank_arrow"
-                else "float32"
-            ),
+            "replay_observation_dtype": variant.replay_observation_dtype,
             "actor_network": "mlp",
             "fresh_ac": False,
             "random_policy": variant.random_policy,
@@ -388,19 +476,23 @@ def main(*, default_method: str = "moe") -> int:
     parser = _parser(default_method=default_method)
     args = parser.parse_args()
     variant = LAUNCH_VARIANTS[args.method]
+    requires_dinov3 = variant.observation_encoder == "dinov3_vits16"
+    bf16_required_methods = {"dino-convbank", "cnn-fullbank"}
     precision_profile_name = args.precision_profile or (
-        "bf16-amp" if args.method == "dino-convbank" else "fp32-tf32"
+        "bf16-amp" if args.method in bf16_required_methods else "fp32-tf32"
     )
     precision_profile = PRECISION_PROFILES[precision_profile_name]
-    if args.method == "dino-convbank" and precision_profile_name != "bf16-amp":
-        parser.error("dino-convbank requires --precision-profile bf16-amp")
-    if precision_profile_name == "bf16-amp" and args.method != "dino-convbank":
+    if args.method in bf16_required_methods and precision_profile_name != "bf16-amp":
+        parser.error(f"{args.method} requires --precision-profile bf16-amp")
+    if precision_profile_name == "bf16-amp" and args.method not in bf16_required_methods:
         parser.error(
             "--precision-profile bf16-amp is currently validated only for "
-            "dino-convbank"
+            "dino-convbank and cnn-fullbank"
         )
-    if args.devices > 1 and args.method != "dino-convbank":
-        parser.error("--devices 2/4 is validated only for dino-convbank")
+    if args.devices > 1 and args.method not in bf16_required_methods:
+        parser.error(
+            "--devices 2/4 is validated only for dino-convbank and cnn-fullbank"
+        )
     if args.task1_tuning_profile is not None:
         if args.method != "dino-convbank":
             parser.error(
@@ -410,7 +502,7 @@ def main(*, default_method: str = "moe") -> int:
             parser.error(
                 "--task1-tuning-profile requires --task-prefix-length 1"
             )
-    if args.dinov3_model_path is None:
+    if requires_dinov3 and args.dinov3_model_path is None:
         parser.error("--dinov3-model-path or DINOV3_MODEL_PATH is required")
     if args.cpu_threads is not None and args.cpu_threads < 1:
         parser.error("--cpu-threads must be positive")
@@ -421,8 +513,14 @@ def main(*, default_method: str = "moe") -> int:
         git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
     )
     python = args.python.resolve()
-    model_path = args.dinov3_model_path.expanduser().resolve()
-    model_artifact = _model_artifact_manifest(model_path)
+    model_path = (
+        args.dinov3_model_path.expanduser().resolve()
+        if requires_dinov3 and args.dinov3_model_path is not None
+        else None
+    )
+    model_artifact = (
+        _model_artifact_manifest(model_path) if model_path is not None else None
+    )
     source_config_path = _config_path(args.curriculum, args.seed)
     source_config = _verify_primary_config(
         source_config_path, args.curriculum, args.seed
@@ -509,7 +607,9 @@ def main(*, default_method: str = "moe") -> int:
     env["PYTHONPATH"] = os.pathsep.join(
         value for value in (project_pythonpath, inherited_pythonpath) if value
     )
-    dependency_versions = _dinov3_dependency_versions(python, env)
+    dependency_versions = (
+        _dinov3_dependency_versions(python, env) if requires_dinov3 else {}
+    )
 
     command = [str(python)]
     if args.devices > 1:
@@ -570,9 +670,15 @@ def main(*, default_method: str = "moe") -> int:
         * decisions_per_epoch
         * source_config["env_repeat"]
     )
-    feature_dim = variant.patch_feature_dim * variant.patch_pool_size**2
+    feature_dim = (
+        CNN_ENCODER_OUTPUT_SIZE
+        if variant.observation_encoder == "cnn"
+        else variant.patch_feature_dim * variant.patch_pool_size**2
+    )
     posterior_embedding_dim = (
-        CONV_ADAPTER_OUTPUT_CHANNELS * CONV_ADAPTER_OUTPUT_GRID_SIZE**2
+        CNN_ENCODER_OUTPUT_SIZE
+        if variant.observation_encoder == "cnn"
+        else CONV_ADAPTER_OUTPUT_CHANNELS * CONV_ADAPTER_OUTPUT_GRID_SIZE**2
         if variant.patch_adapter == "conv_3x3_stride2"
         else feature_dim
     )
@@ -631,7 +737,17 @@ def main(*, default_method: str = "moe") -> int:
             else 0
         ),
     }
-    if variant.replay_feature_mode == "cached":
+    if variant.observation_encoder == "cnn":
+        feature_cache = {
+            "dtype": None,
+            "feature_dim": 0,
+            "storage_bytes": 0,
+            "storage_backend": "none",
+            "mode": "none_cnn_encodes_sampled_observations",
+            "buffers": {},
+            "retention_and_sampling": "not_applicable",
+        }
+    elif variant.replay_feature_mode == "cached":
         feature_cache = _feature_cache_budget(
             config,
             dtype=config["dinov3_feature_cache_dtype"],
@@ -661,6 +777,7 @@ def main(*, default_method: str = "moe") -> int:
         }
     base_replay_storage = _arrow_replay_storage_budget(config)
     if variant.code_id in {
+        "cnn_fullbank_arrow",
         "dino_patchbank_arrow",
         "dino_convbank_arrow",
     }:
@@ -696,7 +813,11 @@ def main(*, default_method: str = "moe") -> int:
             "exposed_to_agent": True,
             "source": "sequential scheduler",
             "uses": [
-                "RSSM/head expert routing",
+                (
+                    "CNN/RSSM/head expert routing"
+                    if variant.task_banked_image_encoder
+                    else "RSSM/head expert routing"
+                ),
                 "task-filtered replay sampling",
                 "actor-critic bank selection",
             ],
@@ -795,7 +916,9 @@ def main(*, default_method: str = "moe") -> int:
                 "actor log-probabilities and critic distributions",
             ],
             "tf32_enabled_for_float32_matmuls": True,
-            "dinov3_execution_chunk_size": config["dinov3_max_batch_size"],
+            "dinov3_execution_chunk_size": (
+                config["dinov3_max_batch_size"] if requires_dinov3 else None
+            ),
             "world_model_optimization_batch": {
                 "time": source_config["mb_t_size"],
                 "sequences": source_config["mb_n_size"],
@@ -819,6 +942,11 @@ def main(*, default_method: str = "moe") -> int:
             "allocated_experts": allocated_experts,
             "expert_modules": (
                 [
+                    *(
+                        ["cnn_image_encoder"]
+                        if variant.task_banked_image_encoder
+                        else []
+                    ),
                     "posterior_representation",
                     "recurrent_dynamics",
                     "latent_prior",
@@ -839,7 +967,9 @@ def main(*, default_method: str = "moe") -> int:
                 ]
             ),
             "shared_modules": (
-                (
+                []
+                if variant.task_banked_image_encoder
+                else (
                     [
                         "frozen DINOv3 encoder",
                         "trainable shared DINO patch convolution adapter",
@@ -892,16 +1022,70 @@ def main(*, default_method: str = "moe") -> int:
             "total_updates_unchanged": True,
         },
         "observation": {
-            "encoder": "frozen DINOv3 ViT-S/16",
-            "model_id": DINOV3_MODEL_ID,
+            "encoder": (
+                "task-banked DreamerV3 CNN"
+                if variant.observation_encoder == "cnn"
+                else "frozen DINOv3 ViT-S/16"
+            ),
+            "encoder_topology": (
+                "per_task_bank"
+                if variant.task_banked_image_encoder
+                else "shared"
+            ),
+            "encoder_parameters_per_task": (
+                _cnn_encoder_parameter_count(
+                    img_channels=3,
+                    channels=source_config["cnn_depth"],
+                )
+                if variant.observation_encoder == "cnn"
+                else 0
+            ),
+            "allocated_encoder_parameters": (
+                _cnn_encoder_parameter_count(
+                    img_channels=3,
+                    channels=source_config["cnn_depth"],
+                )
+                * allocated_experts
+                if variant.task_banked_image_encoder
+                else 0
+            ),
+            "model_id": (
+                None if variant.observation_encoder == "cnn" else DINOV3_MODEL_ID
+            ),
             "model_artifact": model_artifact,
-            "input_size": DINOV3_INPUT_SIZE,
-            "feature_mode": "patch_grid",
-            "patch_pool_size": variant.patch_pool_size,
-            "patch_feature_dim": variant.patch_feature_dim,
-            "patch_projection": variant.patch_projection,
-            "patch_projection_seed": variant.patch_projection_seed,
-            "patch_projection_frames": 0,
+            "input_size": (
+                source_config["img_size"]
+                if variant.observation_encoder == "cnn"
+                else DINOV3_INPUT_SIZE
+            ),
+            "feature_mode": (
+                "flattened_conv_grid"
+                if variant.observation_encoder == "cnn"
+                else "patch_grid"
+            ),
+            "patch_pool_size": (
+                None
+                if variant.observation_encoder == "cnn"
+                else variant.patch_pool_size
+            ),
+            "patch_feature_dim": (
+                None
+                if variant.observation_encoder == "cnn"
+                else variant.patch_feature_dim
+            ),
+            "patch_projection": (
+                None
+                if variant.observation_encoder == "cnn"
+                else variant.patch_projection
+            ),
+            "patch_projection_seed": (
+                None
+                if variant.observation_encoder == "cnn"
+                else variant.patch_projection_seed
+            ),
+            "patch_projection_frames": (
+                None if variant.observation_encoder == "cnn" else 0
+            ),
             "feature_dim": feature_dim,
             "posterior_embedding_dim": posterior_embedding_dim,
             "posterior_parameters_per_task": posterior_parameters_per_task,
@@ -909,7 +1093,11 @@ def main(*, default_method: str = "moe") -> int:
                 unadapted_posterior_parameters_per_task
             ),
             "patch_adapter": patch_adapter,
-            "replay_feature_mode": variant.replay_feature_mode,
+            "replay_feature_mode": (
+                "not_applicable"
+                if variant.observation_encoder == "cnn"
+                else variant.replay_feature_mode
+            ),
             "objective": variant.observation_description,
             "feature_loss": (
                 "not_applicable" if variant.pixel_decoder else variant.feature_loss
@@ -930,7 +1118,11 @@ def main(*, default_method: str = "moe") -> int:
             "storage_device": (
                 "cpu_addressable_file_mmap"
                 if variant.code_id
-                in {"dino_patchbank_arrow", "dino_convbank_arrow"}
+                in {
+                    "cnn_fullbank_arrow",
+                    "dino_patchbank_arrow",
+                    "dino_convbank_arrow",
+                }
                 else "cpu"
             ),
             "base_storage": base_replay_storage,
@@ -994,7 +1186,7 @@ def main(*, default_method: str = "moe") -> int:
     if args.dry_run:
         return 0
 
-    if dependency_versions != DINOV3_DEPENDENCIES:
+    if requires_dinov3 and dependency_versions != DINOV3_DEPENDENCIES:
         raise RuntimeError(
             f"{variant.method} requires pinned DINOv3 dependencies: "
             f"expected={DINOV3_DEPENDENCIES} observed={dependency_versions}"

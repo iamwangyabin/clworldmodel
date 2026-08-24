@@ -1,5 +1,9 @@
 # Decision 0016: Require BF16 and uint8 replay for DINO-ConvBank
 
+Scope note: Decision 0018 later applies the same explicit storage and precision
+profile to the separately named CNN-FullBank method; prior protocols remain
+unchanged.
+
 ## Status
 
 Accepted. This decision supersedes Decision 0015's FP32/TF32 default for the

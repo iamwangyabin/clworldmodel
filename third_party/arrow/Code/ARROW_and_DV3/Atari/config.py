@@ -29,6 +29,7 @@ DinoV3PatchAdapter = Literal["none", "conv_3x3_stride2"]
 ContinualMethod = Literal[
     "none",
     "moe_arrow",
+    "cnn_fullbank_arrow",
     "dino_fullbank_arrow",
     "dino_patchbank_arrow",
     "dino_convbank_arrow",
@@ -274,6 +275,7 @@ class Config(Serialisable):
     r2_redundancy_scale: float = 5e-4
     r2_normalization_eps: float = 1e-8
     observation_encoder: ObservationEncoder = "cnn"
+    task_banked_image_encoder: bool = False
     dinov3_model_path: Optional[str] = None
     dinov3_input_size: int = 256
     dinov3_max_batch_size: int = 128
@@ -336,24 +338,31 @@ class Config(Serialisable):
         if self.continual_method not in {
             "none",
             "moe_arrow",
+            "cnn_fullbank_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
         }:
             raise ValueError(f"Unknown continual method: {self.continual_method!r}")
         is_moe_arrow = self.continual_method == "moe_arrow"
+        is_cnn_fullbank = self.continual_method == "cnn_fullbank_arrow"
         is_dino_fullbank = self.continual_method == "dino_fullbank_arrow"
         is_dino_patchbank = self.continual_method == "dino_patchbank_arrow"
         is_dino_convbank = self.continual_method == "dino_convbank_arrow"
         is_dino_pixelbank = is_dino_patchbank or is_dino_convbank
-        uses_task_experts = is_moe_arrow or is_dino_fullbank or is_dino_pixelbank
+        uses_task_experts = (
+            is_moe_arrow
+            or is_cnn_fullbank
+            or is_dino_fullbank
+            or is_dino_pixelbank
+        )
         if self.data_parallel_world_size not in {1, 2, 4}:
             raise ValueError("data_parallel_world_size must be one of 1, 2, or 4")
         if self.data_parallel_world_size > 1:
-            if not is_dino_convbank:
+            if not (is_dino_convbank or is_cnn_fullbank):
                 raise ValueError(
                     "multi-GPU data parallelism is validated only for "
-                    "DINO-ConvBank-ARROW"
+                    "DINO-ConvBank-ARROW and CNN-FullBank-ARROW"
                 )
             distributed_batch_sizes = {
                 "mb_n_size": self.mb_n_size,
@@ -388,9 +397,17 @@ class Config(Serialisable):
                 raise ValueError(
                     "DINO-ConvBank-ARROW requires uint8 observation replay"
                 )
+        elif is_cnn_fullbank:
+            if self.compute_dtype != "bfloat16":
+                raise ValueError("CNN-FullBank-ARROW requires bfloat16 compute")
+            if self.replay_observation_dtype != "uint8":
+                raise ValueError(
+                    "CNN-FullBank-ARROW requires uint8 observation replay"
+                )
         elif self.replay_observation_dtype != "float32":
             raise ValueError(
-                "uint8 observation replay is reserved for DINO-ConvBank-ARROW"
+                "uint8 observation replay is reserved for the named optimized "
+                "DINO-ConvBank and CNN-FullBank protocols"
             )
         if uses_task_experts:
             if self.algorithm != "arrow":
@@ -424,10 +441,10 @@ class Config(Serialisable):
                 raise ValueError(
                     "MoE-ARROW predicts frozen DINOv3 features from the RSSM prior"
                 )
-        elif is_dino_fullbank or is_dino_pixelbank:
+        elif is_cnn_fullbank or is_dino_fullbank or is_dino_pixelbank:
             if self.dino_fullbank_current_task_fraction != 1.0:
                 raise ValueError(
-                    "DINO task banks assign all updates to the current task"
+                    "Full task banks assign all updates to the current task"
                 )
             expected_shared_core_mode = (
                 "task_banked_shared_adapter"
@@ -436,33 +453,39 @@ class Config(Serialisable):
             )
             if self.shared_core_mode != expected_shared_core_mode:
                 raise ValueError(
-                    "The selected DINO task bank requires shared_core_mode="
+                    "The selected full task bank requires shared_core_mode="
                     f"'{expected_shared_core_mode}'"
                 )
             expected_objective = (
                 "reconstruction"
-                if is_dino_pixelbank
+                if is_cnn_fullbank or is_dino_pixelbank
                 else "dinov3_posterior_feature"
             )
             if self.observation_objective != expected_objective:
                 raise ValueError(
                     (
-                        "DINO patch task banks keep DreamerV3 pixel reconstruction"
-                        if is_dino_pixelbank
+                        "CNN and DINO patch task banks keep DreamerV3 pixel reconstruction"
+                        if is_cnn_fullbank or is_dino_pixelbank
                         else "DINO-FullBank-ARROW reconstructs posterior DINOv3 features"
                     )
                 )
             if self.random_policy != "new":
                 raise ValueError(
-                    "DINO task banks require a random collection for each new task"
+                    "Full task banks require a random collection for each new task"
                 )
-            if is_dino_pixelbank and any(
+            if (is_cnn_fullbank or is_dino_pixelbank) and any(
                 replay_config.rb_device.split(":", 1)[0] != "cpu"
                 for replay_config in self.replay_buffers
             ):
                 raise ValueError(
-                    "DINO patch task banks require CPU-addressable mapped observation replay"
+                    "Pixel task banks require CPU-addressable mapped observation replay"
                 )
+        if self.task_banked_image_encoder != is_cnn_fullbank:
+            raise ValueError(
+                "task_banked_image_encoder is required only by CNN-FullBank-ARROW"
+            )
+        if is_cnn_fullbank and self.observation_encoder != "cnn":
+            raise ValueError("CNN-FullBank-ARROW requires the CNN observation encoder")
         if self.observation_objective not in {
             "reconstruction",
             "r2",
@@ -1001,6 +1024,7 @@ class Config(Serialisable):
     def uses_task_experts(self) -> bool:
         return self.continual_method in {
             "moe_arrow",
+            "cnn_fullbank_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1009,6 +1033,7 @@ class Config(Serialisable):
     @property
     def uses_full_task_experts(self) -> bool:
         return self.continual_method in {
+            "cnn_fullbank_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1019,6 +1044,7 @@ class Config(Serialisable):
         if self.continual_method == "moe_arrow":
             return self.moe_arrow_current_task_fraction
         if self.continual_method in {
+            "cnn_fullbank_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",

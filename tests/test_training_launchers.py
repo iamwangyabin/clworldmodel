@@ -399,6 +399,77 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(launch["extra_gradient_updates"], 0)
         self.assertFalse(output_dir.exists())
 
+    def test_cnn_fullbank_needs_no_dino_and_records_complete_task_banks(self) -> None:
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary) / "cnn_fullbank_run"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--task-prefix-length",
+                    "1",
+                    "--devices",
+                    "4",
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+        self.assertEqual(
+            launch["method"],
+            "CNN-FullBank-ARROW-50-BF16AMP-Uint8Replay-DP4-T1Pilot",
+        )
+        self.assertEqual(
+            launch["protocol"],
+            "CNN-FullBank-ARROW-v1-BF16AMP-Uint8Replay-DP4-Atari-TaskAware",
+        )
+        self.assertEqual(launch["code_id"], "cnn_fullbank_arrow")
+        self.assertEqual(
+            launch["world_model"]["expert_modules"],
+            [
+                "cnn_image_encoder",
+                "posterior_representation",
+                "recurrent_dynamics",
+                "latent_prior",
+                "pixel_decoder",
+                "reward_head",
+                "continue_head",
+            ],
+        )
+        self.assertEqual(launch["world_model"]["shared_modules"], [])
+        self.assertTrue(launch["world_model"]["old_task_functionally_isolated"])
+        observation = launch["observation"]
+        self.assertEqual(observation["encoder"], "task-banked DreamerV3 CNN")
+        self.assertEqual(observation["encoder_topology"], "per_task_bank")
+        self.assertEqual(observation["encoder_parameters_per_task"], 691_104)
+        self.assertEqual(observation["allocated_encoder_parameters"], 4_146_624)
+        self.assertEqual(observation["feature_dim"], 4_096)
+        self.assertEqual(observation["posterior_embedding_dim"], 4_096)
+        self.assertIsNone(observation["model_artifact"])
+        self.assertIsNone(observation["patch_pool_size"])
+        self.assertEqual(
+            launch["replay"]["feature_cache"]["mode"],
+            "none_cnn_encodes_sampled_observations",
+        )
+        self.assertEqual(
+            launch["replay"]["storage_device"],
+            "cpu_addressable_file_mmap",
+        )
+        self.assertEqual(launch["precision"]["compute_dtype"], "bfloat16")
+        self.assertIsNone(launch["precision"]["dinov3_execution_chunk_size"])
+        self.assertEqual(launch["runtime_dependencies"], {})
+        self.assertFalse(output_dir.exists())
+
     def test_dino_patchbank_dry_run_records_full_patches_and_pixel_decoder(self) -> None:
         launch, output_dir = self._karrow_dry_run(
             "--task-prefix-length",
