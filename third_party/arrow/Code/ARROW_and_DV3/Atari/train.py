@@ -1160,6 +1160,132 @@ def _save_task_bank_evaluation_snapshot(
     return path
 
 
+def _save_task_bank_boundary_snapshot(
+    snapshot_dir: Path,
+    *,
+    config: Config,
+    wm: WorldModel,
+    actor_critic_bank,
+    epoch: int,
+    world_model_updates: int,
+    total_env_steps: int,
+    task_metadata: dict,
+    project_git_commit: str,
+) -> Path:
+    """Save one complete task bank immediately after a task's final update."""
+    if actor_critic_bank is None:
+        raise ValueError("Task-bank boundary snapshots require an actor bank")
+    if len(project_git_commit) != 40:
+        raise ValueError("Project Git commit must be a full 40-character hash")
+    try:
+        int(project_git_commit, 16)
+    except ValueError as exc:
+        raise ValueError("Project Git commit must be hexadecimal") from exc
+    required_task_fields = {
+        "boundary_index",
+        "task_index",
+        "task_name",
+        "task_reward_scale",
+    }
+    if not required_task_fields.issubset(task_metadata):
+        raise ValueError("Task-boundary metadata is incomplete")
+    task_id = int(task_metadata["task_index"])
+    completed_actor = actor_critic_bank.get(task_id)
+
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    completed_epochs = epoch + 1
+    path = snapshot_dir / (
+        f"boundary_{int(task_metadata['boundary_index']):02d}_"
+        f"task_{task_id:02d}_completed_{completed_epochs:04d}.pt"
+    )
+    if path.exists():
+        raise FileExistsError(f"Refusing to overwrite task-boundary snapshot: {path}")
+    index_path = snapshot_dir / "index.json"
+    if index_path.exists():
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        if index.get("project_git_commit") != project_git_commit:
+            raise RuntimeError("Task-boundary snapshot index commit changed mid-run")
+        snapshots = index.get("snapshots")
+        if not isinstance(snapshots, list):
+            raise ValueError("Task-boundary snapshot index has invalid snapshots")
+        if any(
+            int(record.get("boundary_index", -1))
+            == int(task_metadata["boundary_index"])
+            for record in snapshots
+        ):
+            raise FileExistsError(
+                "Refusing to duplicate task-boundary index entry: "
+                f"{task_metadata['boundary_index']}"
+            )
+    else:
+        index = {
+            "schema_version": 1,
+            "artifact_kind": "task_bank_boundary_snapshot_index",
+            "project_git_commit": project_git_commit,
+            "resumable": False,
+            "snapshots": [],
+        }
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    payload = {
+        "schema_version": 1,
+        "artifact_kind": "task_bank_boundary_inference_snapshot",
+        "resumable": False,
+        "saved_after_final_task_update_before_schedule_advance": True,
+        "project_git_commit": project_git_commit,
+        "epoch": epoch,
+        "completed_epochs": completed_epochs,
+        "world_model_updates": world_model_updates,
+        "actor_critic_updates": completed_epochs * config.ac_train_steps,
+        "total_raw_environment_frames": total_env_steps,
+        "algorithm": config.algorithm,
+        "seed": config.seed,
+        "completed_task": dict(task_metadata),
+        "omitted_state": [
+            "optimizers",
+            "replay",
+            "RNG",
+            "environment schedule",
+            "step schedulers",
+        ],
+        "config": config.to_dict(),
+        "world_model_state_dict": _cpu_state_dict(wm),
+        "actor_critic_bank_state_dict": actor_critic_bank.inference_state_dict(),
+        "completed_task_actor_critic_state_dict": _cpu_state_dict(
+            completed_actor.ac
+        ),
+    }
+    torch.save(payload, temporary_path)
+    os.replace(temporary_path, path)
+
+    digest = _sha256(path)
+    digest_path = path.with_suffix(path.suffix + ".sha256")
+    temporary_digest_path = digest_path.with_suffix(digest_path.suffix + ".tmp")
+    temporary_digest_path.write_text(f"{digest}  {path.name}\n", encoding="ascii")
+    os.replace(temporary_digest_path, digest_path)
+
+    index["snapshots"].append(
+        {
+            "boundary_index": int(task_metadata["boundary_index"]),
+            "task_index": task_id,
+            "task_name": str(task_metadata["task_name"]),
+            "completed_epochs": completed_epochs,
+            "path": path.name,
+            "sha256": digest,
+        }
+    )
+    temporary_index_path = index_path.with_suffix(".json.tmp")
+    temporary_index_path.write_text(
+        json.dumps(index, indent=2) + "\n", encoding="utf-8"
+    )
+    os.replace(temporary_index_path, index_path)
+    print(
+        "[task-boundary-snapshot] "
+        f"boundary={task_metadata['boundary_index']} task={task_id} "
+        f"completed_epochs={completed_epochs} path={path} sha256={digest}"
+    )
+    return path
+
+
 def _write_best_validation_snapshot(
     snapshot_dir: Path,
     *,
@@ -1288,6 +1414,19 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--task-bank-snapshot-dir",
+        type=Path,
+        help=(
+            "Save the complete world-model and Actor-Critic bank immediately "
+            "after every task's final update. These inference snapshots omit "
+            "replay, optimizers, RNG, and schedule state and are not resumable."
+        ),
+    )
+    parser.add_argument(
+        "--project-git-commit",
+        help="Full project commit embedded in each task-boundary snapshot.",
+    )
+    parser.add_argument(
         "--init-analysis-snapshot",
         type=Path,
         help=(
@@ -1340,6 +1479,11 @@ if __name__ == "__main__":
     evaluation_snapshot_dir = (
         args.evaluation_snapshot_dir.resolve()
         if args.evaluation_snapshot_dir is not None
+        else None
+    )
+    task_bank_snapshot_dir = (
+        args.task_bank_snapshot_dir.resolve()
+        if args.task_bank_snapshot_dir is not None
         else None
     )
     torch.set_float32_matmul_precision("high" if args.tf32 else "highest")
@@ -1396,6 +1540,20 @@ if __name__ == "__main__":
             raise ValueError(
                 "Evaluation snapshots require fixed validation and held-out final seeds"
             )
+    if config.continual_method == "cnn_fullbank_arrow":
+        if task_bank_snapshot_dir is None:
+            raise ValueError(
+                "CNN-FullBank-ARROW requires --task-bank-snapshot-dir"
+            )
+        if args.project_git_commit is None:
+            raise ValueError(
+                "CNN-FullBank-ARROW task snapshots require --project-git-commit"
+            )
+    elif task_bank_snapshot_dir is not None:
+        raise ValueError(
+            "Task-bank boundary snapshots are currently required only for "
+            "CNN-FullBank-ARROW"
+        )
     milestone_completed_epochs = set(args.milestone_completed_epoch)
     invalid_milestones = sorted(
         epoch
@@ -2545,6 +2703,30 @@ if __name__ == "__main__":
                     actor_critic_bank.inference_state_dict(),
                     log_dir / "save_ac_bank.pt",
                 )
+
+        boundary_snapshot_metadata = (
+            _task_boundary_metadata(config, epoch)
+            if task_bank_snapshot_dir is not None
+            else None
+        )
+        if (
+            distributed_context.is_primary
+            and boundary_snapshot_metadata is not None
+        ):
+            _save_task_bank_boundary_snapshot(
+                task_bank_snapshot_dir,
+                config=config,
+                wm=wm,
+                actor_critic_bank=actor_critic_bank,
+                epoch=epoch,
+                world_model_updates=global_step,
+                total_env_steps=total_env_steps,
+                task_metadata=boundary_snapshot_metadata,
+                project_git_commit=str(args.project_git_commit),
+            )
+            writer.flush()
+        if boundary_snapshot_metadata is not None:
+            distributed_context.barrier()
 
         if distributed_context.is_primary and analysis_snapshot_dir is not None:
             boundary_metadata = _task_boundary_metadata(config, epoch)

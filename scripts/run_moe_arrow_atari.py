@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -115,6 +116,15 @@ class EvaluationAuditProfile:
     protocol_suffix: str
     output_suffix: str
     config_overrides: dict[str, str]
+    hypothesis: str
+
+
+@dataclass(frozen=True)
+class EarlyProgressGuardProfile:
+    protocol_suffix: str
+    output_suffix: str
+    reference_path: Path
+    comparison_through_step: int
     hypothesis: str
 
 
@@ -247,6 +257,23 @@ EVALUATION_AUDIT_PROFILES = {
             "Reusing one periodic validation cohort and retaining exact evaluated "
             "weights will distinguish optimization progress from Atari seed-cohort "
             "noise without changing gradients, interaction, or update budgets."
+        ),
+    ),
+}
+
+
+EARLY_PROGRESS_GUARD_PROFILES = {
+    "arrow-original-s0-v1": EarlyProgressGuardProfile(
+        protocol_suffix="ArrowOriginalEarlyGuardV1",
+        output_suffix="arrow_original_early_guard_v1",
+        reference_path=(
+            ROOT / "tests" / "fixtures" / "arrow_ar50_original_s0_early_metrics.json"
+        ),
+        comparison_through_step=5_000,
+        hypothesis=(
+            "A broad, predeclared early-loss envelope will catch numerical "
+            "failure without treating the non-paired original ARROW run as a "
+            "performance-parity control."
         ),
     ),
 }
@@ -543,6 +570,14 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--early-progress-guard",
+        choices=tuple(EARLY_PROGRESS_GUARD_PROFILES),
+        help=(
+            "Record a predeclared external early-loss diagnostic. Requires "
+            "a CNN-FullBank x4-full-updates Task 1 pilot"
+        ),
+    )
+    parser.add_argument(
         "--task-duration-multiplier",
         type=int,
         choices=(1, 2, 4),
@@ -719,6 +754,16 @@ def main(*, default_method: str = "moe") -> int:
             parser.error(
                 "--evaluation-audit-profile currently requires a Task 1 pilot"
             )
+    if args.early_progress_guard is not None:
+        if (
+            args.method != "cnn-fullbank"
+            or args.batch_profile != "x4-full-updates"
+            or args.task_prefix_length != 1
+        ):
+            parser.error(
+                "--early-progress-guard requires cnn-fullbank, "
+                "--batch-profile x4-full-updates, and --task-prefix-length 1"
+            )
     if args.task_duration_multiplier > 1:
         if args.method != "cnn-fullbank" or args.batch_profile is None:
             parser.error(
@@ -783,6 +828,11 @@ def main(*, default_method: str = "moe") -> int:
     evaluation_audit_profile = (
         EVALUATION_AUDIT_PROFILES[args.evaluation_audit_profile]
         if args.evaluation_audit_profile is not None
+        else None
+    )
+    early_progress_guard_profile = (
+        EARLY_PROGRESS_GUARD_PROFILES[args.early_progress_guard]
+        if args.early_progress_guard is not None
         else None
     )
     config_overrides: dict[str, int | float | str] = {}
@@ -850,6 +900,13 @@ def main(*, default_method: str = "moe") -> int:
         protocol = protocol.replace(
             "-Atari-", f"-{evaluation_audit_profile.protocol_suffix}-Atari-"
         )
+    if early_progress_guard_profile is not None:
+        method += f"-{early_progress_guard_profile.protocol_suffix}"
+        role += "-early-progress-diagnostic"
+        output_prefix += f"_{early_progress_guard_profile.output_suffix}"
+        protocol = protocol.replace(
+            "-Atari-", f"-{early_progress_guard_profile.protocol_suffix}-Atari-"
+        )
     if args.task_duration_multiplier > 1:
         duration_suffix = f"TaskDurationX{args.task_duration_multiplier}"
         method += f"-{duration_suffix}"
@@ -888,6 +945,16 @@ def main(*, default_method: str = "moe") -> int:
             actor_stability_profile is not None
             or evaluation_audit_profile is not None
         )
+        else None
+    )
+    task_bank_snapshot_dir = (
+        output_dir / "task_boundary_snapshots"
+        if variant.code_id == "cnn_fullbank_arrow"
+        else None
+    )
+    early_progress_reference_copy = (
+        output_dir / "arrow_early_progress_reference.json"
+        if early_progress_guard_profile is not None
         else None
     )
 
@@ -942,6 +1009,15 @@ def main(*, default_method: str = "moe") -> int:
     if evaluation_snapshot_dir is not None:
         command.extend(
             ("--evaluation-snapshot-dir", str(evaluation_snapshot_dir))
+        )
+    if task_bank_snapshot_dir is not None:
+        command.extend(
+            (
+                "--task-bank-snapshot-dir",
+                str(task_bank_snapshot_dir),
+                "--project-git-commit",
+                project_git["commit"],
+            )
         )
     if args.profile_stages:
         command.append("--profile-stages")
@@ -1654,8 +1730,49 @@ def main(*, default_method: str = "moe") -> int:
                 == "fixed_validation_heldout_final"
             ),
         },
+        "early_progress_guard": (
+            {
+                "profile": args.early_progress_guard,
+                "classification": "diagnostic_non_parity_stop_rule",
+                "reference_source": str(
+                    early_progress_guard_profile.reference_path
+                ),
+                "reference_source_sha256": hashlib.sha256(
+                    early_progress_guard_profile.reference_path.read_bytes()
+                ).hexdigest(),
+                "reference_copy": str(early_progress_reference_copy),
+                "comparator": str(
+                    ROOT / "scripts" / "compare_arrow_training_progress.py"
+                ),
+                "comparison_through_world_model_step": (
+                    early_progress_guard_profile.comparison_through_step
+                ),
+                "monitor_may_stop_after_recorded_failure": True,
+                "comparator_stops_process_itself": False,
+                "hypothesis": early_progress_guard_profile.hypothesis,
+                "not_a_pure_ddp_or_sample_matched_comparison": True,
+            }
+            if early_progress_guard_profile is not None
+            else None
+        ),
         "checkpointing": {
             "final_world_model_and_actor_bank": True,
+            "task_boundary_snapshot_dir": (
+                str(task_bank_snapshot_dir)
+                if task_bank_snapshot_dir is not None
+                else None
+            ),
+            "complete_task_bank_after_every_task": (
+                task_bank_snapshot_dir is not None
+            ),
+            "task_boundary_snapshot_project_git_commit": (
+                project_git["commit"]
+                if task_bank_snapshot_dir is not None
+                else None
+            ),
+            "task_boundary_snapshot_atomic_sha256": (
+                task_bank_snapshot_dir is not None
+            ),
             "evaluation_snapshot_dir": (
                 str(evaluation_snapshot_dir)
                 if evaluation_snapshot_dir is not None
@@ -1717,6 +1834,15 @@ def main(*, default_method: str = "moe") -> int:
             target_is_directory=True,
         )
     _write_json(config_path, config)
+    if early_progress_guard_profile is not None:
+        _write_json(
+            early_progress_reference_copy,
+            json.loads(
+                early_progress_guard_profile.reference_path.read_text(
+                    encoding="utf-8"
+                )
+            ),
+        )
     launch["started_at_utc"] = datetime.now(timezone.utc).isoformat()
     launch["runtime_environment"] = runtime_environment
     _write_json(output_dir / "launch.json", launch)

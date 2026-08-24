@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -468,6 +469,24 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(launch["precision"]["compute_dtype"], "bfloat16")
         self.assertIsNone(launch["precision"]["dinov3_execution_chunk_size"])
         self.assertEqual(launch["runtime_dependencies"], {})
+        checkpointing = launch["checkpointing"]
+        snapshot_dir = (output_dir / "task_boundary_snapshots").resolve()
+        self.assertEqual(
+            checkpointing["task_boundary_snapshot_dir"], str(snapshot_dir)
+        )
+        self.assertTrue(checkpointing["complete_task_bank_after_every_task"])
+        self.assertTrue(checkpointing["task_boundary_snapshot_atomic_sha256"])
+        self.assertEqual(
+            checkpointing["task_boundary_snapshot_project_git_commit"],
+            launch["project_git"]["commit"],
+        )
+        command = launch["command"]
+        snapshot_index = command.index("--task-bank-snapshot-dir")
+        self.assertEqual(command[snapshot_index + 1], str(snapshot_dir))
+        commit_index = command.index("--project-git-commit")
+        self.assertEqual(
+            command[commit_index + 1], launch["project_git"]["commit"]
+        )
         self.assertFalse(output_dir.exists())
 
     def test_cnn_fullbank_x4_batch_profile_is_sample_matched(self) -> None:
@@ -623,6 +642,61 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertFalse(
             launch["actor_critic"]["total_context_frame_uses_unchanged"]
         )
+
+    def test_cnn_early_progress_guard_is_predeclared_in_manifest(self) -> None:
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary) / "cnn_guarded_run"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--task-prefix-length",
+                    "1",
+                    "--devices",
+                    "4",
+                    "--batch-profile",
+                    "x4-full-updates",
+                    "--early-progress-guard",
+                    "arrow-original-s0-v1",
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+            guard = launch["early_progress_guard"]
+            reference = (
+                ROOT
+                / "tests"
+                / "fixtures"
+                / "arrow_ar50_original_s0_early_metrics.json"
+            )
+
+            self.assertIn("ArrowOriginalEarlyGuardV1", launch["method"])
+            self.assertEqual(guard["profile"], "arrow-original-s0-v1")
+            self.assertEqual(guard["reference_source"], str(reference))
+            self.assertEqual(
+                guard["reference_source_sha256"],
+                hashlib.sha256(reference.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                guard["reference_copy"],
+                str(output_dir.resolve() / "arrow_early_progress_reference.json"),
+            )
+            self.assertEqual(
+                guard["comparison_through_world_model_step"], 5_000
+            )
+            self.assertTrue(guard["monitor_may_stop_after_recorded_failure"])
+            self.assertFalse(guard["comparator_stops_process_itself"])
+            self.assertFalse(output_dir.exists())
         self.assertFalse(output_dir.exists())
 
     def test_cnn_fullbank_late_actor_stability_is_predeclared_and_snapshotted(

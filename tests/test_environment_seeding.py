@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 import sys
 import unittest
@@ -128,6 +129,97 @@ class EnvironmentSeedingTests(unittest.TestCase):
             self.assertIn("optimizers", payload["omitted_state"])
             self.assertTrue(path.with_suffix(".pt.sha256").is_file())
             self.assertFalse(path.with_suffix(".pt.tmp").exists())
+
+    def test_task_boundary_snapshot_preserves_complete_bank_and_commit(self) -> None:
+        class FakeConfig:
+            algorithm = "arrow"
+            seed = 7
+            ac_train_steps = 800
+
+            @staticmethod
+            def to_dict():
+                return {
+                    "algorithm": "arrow",
+                    "seed": 7,
+                    "ac_train_steps": 800,
+                }
+
+        world_model = torch.nn.Linear(2, 3)
+        completed_actor = SimpleNamespace(ac=torch.nn.Linear(3, 2))
+        actor_state = {
+            name: value.detach().cpu()
+            for name, value in completed_actor.ac.state_dict().items()
+        }
+        actor_bank = SimpleNamespace(
+            get=lambda task_id: completed_actor if task_id == 0 else None,
+            inference_state_dict=lambda: {
+                "schema_version": 1,
+                "artifact_kind": "test_actor_bank",
+                "resumable": False,
+                "tasks": {"0": actor_state},
+            },
+        )
+        task_metadata = {
+            "boundary_index": 1,
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "task_reward_scale": 0.05,
+        }
+        project_commit = "a" * 40
+
+        with TemporaryDirectory() as temporary:
+            snapshot_dir = Path(temporary)
+            path = train._save_task_bank_boundary_snapshot(
+                snapshot_dir,
+                config=FakeConfig(),
+                wm=world_model,
+                actor_critic_bank=actor_bank,
+                epoch=89,
+                world_model_updates=90_000,
+                total_env_steps=1_800_000,
+                task_metadata=task_metadata,
+                project_git_commit=project_commit,
+            )
+            payload = torch.load(path, map_location="cpu", weights_only=False)
+            index = json.loads(
+                (snapshot_dir / "index.json").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual(payload["project_git_commit"], project_commit)
+            self.assertEqual(payload["completed_epochs"], 90)
+            self.assertEqual(payload["world_model_updates"], 90_000)
+            self.assertEqual(payload["actor_critic_updates"], 72_000)
+            self.assertEqual(payload["completed_task"], task_metadata)
+            self.assertTrue(
+                payload["saved_after_final_task_update_before_schedule_advance"]
+            )
+            self.assertFalse(payload["resumable"])
+            self.assertEqual(
+                set(payload["world_model_state_dict"]),
+                set(world_model.state_dict()),
+            )
+            self.assertEqual(
+                set(payload["actor_critic_bank_state_dict"]["tasks"]), {"0"}
+            )
+            self.assertEqual(index["project_git_commit"], project_commit)
+            self.assertEqual(len(index["snapshots"]), 1)
+            self.assertEqual(index["snapshots"][0]["path"], path.name)
+            self.assertTrue(path.with_suffix(".pt.sha256").is_file())
+            self.assertFalse(path.with_suffix(".pt.tmp").exists())
+            self.assertFalse((snapshot_dir / "index.json.tmp").exists())
+
+            with self.assertRaises(FileExistsError):
+                train._save_task_bank_boundary_snapshot(
+                    snapshot_dir,
+                    config=FakeConfig(),
+                    wm=world_model,
+                    actor_critic_bank=actor_bank,
+                    epoch=89,
+                    world_model_updates=90_000,
+                    total_env_steps=1_800_000,
+                    task_metadata=task_metadata,
+                    project_git_commit=project_commit,
+                )
 
     def test_worker_reset_and_action_seeds_are_stable_and_disjoint(self) -> None:
         resets_a, actions_a = generate_trajectory._environment_worker_seeds(17, 4)

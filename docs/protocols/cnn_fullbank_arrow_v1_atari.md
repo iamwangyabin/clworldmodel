@@ -176,6 +176,30 @@ directory. Logs, manifests, TensorBoard events, evaluations, and final weights
 remain persistent. Replay is not checkpointed in either layout and the backing
 directory is recorded in `launch.json`.
 
+## Task-boundary artifacts and early diagnostics
+
+Every CNN-FullBank launch saves an immutable complete-bank snapshot immediately
+after each task's final model and behavior updates and before the scheduler
+advances. The snapshot includes the complete world-model bank, complete
+Actor-Critic bank, completed task actor, counters, resolved config, and exact
+project Git commit. A SHA256 sidecar and atomic `index.json` record every
+boundary. Existing files and index entries are never overwritten; a six-task
+run must finish with six indexed boundary snapshots.
+
+These artifacts are sufficient for exact per-task inference and retention
+audits but are explicitly non-resumable because replay, optimizers, RNG, and
+schedule state are omitted. Final convenience weights and fixed-cohort
+evaluation snapshots remain separate artifacts.
+
+The replacement Task 1 pilot also uses the predeclared diagnostic in
+`tests/fixtures/arrow_ar50_original_s0_early_metrics.json`. After at least
+three aligned points in world-model steps 1,000 through 5,000, continuation,
+reconstruction, KL, and gradient norm must remain within the documented broad
+ratio envelope and finite. This catches order-of-magnitude numerical failures;
+it is not a pure comparison with original ARROW because precision, replay,
+device count, task routing, and batch sample use differ. A failed guard permits
+a recorded diagnostic stop, never deletion or an unrecorded restart.
+
 ## Evaluation gates
 
 The first run is a one-task, 90-epoch MsPacman pilot with the published data,
@@ -198,6 +222,7 @@ python scripts/run_moe_arrow_atari.py \
   --batch-profile x4-full-updates \
   --task-duration-multiplier 2 \
   --evaluation-audit-profile fixed-cohort-snapshots \
+  --early-progress-guard arrow-original-s0-v1 \
   --replay-mmap-root /dev/shm/clworldmodel-replay \
   --seed 0 \
   --task-prefix-length 1 \

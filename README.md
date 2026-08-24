@@ -309,6 +309,13 @@ recurrent dynamics, latent prior, decoder, reward/continue heads, and an
 independent MLP Actor-Critic. A new task copies the previous complete world
 model once, starts a fresh Actor-Critic, and then freezes every old route.
 
+Every completed task is preserved under `task_boundary_snapshots/` before the
+scheduler advances. Each immutable, checksummed artifact contains the full
+world-model bank, full Actor-Critic bank, counters, resolved config, and exact
+Git commit. These snapshots support inference and forgetting audits but are not
+resumable training checkpoints because replay, optimizers, RNG, and schedule
+state are intentionally absent.
+
 The named runtime profile uses BF16 autocast, uint8 file-backed replay, and a
 fixed global batch on one, two, or four GPUs. It does not require DINO:
 

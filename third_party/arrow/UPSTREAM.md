@@ -272,6 +272,15 @@ documented here, covered by focused parity tests, and followed by regenerating
     shapes, state-dict tensor keys, update budgets, and FP32 behavior remain
     unchanged. A focused regression test forces a saturated BF16 logit and
     verifies a finite FP32 probability, logit-space loss, and gradient.
+37. Require immutable per-task inference snapshots for CNN-FullBank training.
+    Immediately after each task's final updates and before schedule advance,
+    rank 0 atomically saves the complete world-model bank, complete
+    Actor-Critic bank, completed task actor, counters, resolved config, and the
+    exact project Git commit. A SHA256 sidecar and atomic index record every
+    boundary and reject overwrites or a mid-run commit change. These artifacts
+    explicitly omit optimizer, replay, RNG, and schedule state and are not
+    resumable checkpoints. Focused tests cover payload completeness, atomic
+    files, duplicate rejection, commit provenance, and launcher accounting.
 
 ## Known issues at import
 
