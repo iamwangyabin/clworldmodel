@@ -439,6 +439,24 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
             "interaction remain fixed while optimizer steps decrease"
         ),
     )
+    parser.add_argument(
+        "--task-duration-multiplier",
+        type=int,
+        choices=(1, 2, 4),
+        default=1,
+        help=(
+            "Named extended task-duration budget. Values above 1 require a "
+            "cnn-fullbank batch-profile task-1 pilot and change the protocol"
+        ),
+    )
+    parser.add_argument(
+        "--replay-mmap-root",
+        type=Path,
+        help=(
+            "Optional node-local root backing the run's mmap_replay symlink; "
+            "the resolved scratch path is recorded and must not already exist"
+        ),
+    )
     parser.add_argument("--swanlab-project")
     parser.add_argument("--swanlab-experiment-name")
     parser.add_argument("--dry-run", action="store_true")
@@ -453,6 +471,7 @@ def _resolved_config(
     variant: LaunchVariant = MOE_ARROW_VARIANT,
     precision_profile: PrecisionProfile = PRECISION_PROFILES["fp32-tf32"],
     data_parallel_world_size: int = 1,
+    task_duration_epochs: int | None = None,
     config_overrides: dict[str, int | float] | None = None,
 ) -> dict:
     config = json.loads(json.dumps(source))
@@ -530,6 +549,8 @@ def _resolved_config(
     )
     for replay_config in config["replay_buffers"]:
         replay_config["rb_device"] = "cpu"
+    if task_duration_epochs is not None:
+        config["esc"]["kwargs"]["swap_sched"] = task_duration_epochs
     if config_overrides is not None:
         config.update(config_overrides)
     return config
@@ -570,6 +591,22 @@ def main(*, default_method: str = "moe") -> int:
             parser.error("--batch-profile is validated only for cnn-fullbank")
         if args.devices != 4:
             parser.error("--batch-profile requires --devices 4")
+    if args.task_duration_multiplier > 1:
+        if args.method != "cnn-fullbank" or args.batch_profile is None:
+            parser.error(
+                "--task-duration-multiplier above 1 requires cnn-fullbank "
+                "with --batch-profile"
+            )
+        if args.task_prefix_length != 1:
+            parser.error(
+                "--task-duration-multiplier above 1 requires "
+                "--task-prefix-length 1"
+            )
+    mmap_methods = {"cnn-fullbank", "dino-patchbank", "dino-convbank"}
+    if args.replay_mmap_root is not None and args.method not in mmap_methods:
+        parser.error(
+            "--replay-mmap-root requires a method with file-backed uint8 replay"
+        )
     if requires_dinov3 and args.dinov3_model_path is None:
         parser.error("--dinov3-model-path or DINOV3_MODEL_PATH is required")
     if args.cpu_threads is not None and args.cpu_threads < 1:
@@ -593,7 +630,8 @@ def main(*, default_method: str = "moe") -> int:
     source_config = _verify_primary_config(
         source_config_path, args.curriculum, args.seed
     )
-    swap_sched = int(source_config["esc"]["kwargs"]["swap_sched"])
+    source_swap_sched = int(source_config["esc"]["kwargs"]["swap_sched"])
+    swap_sched = source_swap_sched * args.task_duration_multiplier
     training_epochs = (
         int(source_config["epochs"])
         if args.task_prefix_length is None
@@ -621,6 +659,7 @@ def main(*, default_method: str = "moe") -> int:
         variant=variant,
         precision_profile=precision_profile,
         data_parallel_world_size=args.devices,
+        task_duration_epochs=swap_sched,
         config_overrides=config_overrides or None,
     )
     allocated_experts = int(config["rssm_num_experts"])
@@ -655,6 +694,12 @@ def main(*, default_method: str = "moe") -> int:
         protocol = protocol.replace(
             "-Atari-", f"-{batch_profile.protocol_suffix}-Atari-"
         )
+    if args.task_duration_multiplier > 1:
+        duration_suffix = f"TaskDurationX{args.task_duration_multiplier}"
+        method += f"-{duration_suffix}"
+        role += "-extended-interaction-and-optimization-budget"
+        output_prefix += f"_task_duration_x{args.task_duration_multiplier}"
+        protocol = protocol.replace("-Atari-", f"-{duration_suffix}-Atari-")
     if tuning_profile is not None:
         tuning_suffix = str(tuning_profile["protocol_suffix"])
         method += f"-{tuning_suffix}"
@@ -671,6 +716,16 @@ def main(*, default_method: str = "moe") -> int:
         else ROOT / "runs" / f"{output_prefix}_{args.curriculum}_s{args.seed}"
     )
     config_path = output_dir / "resolved_training_config.json"
+    replay_mmap_root = (
+        args.replay_mmap_root.expanduser().resolve()
+        if args.replay_mmap_root is not None
+        else None
+    )
+    replay_mmap_directory = (
+        replay_mmap_root / output_dir.name
+        if replay_mmap_root is not None
+        else output_dir / "mmap_replay"
+    )
 
     env = os.environ.copy()
     recorded_env: dict[str, str] = {}
@@ -871,6 +926,10 @@ def main(*, default_method: str = "moe") -> int:
             - base_replay_storage["observation_bytes"]
         )
         base_replay_storage["mmap_directory"] = "mmap_replay/observations"
+        if replay_mmap_root is not None:
+            base_replay_storage["mmap_directory"] = str(
+                replay_mmap_directory / "observations"
+            )
         for buffer in base_replay_storage["buffers"].values():
             buffer["observation_storage_backend"] = "file_mmap"
     task_id_storage_bytes = 2 * source_config["data_n_max"] * 8
@@ -930,6 +989,33 @@ def main(*, default_method: str = "moe") -> int:
             ),
             "actor_context_frame_uses": actor_context_frame_uses,
         },
+        "duration_tuning": (
+            {
+                "classification": "extended_task_duration_ablation",
+                "multiplier": args.task_duration_multiplier,
+                "source_task_duration_epochs": source_swap_sched,
+                "resolved_task_duration_epochs": swap_sched,
+                "environment_interaction_multiplier": (
+                    args.task_duration_multiplier
+                ),
+                "optimization_sample_use_multiplier": (
+                    args.task_duration_multiplier
+                ),
+                "optimizer_update_multiplier_vs_90_epoch_fixed_batch": {
+                    "world_model": (
+                        args.task_duration_multiplier / batch_profile.scale
+                    ),
+                    "actor_critic": (
+                        args.task_duration_multiplier / batch_profile.scale
+                    ),
+                },
+                "baseline_comparability": (
+                    "not comparable to the 90-epoch task-duration protocol"
+                ),
+            }
+            if args.task_duration_multiplier > 1
+            else None
+        ),
         "hyperparameter_tuning": (
             {
                 "profile": args.task1_tuning_profile,
@@ -1244,6 +1330,26 @@ def main(*, default_method: str = "moe") -> int:
                 else "cpu"
             ),
             "base_storage": base_replay_storage,
+            "mmap_runtime": (
+                {
+                    "link_path": str(output_dir / "mmap_replay"),
+                    "backing_directory": str(replay_mmap_directory),
+                    "backing_store": (
+                        "external_node_local_scratch"
+                        if replay_mmap_root is not None
+                        else "run_directory"
+                    ),
+                    "checkpointed": False,
+                    "required_for_resume": False,
+                }
+                if variant.code_id
+                in {
+                    "cnn_fullbank_arrow",
+                    "dino_patchbank_arrow",
+                    "dino_convbank_arrow",
+                }
+                else None
+            ),
             "sampled_observation_dtype": "float32",
             "observation_decode": (
                 "transfer uint8 to the training device, then convert to float32 "
@@ -1311,9 +1417,21 @@ def main(*, default_method: str = "moe") -> int:
         )
     if output_dir.exists():
         raise FileExistsError(f"Refusing to overwrite existing run directory: {output_dir}")
+    if replay_mmap_root is not None and replay_mmap_directory.exists():
+        raise FileExistsError(
+            "Refusing to reuse existing replay mmap scratch directory: "
+            f"{replay_mmap_directory}"
+        )
     runtime_environment = _runtime_info(python, env)
     runtime_environment["packages"].update(dependency_versions)
     output_dir.mkdir(parents=True)
+    if replay_mmap_root is not None:
+        replay_mmap_root.mkdir(parents=True, exist_ok=True)
+        replay_mmap_directory.mkdir()
+        (output_dir / "mmap_replay").symlink_to(
+            replay_mmap_directory,
+            target_is_directory=True,
+        )
     _write_json(config_path, config)
     launch["started_at_utc"] = datetime.now(timezone.utc).isoformat()
     launch["runtime_environment"] = runtime_environment

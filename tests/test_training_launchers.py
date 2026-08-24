@@ -541,6 +541,91 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(launch["actor_critic"]["learning_rate"], 4e-4)
         self.assertFalse(output_dir.exists())
 
+    def test_cnn_fullbank_x4_extended_duration_records_extra_budget_and_scratch(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_dir = root / "cnn_fullbank_extended_run"
+            scratch_root = root / "node_local_replay"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--task-prefix-length",
+                    "1",
+                    "--devices",
+                    "4",
+                    "--batch-profile",
+                    "x4-linear-lr",
+                    "--task-duration-multiplier",
+                    "2",
+                    "--replay-mmap-root",
+                    str(scratch_root),
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+        self.assertEqual(
+            launch["method"],
+            "CNN-FullBank-ARROW-50-BF16AMP-Uint8Replay-DP4-"
+            "LargeBatchX4LinearLR-TaskDurationX2-T1Pilot",
+        )
+        self.assertEqual(
+            launch["protocol"],
+            "CNN-FullBank-ARROW-v1-BF16AMP-Uint8Replay-DP4-"
+            "LargeBatchX4LinearLR-TaskDurationX2-Atari-TaskAware",
+        )
+        duration = launch["duration_tuning"]
+        self.assertEqual(duration["multiplier"], 2)
+        self.assertEqual(duration["source_task_duration_epochs"], 90)
+        self.assertEqual(duration["resolved_task_duration_epochs"], 180)
+        self.assertEqual(duration["environment_interaction_multiplier"], 2)
+        self.assertEqual(duration["optimization_sample_use_multiplier"], 2)
+        self.assertEqual(
+            duration["optimizer_update_multiplier_vs_90_epoch_fixed_batch"],
+            {"world_model": 0.5, "actor_critic": 0.5},
+        )
+
+        scope = launch["training_scope"]
+        self.assertEqual(scope["epochs"], 180)
+        self.assertEqual(scope["task_duration_epochs"], 180)
+        self.assertEqual(scope["raw_environment_frames"], 11_796_480)
+        self.assertEqual(scope["world_model_updates"], 45_000)
+        self.assertEqual(scope["actor_critic_updates"], 36_000)
+        self.assertEqual(scope["world_model_sampled_replay_frame_uses"], 92_160_000)
+        self.assertEqual(scope["actor_context_frame_uses"], 73_728_000)
+
+        mmap_runtime = launch["replay"]["mmap_runtime"]
+        expected_scratch = scratch_root.resolve() / output_dir.name
+        self.assertEqual(
+            mmap_runtime,
+            {
+                "link_path": str(output_dir.resolve() / "mmap_replay"),
+                "backing_directory": str(expected_scratch),
+                "backing_store": "external_node_local_scratch",
+                "checkpointed": False,
+                "required_for_resume": False,
+            },
+        )
+        self.assertEqual(
+            launch["replay"]["base_storage"]["mmap_directory"],
+            str(expected_scratch / "observations"),
+        )
+        self.assertFalse(output_dir.exists())
+        self.assertFalse(scratch_root.exists())
+
     def test_batch_profile_requires_cnn_fullbank_dp4(self) -> None:
         invalid_argument_sets = (
             ("--method", "cnn-fullbank", "--devices", "2"),
@@ -566,6 +651,39 @@ class TrainingLauncherTests(unittest.TestCase):
 
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("--batch-profile", result.stderr)
+
+    def test_extended_task_duration_requires_batch_task1_pilot(self) -> None:
+        invalid_argument_sets = (
+            ("--method", "cnn-fullbank", "--devices", "4"),
+            (
+                "--method",
+                "cnn-fullbank",
+                "--devices",
+                "4",
+                "--batch-profile",
+                "x4-linear-lr",
+            ),
+        )
+        for arguments in invalid_argument_sets:
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "scripts/run_moe_arrow_atari.py",
+                        "--seed",
+                        "0",
+                        *arguments,
+                        "--task-duration-multiplier",
+                        "2",
+                        "--dry-run",
+                    ],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("--task-duration-multiplier", result.stderr)
 
     def test_dino_patchbank_dry_run_records_full_patches_and_pixel_decoder(self) -> None:
         launch, output_dir = self._karrow_dry_run(

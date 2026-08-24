@@ -95,6 +95,21 @@ different gradient noise, and scaled learning rates. Speed, finite losses, and
 the final acquisition score must therefore all be measured. A larger batch is
 not assumed to improve return before the 90-epoch gate passes.
 
+### Extended-duration acquisition
+
+`--task-duration-multiplier 2` is a separately named task-1 acquisition
+ablation. It changes the MsPacman task duration from 90 to 180 epochs. This
+doubles environment interaction and total optimization sample use; with the
+`x4-linear-lr` batch profile it performs half as many Adam updates as the
+90-epoch fixed-batch baseline. It is not a result under the 90-epoch protocol.
+
+Large mmap replay files should use node-local storage rather than a network
+FUSE run directory. `--replay-mmap-root /dev/shm/clworldmodel-replay` creates a
+unique backing directory and places only a symlink in the persistent run
+directory. Logs, manifests, TensorBoard events, evaluations, and final weights
+remain persistent. Replay is not checkpointed in either layout and the backing
+directory is recorded in `launch.json`.
+
 ## Evaluation gates
 
 The first run is a one-task, 90-epoch MsPacman pilot with the published data,
@@ -115,6 +130,8 @@ python scripts/run_moe_arrow_atari.py \
   --method cnn-fullbank \
   --devices 4 \
   --batch-profile x4-linear-lr \
+  --task-duration-multiplier 2 \
+  --replay-mmap-root /dev/shm/clworldmodel-replay \
   --seed 0 \
   --task-prefix-length 1 \
   --dry-run
