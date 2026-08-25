@@ -257,6 +257,32 @@ BATCH_PROFILES = {
         optimizer_update_multiplier=0.25,
         required_device_count=1,
     ),
+    "single-gpu-x4-double-sample-linear-lr": BatchProfile(
+        scale=4,
+        protocol_suffix="SingleGPULargeBatchX4DoubleSampleLinearLR",
+        output_suffix="single_gpu_large_batch_x4_double_sample_linear_lr",
+        config_overrides={
+            "mb_n_size": 64,
+            "pretrain_mb_n_size": 64,
+            "steps_per_batch": 500,
+            "pretrain_steps": 15_000,
+            "ac_train_sync": 512,
+            "ac_train_steps": 400,
+            "wm_lr": 2e-4,
+            "ac_lr": 2e-4,
+        },
+        hypothesis=(
+            "On one GPU, quadrupling each optimization batch while halving "
+            "optimizer steps doubles sampled-frame use, raises accelerator "
+            "occupancy, and retains twice as many Adam updates as the "
+            "sample-matched x4 speed profile. Two-times learning-rate scaling "
+            "preserves the per-epoch nominal update magnitude."
+        ),
+        classification="single_gpu_extra_sample_large_batch_ablation",
+        learning_rate_rule="linear_with_optimizer_step_reduction",
+        optimizer_update_multiplier=0.5,
+        required_device_count=1,
+    ),
 }
 
 
@@ -976,7 +1002,11 @@ def main(*, default_method: str = "moe") -> int:
             )
     elif args.arrow_reference_matrix is not None:
         task1_large_batch_reference = (
-            args.batch_profile == "single-gpu-x4-linear-lr"
+            args.batch_profile
+            in {
+                "single-gpu-x4-linear-lr",
+                "single-gpu-x4-double-sample-linear-lr",
+            }
             and args.task_prefix_length == 1
             and args.evaluation_audit_profile == "fixed-cohort-snapshots"
         )

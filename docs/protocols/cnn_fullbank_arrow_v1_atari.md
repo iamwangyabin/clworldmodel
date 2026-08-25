@@ -135,6 +135,21 @@ records the task's original assembly slot, and retains the same six-slot model
 topology for later expert-bank assembly. It is an independent task-aware expert
 ablation, not evidence about sequential transfer, retention, or forgetting.
 
+`single-gpu-x4-double-sample-linear-lr` is a separate speed/acquisition
+compromise. It keeps the same `N=64` world-model and `N=512` actor-context
+batches, but uses 500 and 400 optimizer updates per epoch respectively, with
+both learning rates set to `2e-4`. Relative to original single-GPU ARROW it
+therefore retains half as many Adam updates while consuming twice the sampled
+world-model and actor-context frames. It is expected to be slower than the
+sample-matched x4 profile but faster and more accelerator-efficient than the
+original small-batch loop. The extra sample use must be reported and prevents a
+strict matched-budget superiority claim.
+
+The profile still uses BF16 autocast with float32 parameters, optimizer state,
+and numerically sensitive probability, loss, and return operations. An
+all-BF16 continuation path is not part of this profile because the preceding
+continuation audit demonstrated saturation at confident logits.
+
 ### Late actor-stability pilot
 
 The first `x4-full-updates` seed-0 Task 1 pilot reached a periodic MsPacman raw
