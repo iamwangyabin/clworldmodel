@@ -1971,10 +1971,20 @@ def main(*, default_method: str = "moe") -> int:
                 (
                     f"sample-matched x{batch_profile.scale}; batches grow and "
                     "optimizer steps shrink by the same factor"
-                    if batch_profile.optimizer_update_multiplier < 1.0
+                    if math.isclose(
+                        batch_profile.scale
+                        * batch_profile.optimizer_update_multiplier,
+                        1.0,
+                    )
                     else (
                         f"compute-saturation x{batch_profile.scale}; batches "
                         "grow while optimizer update counts remain fixed"
+                        if batch_profile.optimizer_update_multiplier == 1.0
+                        else (
+                            f"extra-sample x{batch_profile.scale}; batches grow, "
+                            "optimizer steps shrink, and sampled-frame use "
+                            f"increases {batch_profile.scale * batch_profile.optimizer_update_multiplier:g}x"
+                        )
                     )
                 )
                 if batch_profile is not None

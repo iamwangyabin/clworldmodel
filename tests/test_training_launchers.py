@@ -691,6 +691,8 @@ class TrainingLauncherTests(unittest.TestCase):
         )
         execution = launch["distributed_execution"]
         self.assertFalse(execution["enabled"])
+        self.assertIn("extra-sample x4", execution["global_batch_policy"])
+        self.assertIn("increases 2x", execution["global_batch_policy"])
         self.assertEqual(
             execution["world_model_sequences"], {"global": 64, "per_rank": 64}
         )
