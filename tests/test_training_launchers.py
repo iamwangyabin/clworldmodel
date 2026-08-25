@@ -1079,6 +1079,113 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertFalse(output_dir.exists())
         self.assertFalse(scratch_root.exists())
 
+    def test_cnn_fullbank_two_task_single_gpu_campaign_is_frozen(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_dir = root / "cnn_fullbank_two_task_campaign"
+            scratch_root = root / "node_local_replay"
+            reference = (
+                ROOT
+                / "docs"
+                / "protocols"
+                / "references"
+                / "arrow_ar50_original_s0_reference_matrix_v1.json"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--devices",
+                    "1",
+                    "--batch-profile",
+                    "single-gpu-x4-double-sample-linear-lr",
+                    "--task-prefix-length",
+                    "2",
+                    "--evaluation-audit-profile",
+                    "fixed-cohort-snapshots",
+                    "--continual-campaign-profile",
+                    "two-task-single-gpu-x4-double-sample-pilot-v1",
+                    "--arrow-reference-matrix",
+                    str(reference),
+                    "--replay-mmap-root",
+                    str(scratch_root),
+                    "--profile-stages",
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+        self.assertIn(
+            "TwoTaskSingleGPUX4DoubleSamplePilotV1", launch["method"]
+        )
+        self.assertIn(
+            "TwoTaskSingleGPUX4DoubleSamplePilotV1", launch["protocol"]
+        )
+        scope = launch["training_scope"]
+        self.assertEqual(scope["task_prefix_length"], 2)
+        self.assertEqual(scope["epochs"], 180)
+        self.assertEqual(scope["task_duration_epochs"], 90)
+        self.assertEqual(
+            scope["tasks"], ["ALE/MsPacman-v5", "ALE/Boxing-v5"]
+        )
+        self.assertEqual(scope["raw_environment_frames"], 11_796_480)
+        self.assertEqual(scope["world_model_updates"], 90_000)
+        self.assertEqual(scope["actor_critic_updates"], 72_000)
+        self.assertEqual(
+            scope["world_model_sampled_replay_frame_uses"], 184_320_000
+        )
+        self.assertEqual(scope["actor_context_frame_uses"], 147_456_000)
+
+        campaign = launch["continual_campaign"]
+        self.assertEqual(
+            campaign["classification"],
+            "single_seed_two_task_sequential_extra_sample_pilot",
+        )
+        self.assertEqual(campaign["expected_task_boundary_snapshots"], 2)
+        comparison = campaign["comparison_to_original_arrow"]
+        self.assertEqual(
+            comparison["environment_interaction_multiplier_per_task"], 1.0
+        )
+        self.assertEqual(comparison["world_model_update_multiplier_per_task"], 0.5)
+        self.assertEqual(
+            comparison["actor_critic_update_multiplier_per_task"], 0.5
+        )
+        self.assertEqual(
+            comparison["world_model_sampled_frame_use_multiplier_per_task"], 2.0
+        )
+        self.assertTrue(comparison["device_count_matched"])
+        self.assertFalse(comparison["strict_fair_superiority_claim"])
+        self.assertEqual(
+            campaign["derived_summary"],
+            "arithmetic mean of the 2 frozen taskwise normalized ratios",
+        )
+
+        gate = launch["task1_gate_evidence"]
+        self.assertEqual(gate["raw_return_mean"], 2595.625)
+        self.assertEqual(
+            gate["project_git_commit"],
+            "e90c1801f25e0c33f30a96d913972a64cc404eee",
+        )
+        self.assertTrue(gate["passed"])
+        self.assertFalse(gate["strict_evaluator_parity"])
+        self.assertEqual(
+            Path(gate["source"]).name,
+            "cnn_fullbank_task1_x4_double_sample_gate_seed0_20260825.json",
+        )
+        self.assertEqual(
+            launch["checkpointing"]["expected_task_boundary_snapshot_count"], 2
+        )
+
     def test_cnn_fullbank_six_task_extra_compute_campaign_is_frozen(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

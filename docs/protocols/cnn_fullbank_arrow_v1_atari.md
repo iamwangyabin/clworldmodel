@@ -253,6 +253,53 @@ raw return matrix, final seen-task average, and computable forgetting. A full
 six-task claim requires the fixed seed set; no single run establishes a method
 claim.
 
+### Two-task sequential extra-sample pilot
+
+`two-task-single-gpu-x4-double-sample-pilot-v1` is the first sequential
+continual-learning check after the 90-epoch x4 double-sample Task 1 gate. It
+trains MsPacman and then Boxing from a fresh run on one GPU, with 90 epochs per
+task. It uses `single-gpu-x4-double-sample-linear-lr`, BF16 autocast with the
+required float32 sensitive paths, uint8 mmap ARROW-50 Replay, fixed periodic
+validation cohorts, and a disjoint final held-out cohort.
+
+The completed Task 1 pilot is evidence for choosing this next protocol, not a
+resumable starting point. Its snapshots omit optimizers, Replay, RNG, and
+scheduler position, so the two-task run must start from epoch zero. At the task
+boundary the Boxing world-model route is initialized once from the completed
+MsPacman route, while Boxing receives a fresh Actor-Critic as defined by this
+protocol. The MsPacman route and Actor-Critic are then frozen.
+
+The full two-task schedule is 180 epochs, 90,000 world-model updates, 72,000
+Actor-Critic updates, and 11,796,480 raw environment frames. Relative to the
+original single-GPU ARROW schedule, each task retains the same interaction
+budget, uses half as many Adam updates, and consumes twice the sampled
+world-model and actor-context frames. This is therefore a single-seed
+extra-sample pilot, not a fair superiority result.
+
+The pilot must retain exact boundary snapshots after both tasks and report
+MsPacman acquisition, Boxing acquisition, final MsPacman retention, raw
+forgetting, and backward transfer. Raw returns remain taskwise. The only
+cross-task summary is the arithmetic mean of the two predeclared taskwise
+ratios against the frozen ARROW reference matrix.
+
+```bash
+python scripts/run_moe_arrow_atari.py \
+  --method cnn-fullbank \
+  --devices 1 \
+  --batch-profile single-gpu-x4-double-sample-linear-lr \
+  --task-prefix-length 2 \
+  --evaluation-audit-profile fixed-cohort-snapshots \
+  --continual-campaign-profile \
+    two-task-single-gpu-x4-double-sample-pilot-v1 \
+  --arrow-reference-matrix \
+    docs/protocols/references/arrow_ar50_original_s0_reference_matrix_v1.json \
+  --replay-mmap-root /dev/shm/clworldmodel-replay \
+  --profile-stages \
+  --seed 0 \
+  --output-dir /absolute/unique/run/directory \
+  --dry-run
+```
+
 ### Six-task extra-compute pilot
 
 The first six-task continuation is explicitly

@@ -54,7 +54,12 @@ CONV_ADAPTER_OUTPUT_CHANNELS = 64
 CONV_ADAPTER_OUTPUT_GRID_SIZE = 8
 RSSM_LATENT_SHAPE = (32, 32)
 CNN_ENCODER_OUTPUT_SIZE = 4_096
-CONTINUAL_CAMPAIGN_PROFILE = "six-task-extra-compute-pilot-v1"
+SIX_TASK_CONTINUAL_CAMPAIGN_PROFILE = "six-task-extra-compute-pilot-v1"
+TWO_TASK_CONTINUAL_CAMPAIGN_PROFILE = (
+    "two-task-single-gpu-x4-double-sample-pilot-v1"
+)
+# Kept as an import-compatible alias for callers that reference the original name.
+CONTINUAL_CAMPAIGN_PROFILE = SIX_TASK_CONTINUAL_CAMPAIGN_PROFILE
 INDEPENDENT_EXPERT_PROFILE = "parallel-independent-single-gpu-v1"
 SINGLE_GPU_SPEED_EXPERT_PROFILE = "single-gpu-large-batch-90-v1"
 TASK1_GATE_EVIDENCE_PATH = (
@@ -63,6 +68,13 @@ TASK1_GATE_EVIDENCE_PATH = (
     / "protocols"
     / "references"
     / "cnn_fullbank_task1_gate_seed0_20260824.json"
+)
+TASK1_X4_DOUBLE_SAMPLE_GATE_EVIDENCE_PATH = (
+    ROOT
+    / "docs"
+    / "protocols"
+    / "references"
+    / "cnn_fullbank_task1_x4_double_sample_gate_seed0_20260825.json"
 )
 
 
@@ -138,6 +150,26 @@ class EarlyProgressGuardProfile:
     reference_path: Path
     comparison_through_step: int
     hypothesis: str
+
+
+@dataclass(frozen=True)
+class ContinualCampaignProfile:
+    task_count: int
+    task_prefix_length: int | None
+    devices: int
+    batch_profile: str
+    task_duration_multiplier: int
+    protocol_suffix: str
+    output_suffix: str
+    role_suffix: str
+    classification: str
+    gate_evidence_path: Path
+    environment_interaction_multiplier: float
+    world_model_update_multiplier: float
+    actor_critic_update_multiplier: float
+    optimization_sample_use_multiplier: float
+    periodic_evaluation_opportunity_multiplier: float
+    device_count_matched: bool
 
 
 PRECISION_PROFILES = {
@@ -282,6 +314,46 @@ BATCH_PROFILES = {
         learning_rate_rule="linear_with_optimizer_step_reduction",
         optimizer_update_multiplier=0.5,
         required_device_count=1,
+    ),
+}
+
+
+CONTINUAL_CAMPAIGN_PROFILES = {
+    SIX_TASK_CONTINUAL_CAMPAIGN_PROFILE: ContinualCampaignProfile(
+        task_count=6,
+        task_prefix_length=None,
+        devices=4,
+        batch_profile="x4-full-updates",
+        task_duration_multiplier=2,
+        protocol_suffix="SixTaskExtraComputePilotV1",
+        output_suffix="six_task_extra_compute_pilot_v1",
+        role_suffix="single-seed-six-task-extra-sample-compute-pilot",
+        classification="single_seed_extra_sample_compute_pilot",
+        gate_evidence_path=TASK1_GATE_EVIDENCE_PATH,
+        environment_interaction_multiplier=2.0,
+        world_model_update_multiplier=2.0,
+        actor_critic_update_multiplier=2.0,
+        optimization_sample_use_multiplier=8.0,
+        periodic_evaluation_opportunity_multiplier=2.0,
+        device_count_matched=False,
+    ),
+    TWO_TASK_CONTINUAL_CAMPAIGN_PROFILE: ContinualCampaignProfile(
+        task_count=2,
+        task_prefix_length=2,
+        devices=1,
+        batch_profile="single-gpu-x4-double-sample-linear-lr",
+        task_duration_multiplier=1,
+        protocol_suffix="TwoTaskSingleGPUX4DoubleSamplePilotV1",
+        output_suffix="two_task_single_gpu_x4_double_sample_pilot_v1",
+        role_suffix="single-seed-two-task-sequential-extra-sample-pilot",
+        classification="single_seed_two_task_sequential_extra_sample_pilot",
+        gate_evidence_path=TASK1_X4_DOUBLE_SAMPLE_GATE_EVIDENCE_PATH,
+        environment_interaction_multiplier=1.0,
+        world_model_update_multiplier=0.5,
+        actor_critic_update_multiplier=0.5,
+        optimization_sample_use_multiplier=2.0,
+        periodic_evaluation_opportunity_multiplier=1.0,
+        device_count_matched=True,
     ),
 }
 
@@ -642,8 +714,8 @@ def _load_arrow_reference_matrix(
     return resolved, data, digest
 
 
-def _load_task1_gate_evidence() -> tuple[dict, str]:
-    data = json.loads(TASK1_GATE_EVIDENCE_PATH.read_text(encoding="utf-8"))
+def _load_task1_gate_evidence(path: Path) -> tuple[dict, str]:
+    data = json.loads(path.read_text(encoding="utf-8"))
     if data.get("schema_version") != 1 or data.get("artifact_kind") != (
         "cnn_fullbank_task1_acquisition_gate_evidence"
     ):
@@ -663,7 +735,7 @@ def _load_task1_gate_evidence() -> tuple[dict, str]:
         raise ValueError("Task 1 inference snapshots must not be called resumable")
     if data.get("arrow_alignment", {}).get("strict_evaluator_parity") is not False:
         raise ValueError("Task 1 evidence must preserve the evaluator-parity caveat")
-    digest = hashlib.sha256(TASK1_GATE_EVIDENCE_PATH.read_bytes()).hexdigest()
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return data, digest
 
 
@@ -791,10 +863,10 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--continual-campaign-profile",
-        choices=(CONTINUAL_CAMPAIGN_PROFILE,),
+        choices=tuple(CONTINUAL_CAMPAIGN_PROFILES),
         help=(
-            "Freeze the exact six-task CNN-FullBank extra-sample/compute pilot "
-            "protocol and its reporting obligations"
+            "Freeze a named sequential CNN-FullBank campaign and its reporting "
+            "obligations"
         ),
     )
     parser.add_argument(
@@ -802,7 +874,7 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         type=Path,
         help=(
             "Pre-run frozen task-specific ARROW reference matrix. Required by "
-            "the six-task continual campaign and copied into the run directory"
+            "sequential continual campaigns and copied into the run directory"
         ),
     )
     parser.add_argument(
@@ -923,6 +995,11 @@ def _resolved_config(
 def main(*, default_method: str = "moe") -> int:
     parser = _parser(default_method=default_method)
     args = parser.parse_args()
+    continual_campaign_profile = (
+        CONTINUAL_CAMPAIGN_PROFILES[args.continual_campaign_profile]
+        if args.continual_campaign_profile is not None
+        else None
+    )
     variant = LAUNCH_VARIANTS[args.method]
     requires_dinov3 = variant.observation_encoder == "dinov3_vits16"
     bf16_required_methods = {"dino-convbank", "cnn-fullbank"}
@@ -971,18 +1048,36 @@ def main(*, default_method: str = "moe") -> int:
                 "--actor-stability-profile requires four devices and "
                 "--batch-profile x4-full-updates"
             )
-    if args.continual_campaign_profile is not None:
+    if continual_campaign_profile is not None:
         campaign_requirements = {
             "--method cnn-fullbank": args.method == "cnn-fullbank",
-            "--devices 4": args.devices == 4,
-            "--batch-profile x4-full-updates": (
-                args.batch_profile == "x4-full-updates"
+            f"--devices {continual_campaign_profile.devices}": (
+                args.devices == continual_campaign_profile.devices
             ),
-            "--task-duration-multiplier 2": args.task_duration_multiplier == 2,
+            f"--batch-profile {continual_campaign_profile.batch_profile}": (
+                args.batch_profile == continual_campaign_profile.batch_profile
+            ),
+            (
+                "the full six-task curriculum"
+                if continual_campaign_profile.task_prefix_length is None
+                else (
+                    f"--task-prefix-length "
+                    f"{continual_campaign_profile.task_prefix_length}"
+                )
+            ): (
+                args.task_prefix_length
+                == continual_campaign_profile.task_prefix_length
+            ),
+            (
+                f"--task-duration-multiplier "
+                f"{continual_campaign_profile.task_duration_multiplier}"
+            ): (
+                args.task_duration_multiplier
+                == continual_campaign_profile.task_duration_multiplier
+            ),
             "--evaluation-audit-profile fixed-cohort-snapshots": (
                 args.evaluation_audit_profile == "fixed-cohort-snapshots"
             ),
-            "the full six-task curriculum": args.task_prefix_length is None,
             "--curriculum original": args.curriculum == "original",
             "--seed 0": args.seed == 0,
             "--profile-stages": args.profile_stages,
@@ -997,7 +1092,7 @@ def main(*, default_method: str = "moe") -> int:
         ]
         if missing:
             parser.error(
-                f"--continual-campaign-profile {CONTINUAL_CAMPAIGN_PROFILE} "
+                f"--continual-campaign-profile {args.continual_campaign_profile} "
                 f"requires {', '.join(missing)}"
             )
     elif args.arrow_reference_matrix is not None:
@@ -1084,7 +1179,7 @@ def main(*, default_method: str = "moe") -> int:
         ):
             parser.error(
                 "--evaluation-audit-profile requires a Task 1 pilot or the "
-                "explicit six-task continual campaign"
+                "explicit sequential continual campaign"
             )
     if args.early_progress_guard is not None:
         if (
@@ -1162,8 +1257,8 @@ def main(*, default_method: str = "moe") -> int:
         swap_sched
         if args.independent_expert_profile is not None
         else (
-            swap_sched * len(tasks)
-            if args.continual_campaign_profile is not None
+            swap_sched * continual_campaign_profile.task_count
+            if continual_campaign_profile is not None
             else (
                 int(source_config["epochs"])
                 if args.task_prefix_length is None
@@ -1185,9 +1280,11 @@ def main(*, default_method: str = "moe") -> int:
             args.arrow_reference_matrix,
             expected_tasks=all_task_names,
         )
-    if args.continual_campaign_profile is not None:
+    if continual_campaign_profile is not None:
         task1_gate_evidence, task1_gate_evidence_sha256 = (
-            _load_task1_gate_evidence()
+            _load_task1_gate_evidence(
+                continual_campaign_profile.gate_evidence_path
+            )
         )
     tuning_profile = (
         TASK1_TUNING_PROFILES[args.task1_tuning_profile]
@@ -1308,12 +1405,13 @@ def main(*, default_method: str = "moe") -> int:
         role += "-task1-acquisition-ablation"
         output_prefix += f"_{tuning_profile['output_suffix']}"
         protocol = protocol.replace("-Atari-", f"-{tuning_suffix}-Atari-")
-    if args.continual_campaign_profile is not None:
-        method += "-SixTaskExtraComputePilotV1"
-        role += "-single-seed-six-task-extra-sample-compute-pilot"
-        output_prefix += "_six_task_extra_compute_pilot_v1"
+    if continual_campaign_profile is not None:
+        method += f"-{continual_campaign_profile.protocol_suffix}"
+        role += f"-{continual_campaign_profile.role_suffix}"
+        output_prefix += f"_{continual_campaign_profile.output_suffix}"
         protocol = protocol.replace(
-            "-Atari-", "-SixTaskExtraComputePilotV1-Atari-"
+            "-Atari-",
+            f"-{continual_campaign_profile.protocol_suffix}-Atari-",
         )
     if args.independent_expert_profile is not None:
         task_suffix = f"IndependentExpertT{args.independent_task_index:02d}"
@@ -1652,7 +1750,7 @@ def main(*, default_method: str = "moe") -> int:
         "continual_campaign": (
             {
                 "profile": args.continual_campaign_profile,
-                "classification": "single_seed_extra_sample_compute_pilot",
+                "classification": continual_campaign_profile.classification,
                 "official_superiority_claim_allowed": False,
                 "task_count": len(visited_tasks),
                 "expected_task_boundary_snapshots": len(visited_tasks),
@@ -1660,7 +1758,9 @@ def main(*, default_method: str = "moe") -> int:
                 "task_specific_acquisition_references_frozen_before_run": True,
                 "raw_returns_averaged_across_tasks": False,
                 "derived_summary": (
-                    "arithmetic mean of the six frozen taskwise normalized ratios"
+                    "arithmetic mean of the "
+                    f"{continual_campaign_profile.task_count} frozen taskwise "
+                    "normalized ratios"
                 ),
                 "retention_and_forgetting_required": True,
                 "backward_transfer_required": True,
@@ -1668,16 +1768,31 @@ def main(*, default_method: str = "moe") -> int:
                     "unsupported without a predeclared no-transfer control"
                 ),
                 "comparison_to_original_arrow": {
-                    "environment_interaction_multiplier_per_task": 2.0,
-                    "world_model_update_multiplier_per_task": 2.0,
-                    "actor_critic_update_multiplier_per_task": 2.0,
-                    "world_model_sampled_frame_use_multiplier_per_task": 8.0,
-                    "actor_context_frame_use_multiplier_per_task": 8.0,
-                    "periodic_evaluation_opportunity_multiplier": 2.0,
+                    "environment_interaction_multiplier_per_task": (
+                        continual_campaign_profile.environment_interaction_multiplier
+                    ),
+                    "world_model_update_multiplier_per_task": (
+                        continual_campaign_profile.world_model_update_multiplier
+                    ),
+                    "actor_critic_update_multiplier_per_task": (
+                        continual_campaign_profile.actor_critic_update_multiplier
+                    ),
+                    "world_model_sampled_frame_use_multiplier_per_task": (
+                        continual_campaign_profile.optimization_sample_use_multiplier
+                    ),
+                    "actor_context_frame_use_multiplier_per_task": (
+                        continual_campaign_profile.optimization_sample_use_multiplier
+                    ),
+                    "periodic_evaluation_opportunity_multiplier": (
+                        continual_campaign_profile
+                        .periodic_evaluation_opportunity_multiplier
+                    ),
                     "replay_transition_capacity_matched": True,
                     "replay_observation_dtype_matched": False,
                     "compute_dtype_matched": False,
-                    "device_count_matched": False,
+                    "device_count_matched": (
+                        continual_campaign_profile.device_count_matched
+                    ),
                     "strict_fair_superiority_claim": False,
                 },
                 "matched_budget_control": {
@@ -1688,7 +1803,7 @@ def main(*, default_method: str = "moe") -> int:
                     "immutable complete-bank inference snapshots; not resumable"
                 ),
             }
-            if args.continual_campaign_profile is not None
+            if continual_campaign_profile is not None
             else None
         ),
         "independent_expert": (
@@ -1768,7 +1883,7 @@ def main(*, default_method: str = "moe") -> int:
         ),
         "task1_gate_evidence": (
             {
-                "source": str(TASK1_GATE_EVIDENCE_PATH),
+                "source": str(continual_campaign_profile.gate_evidence_path),
                 "source_sha256": task1_gate_evidence_sha256,
                 "copy": str(task1_gate_evidence_copy),
                 "run_id": task1_gate_evidence["run_id"],
