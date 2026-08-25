@@ -923,6 +923,179 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertFalse(output_dir.exists())
         self.assertFalse(scratch_root.exists())
 
+    def test_cnn_fullbank_six_task_extra_compute_campaign_is_frozen(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_dir = root / "cnn_fullbank_six_task_campaign"
+            scratch_root = root / "node_local_replay"
+            reference = (
+                ROOT
+                / "docs"
+                / "protocols"
+                / "references"
+                / "arrow_ar50_original_s0_reference_matrix_v1.json"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--devices",
+                    "4",
+                    "--batch-profile",
+                    "x4-full-updates",
+                    "--task-duration-multiplier",
+                    "2",
+                    "--evaluation-audit-profile",
+                    "fixed-cohort-snapshots",
+                    "--continual-campaign-profile",
+                    "six-task-extra-compute-pilot-v1",
+                    "--arrow-reference-matrix",
+                    str(reference),
+                    "--replay-mmap-root",
+                    str(scratch_root),
+                    "--profile-stages",
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+        self.assertIn("SixTaskExtraComputePilotV1", launch["method"])
+        self.assertIn("SixTaskExtraComputePilotV1", launch["protocol"])
+        scope = launch["training_scope"]
+        self.assertIsNone(scope["task_prefix_length"])
+        self.assertEqual(scope["epochs"], 1080)
+        self.assertEqual(scope["task_duration_epochs"], 180)
+        self.assertEqual(
+            scope["tasks"],
+            [
+                "ALE/MsPacman-v5",
+                "ALE/Boxing-v5",
+                "ALE/CrazyClimber-v5",
+                "ALE/Frostbite-v5",
+                "ALE/Seaquest-v5",
+                "ALE/Enduro-v5",
+            ],
+        )
+        self.assertEqual(scope["raw_environment_frames"], 70_778_880)
+        self.assertEqual(scope["world_model_updates"], 1_080_000)
+        self.assertEqual(scope["actor_critic_updates"], 864_000)
+        self.assertEqual(
+            scope["world_model_sampled_replay_frame_uses"], 2_211_840_000
+        )
+        self.assertEqual(scope["actor_context_frame_uses"], 1_769_472_000)
+
+        campaign = launch["continual_campaign"]
+        self.assertEqual(
+            campaign["classification"], "single_seed_extra_sample_compute_pilot"
+        )
+        self.assertFalse(campaign["official_superiority_claim_allowed"])
+        self.assertEqual(campaign["expected_task_boundary_snapshots"], 6)
+        self.assertFalse(
+            campaign["comparison_to_original_arrow"][
+                "strict_fair_superiority_claim"
+            ]
+        )
+        self.assertEqual(
+            campaign["comparison_to_original_arrow"][
+                "world_model_sampled_frame_use_multiplier_per_task"
+            ],
+            8.0,
+        )
+        self.assertEqual(
+            campaign["matched_budget_control"]["status"], "required_followup"
+        )
+        self.assertFalse(
+            launch["batch_tuning"]["overall_environment_interaction_budget_unchanged"]
+        )
+        self.assertFalse(
+            launch["batch_tuning"]["overall_optimizer_update_counts_unchanged"]
+        )
+        self.assertFalse(launch["precision"]["optimizer_update_budgets_unchanged"])
+        self.assertFalse(
+            launch["precision"]["optimization_sample_budgets_unchanged"]
+        )
+        self.assertFalse(launch["actor_critic"]["total_updates_unchanged"])
+
+        reference_manifest = launch["arrow_reference_matrix"]
+        self.assertEqual(
+            reference_manifest["source_sha256"],
+            hashlib.sha256(reference.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(
+            Path(reference_manifest["copy"]),
+            output_dir.resolve() / "arrow_reference_matrix.json",
+        )
+        self.assertEqual(
+            [
+                item["raw_return_mean"]
+                for item in reference_manifest["acquisition_references"]
+            ],
+            [1665.625, 79.125, 49388.889524671766, 1870.625, 578.75, 124.125],
+        )
+        gate = launch["task1_gate_evidence"]
+        self.assertTrue(gate["passed"])
+        self.assertEqual(gate["operator"], ">")
+        self.assertEqual(gate["raw_return_mean"], 2418.75)
+        self.assertFalse(gate["strict_evaluator_parity"])
+
+        checkpointing = launch["checkpointing"]
+        self.assertEqual(checkpointing["expected_task_boundary_snapshot_count"], 6)
+        self.assertFalse(checkpointing["resumable"])
+        self.assertFalse(
+            checkpointing["resumable_checkpoint_state_coverage"]["optimizers"]
+        )
+        self.assertFalse(
+            checkpointing["resumable_checkpoint_state_coverage"]["rng_states"]
+        )
+        self.assertFalse(output_dir.exists())
+        self.assertFalse(scratch_root.exists())
+
+    def test_six_task_campaign_requires_frozen_reference_matrix(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--devices",
+                    "4",
+                    "--batch-profile",
+                    "x4-full-updates",
+                    "--task-duration-multiplier",
+                    "2",
+                    "--evaluation-audit-profile",
+                    "fixed-cohort-snapshots",
+                    "--continual-campaign-profile",
+                    "six-task-extra-compute-pilot-v1",
+                    "--replay-mmap-root",
+                    str(root / "replay"),
+                    "--profile-stages",
+                    "--output-dir",
+                    str(root / "run"),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--arrow-reference-matrix", result.stderr)
+
     def test_batch_profile_requires_cnn_fullbank_dp4(self) -> None:
         invalid_argument_sets = (
             ("--method", "cnn-fullbank", "--devices", "2"),
@@ -1197,7 +1370,8 @@ class TrainingLauncherTests(unittest.TestCase):
                         "after_completed_epochs": 90,
                         "rollouts": 16,
                         "metric": "raw_return_mean",
-                        "minimum": 2000.0,
+                        "threshold": 2000.0,
+                        "operator": ">",
                         "use_intermediate_peak": False,
                     },
                 )

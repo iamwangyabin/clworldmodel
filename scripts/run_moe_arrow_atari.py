@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shlex
 import subprocess
@@ -53,6 +54,14 @@ CONV_ADAPTER_OUTPUT_CHANNELS = 64
 CONV_ADAPTER_OUTPUT_GRID_SIZE = 8
 RSSM_LATENT_SHAPE = (32, 32)
 CNN_ENCODER_OUTPUT_SIZE = 4_096
+CONTINUAL_CAMPAIGN_PROFILE = "six-task-extra-compute-pilot-v1"
+TASK1_GATE_EVIDENCE_PATH = (
+    ROOT
+    / "docs"
+    / "protocols"
+    / "references"
+    / "cnn_fullbank_task1_gate_seed0_20260824.json"
+)
 
 
 @dataclass(frozen=True)
@@ -483,6 +492,127 @@ def _cnn_encoder_parameter_count(*, img_channels: int, channels: int) -> int:
     return convolution_parameters + layer_norm_parameters
 
 
+def _load_arrow_reference_matrix(
+    path: Path,
+    *,
+    expected_tasks: list[str],
+) -> tuple[Path, dict, str]:
+    resolved = path.expanduser().resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"ARROW reference matrix does not exist: {resolved}")
+    data = json.loads(resolved.read_text(encoding="utf-8"))
+    if data.get("schema_version") != 1:
+        raise ValueError("ARROW reference matrix must use schema_version 1")
+    if data.get("artifact_kind") != "arrow_task_specific_reference_matrix":
+        raise ValueError("ARROW reference matrix has the wrong artifact_kind")
+    if data.get("frozen_before_candidate_run") is not True:
+        raise ValueError("ARROW reference matrix must be frozen before the run")
+    if data.get("method") != "ARROW-50":
+        raise ValueError("ARROW reference matrix must describe ARROW-50")
+    if data.get("task_order") != expected_tasks:
+        raise ValueError(
+            "ARROW reference task order does not match the resolved curriculum"
+        )
+
+    references = data.get("acquisition_references")
+    if not isinstance(references, list) or len(references) != len(expected_tasks):
+        raise ValueError(
+            "ARROW reference matrix must contain one acquisition reference per task"
+        )
+    for task_index, (task_name, reference) in enumerate(
+        zip(expected_tasks, references)
+    ):
+        if not isinstance(reference, dict):
+            raise ValueError("ARROW acquisition references must be objects")
+        if reference.get("task_index") != task_index:
+            raise ValueError("ARROW acquisition reference task indices must be ordered")
+        if reference.get("task_name") != task_name:
+            raise ValueError("ARROW acquisition reference task names must be ordered")
+        if reference.get("stage") != "first_periodic_evaluation_after_task_completion":
+            raise ValueError("ARROW acquisition reference stages must be predeclared")
+        for key in ("raw_return_mean", "raw_return_std"):
+            value = reference.get(key)
+            if not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError(f"ARROW acquisition reference {key} must be finite")
+        if reference["raw_return_mean"] <= 0 or reference["raw_return_std"] < 0:
+            raise ValueError(
+                "ARROW acquisition references require positive means and "
+                "nonnegative stds"
+            )
+
+    boundaries = data.get("boundary_evaluations")
+    if not isinstance(boundaries, list) or len(boundaries) != len(expected_tasks):
+        raise ValueError("ARROW reference matrix must contain all task boundaries")
+    for boundary_index, boundary in enumerate(boundaries, start=1):
+        if boundary.get("boundary_index") != boundary_index:
+            raise ValueError("ARROW boundary indices must be contiguous")
+        if boundary.get("completed_task_index") != boundary_index - 1:
+            raise ValueError("ARROW boundary completed-task indices must be contiguous")
+        task_metrics = boundary.get("tasks")
+        if not isinstance(task_metrics, list) or len(task_metrics) != len(
+            expected_tasks
+        ):
+            raise ValueError("Every ARROW boundary must evaluate all tasks")
+        for task_index, (task_name, metrics) in enumerate(
+            zip(expected_tasks, task_metrics)
+        ):
+            if metrics.get("task_index") != task_index or metrics.get(
+                "task_name"
+            ) != task_name:
+                raise ValueError("ARROW boundary task metrics must follow task order")
+            for key in ("raw_return_mean", "raw_return_std"):
+                value = metrics.get(key)
+                if not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise ValueError(f"ARROW boundary {key} must be finite")
+            if metrics["raw_return_std"] < 0:
+                raise ValueError(
+                    "ARROW boundary standard deviations must be nonnegative"
+                )
+
+    derived = data.get("derived_metric_protocol", {})
+    if derived.get("raw_returns_are_never_averaged_across_tasks") is not True:
+        raise ValueError(
+            "ARROW reference matrix must forbid averaging raw task returns"
+        )
+    source = data.get("source", {})
+    for key in (
+        "train_log_sha256",
+        "launch_manifest_sha256",
+        "resolved_config_sha256",
+        "event_file_sha256",
+    ):
+        digest = source.get(key)
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError(f"ARROW reference matrix source {key} is invalid")
+    digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    return resolved, data, digest
+
+
+def _load_task1_gate_evidence() -> tuple[dict, str]:
+    data = json.loads(TASK1_GATE_EVIDENCE_PATH.read_text(encoding="utf-8"))
+    if data.get("schema_version") != 1 or data.get("artifact_kind") != (
+        "cnn_fullbank_task1_acquisition_gate_evidence"
+    ):
+        raise ValueError("Task 1 gate evidence has the wrong schema")
+    final = data.get("final_evaluation", {})
+    if (
+        data.get("run_complete") is not True
+        or data.get("return_code") != 0
+        or final.get("operator") != ">"
+        or final.get("passed") is not True
+        or not isinstance(final.get("raw_return_mean"), (int, float))
+        or not isinstance(final.get("threshold"), (int, float))
+        or final["raw_return_mean"] <= final["threshold"]
+    ):
+        raise ValueError("Task 1 gate evidence does not pass the exclusive gate")
+    if data.get("snapshot_semantics", {}).get("resumable") is not False:
+        raise ValueError("Task 1 inference snapshots must not be called resumable")
+    if data.get("arrow_alignment", {}).get("strict_evaluator_parity") is not False:
+        raise ValueError("Task 1 evidence must preserve the evaluator-parity caveat")
+    digest = hashlib.sha256(TASK1_GATE_EVIDENCE_PATH.read_bytes()).hexdigest()
+    return data, digest
+
+
 def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Launch a task-aware DINO/ARROW method with one expert and actor per game"
@@ -584,7 +714,24 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         default=1,
         help=(
             "Named extended task-duration budget. Values above 1 require a "
-            "cnn-fullbank batch-profile task-1 pilot and change the protocol"
+            "cnn-fullbank batch profile and either a task-1 pilot or the "
+            "explicit six-task continual campaign; this changes the protocol"
+        ),
+    )
+    parser.add_argument(
+        "--continual-campaign-profile",
+        choices=(CONTINUAL_CAMPAIGN_PROFILE,),
+        help=(
+            "Freeze the exact six-task CNN-FullBank extra-sample/compute pilot "
+            "protocol and its reporting obligations"
+        ),
+    )
+    parser.add_argument(
+        "--arrow-reference-matrix",
+        type=Path,
+        help=(
+            "Pre-run frozen task-specific ARROW reference matrix. Required by "
+            "the six-task continual campaign and copied into the run directory"
         ),
     )
     parser.add_argument(
@@ -745,14 +892,51 @@ def main(*, default_method: str = "moe") -> int:
                 "--actor-stability-profile requires four devices and "
                 "--batch-profile x4-full-updates"
             )
+    if args.continual_campaign_profile is not None:
+        campaign_requirements = {
+            "--method cnn-fullbank": args.method == "cnn-fullbank",
+            "--devices 4": args.devices == 4,
+            "--batch-profile x4-full-updates": (
+                args.batch_profile == "x4-full-updates"
+            ),
+            "--task-duration-multiplier 2": args.task_duration_multiplier == 2,
+            "--evaluation-audit-profile fixed-cohort-snapshots": (
+                args.evaluation_audit_profile == "fixed-cohort-snapshots"
+            ),
+            "the full six-task curriculum": args.task_prefix_length is None,
+            "--curriculum original": args.curriculum == "original",
+            "--seed 0": args.seed == 0,
+            "--profile-stages": args.profile_stages,
+            "--replay-mmap-root": args.replay_mmap_root is not None,
+            "--output-dir": args.output_dir is not None,
+            "--arrow-reference-matrix": args.arrow_reference_matrix is not None,
+            "no actor-stability profile": args.actor_stability_profile is None,
+            "no Task-1 early guard": args.early_progress_guard is None,
+        }
+        missing = [
+            name for name, present in campaign_requirements.items() if not present
+        ]
+        if missing:
+            parser.error(
+                f"--continual-campaign-profile {CONTINUAL_CAMPAIGN_PROFILE} "
+                f"requires {', '.join(missing)}"
+            )
+    elif args.arrow_reference_matrix is not None:
+        parser.error(
+            "--arrow-reference-matrix requires --continual-campaign-profile"
+        )
     if args.evaluation_audit_profile is not None:
         if args.method != "cnn-fullbank":
             parser.error(
                 "--evaluation-audit-profile is validated only for cnn-fullbank"
             )
-        if args.task_prefix_length != 1:
+        if (
+            args.task_prefix_length != 1
+            and args.continual_campaign_profile is None
+        ):
             parser.error(
-                "--evaluation-audit-profile currently requires a Task 1 pilot"
+                "--evaluation-audit-profile requires a Task 1 pilot or the "
+                "explicit six-task continual campaign"
             )
     if args.early_progress_guard is not None:
         if (
@@ -770,10 +954,13 @@ def main(*, default_method: str = "moe") -> int:
                 "--task-duration-multiplier above 1 requires cnn-fullbank "
                 "with --batch-profile"
             )
-        if args.task_prefix_length != 1:
+        if (
+            args.task_prefix_length != 1
+            and args.continual_campaign_profile is None
+        ):
             parser.error(
                 "--task-duration-multiplier above 1 requires "
-                "--task-prefix-length 1"
+                "--task-prefix-length 1 or the explicit six-task continual campaign"
             )
     mmap_methods = {"cnn-fullbank", "dino-patchbank", "dino-convbank"}
     if args.replay_mmap_root is not None and args.method not in mmap_methods:
@@ -803,13 +990,37 @@ def main(*, default_method: str = "moe") -> int:
     source_config = _verify_primary_config(
         source_config_path, args.curriculum, args.seed
     )
+    tasks = source_config["esc"]["env_configs"]
+    task_names = [task["name"] for task in tasks]
     source_swap_sched = int(source_config["esc"]["kwargs"]["swap_sched"])
     swap_sched = source_swap_sched * args.task_duration_multiplier
     training_epochs = (
-        int(source_config["epochs"])
-        if args.task_prefix_length is None
-        else swap_sched * args.task_prefix_length
+        swap_sched * len(tasks)
+        if args.continual_campaign_profile is not None
+        else (
+            int(source_config["epochs"])
+            if args.task_prefix_length is None
+            else swap_sched * args.task_prefix_length
+        )
     )
+    arrow_reference_path: Path | None = None
+    arrow_reference_matrix: dict | None = None
+    arrow_reference_sha256: str | None = None
+    task1_gate_evidence: dict | None = None
+    task1_gate_evidence_sha256: str | None = None
+    if args.arrow_reference_matrix is not None:
+        (
+            arrow_reference_path,
+            arrow_reference_matrix,
+            arrow_reference_sha256,
+        ) = _load_arrow_reference_matrix(
+            args.arrow_reference_matrix,
+            expected_tasks=task_names,
+        )
+    if args.continual_campaign_profile is not None:
+        task1_gate_evidence, task1_gate_evidence_sha256 = (
+            _load_task1_gate_evidence()
+        )
     tuning_profile = (
         TASK1_TUNING_PROFILES[args.task1_tuning_profile]
         if args.task1_tuning_profile is not None
@@ -919,6 +1130,13 @@ def main(*, default_method: str = "moe") -> int:
         role += "-task1-acquisition-ablation"
         output_prefix += f"_{tuning_profile['output_suffix']}"
         protocol = protocol.replace("-Atari-", f"-{tuning_suffix}-Atari-")
+    if args.continual_campaign_profile is not None:
+        method += "-SixTaskExtraComputePilotV1"
+        role += "-single-seed-six-task-extra-sample-compute-pilot"
+        output_prefix += "_six_task_extra_compute_pilot_v1"
+        protocol = protocol.replace(
+            "-Atari-", "-SixTaskExtraComputePilotV1-Atari-"
+        )
     if args.task_prefix_length is not None:
         method += f"-T{args.task_prefix_length}Pilot"
         role += "-pilot"
@@ -955,6 +1173,16 @@ def main(*, default_method: str = "moe") -> int:
     early_progress_reference_copy = (
         output_dir / "arrow_early_progress_reference.json"
         if early_progress_guard_profile is not None
+        else None
+    )
+    arrow_reference_copy = (
+        output_dir / "arrow_reference_matrix.json"
+        if arrow_reference_matrix is not None
+        else None
+    )
+    task1_gate_evidence_copy = (
+        output_dir / "task1_acquisition_gate_evidence.json"
+        if task1_gate_evidence is not None
         else None
     )
 
@@ -1026,7 +1254,6 @@ def main(*, default_method: str = "moe") -> int:
     if args.swanlab_experiment_name:
         command.extend(("--swanlab-experiment-name", args.swanlab_experiment_name))
 
-    tasks = source_config["esc"]["env_configs"]
     visited_tasks = (
         tasks
         if args.task_prefix_length is None
@@ -1233,6 +1460,92 @@ def main(*, default_method: str = "moe") -> int:
             ),
             "actor_context_frame_uses": actor_context_frame_uses,
         },
+        "continual_campaign": (
+            {
+                "profile": args.continual_campaign_profile,
+                "classification": "single_seed_extra_sample_compute_pilot",
+                "official_superiority_claim_allowed": False,
+                "task_count": len(visited_tasks),
+                "expected_task_boundary_snapshots": len(visited_tasks),
+                "future_task_evaluation_isolated_from_training": True,
+                "task_specific_acquisition_references_frozen_before_run": True,
+                "raw_returns_averaged_across_tasks": False,
+                "derived_summary": (
+                    "arithmetic mean of the six frozen taskwise normalized ratios"
+                ),
+                "retention_and_forgetting_required": True,
+                "backward_transfer_required": True,
+                "forward_transfer": (
+                    "unsupported without a predeclared no-transfer control"
+                ),
+                "comparison_to_original_arrow": {
+                    "environment_interaction_multiplier_per_task": 2.0,
+                    "world_model_update_multiplier_per_task": 2.0,
+                    "actor_critic_update_multiplier_per_task": 2.0,
+                    "world_model_sampled_frame_use_multiplier_per_task": 8.0,
+                    "actor_context_frame_use_multiplier_per_task": 8.0,
+                    "periodic_evaluation_opportunity_multiplier": 2.0,
+                    "replay_transition_capacity_matched": True,
+                    "replay_observation_dtype_matched": False,
+                    "compute_dtype_matched": False,
+                    "device_count_matched": False,
+                    "strict_fair_superiority_claim": False,
+                },
+                "matched_budget_control": {
+                    "included_in_this_run": False,
+                    "status": "required_followup",
+                },
+                "checkpoint_semantics": (
+                    "immutable complete-bank inference snapshots; not resumable"
+                ),
+            }
+            if args.continual_campaign_profile is not None
+            else None
+        ),
+        "task1_gate_evidence": (
+            {
+                "source": str(TASK1_GATE_EVIDENCE_PATH),
+                "source_sha256": task1_gate_evidence_sha256,
+                "copy": str(task1_gate_evidence_copy),
+                "run_id": task1_gate_evidence["run_id"],
+                "project_git_commit": task1_gate_evidence[
+                    "project_git_commit"
+                ],
+                "raw_return_mean": task1_gate_evidence["final_evaluation"][
+                    "raw_return_mean"
+                ],
+                "raw_return_std": task1_gate_evidence["final_evaluation"][
+                    "raw_return_std"
+                ],
+                "threshold": task1_gate_evidence["final_evaluation"][
+                    "threshold"
+                ],
+                "operator": ">",
+                "passed": True,
+                "strict_evaluator_parity": False,
+            }
+            if task1_gate_evidence is not None
+            else None
+        ),
+        "arrow_reference_matrix": (
+            {
+                "source": str(arrow_reference_path),
+                "source_sha256": arrow_reference_sha256,
+                "copy": str(arrow_reference_copy),
+                "frozen_before_candidate_run": True,
+                "selection_rule": arrow_reference_matrix["selection_rule"],
+                "task_order": arrow_reference_matrix["task_order"],
+                "acquisition_references": arrow_reference_matrix[
+                    "acquisition_references"
+                ],
+                "derived_metric_protocol": arrow_reference_matrix[
+                    "derived_metric_protocol"
+                ],
+                "strict_same_cohort_comparison": False,
+            }
+            if arrow_reference_matrix is not None
+            else None
+        ),
         "duration_tuning": (
             {
                 "classification": "extended_task_duration_ablation",
@@ -1275,7 +1588,8 @@ def main(*, default_method: str = "moe") -> int:
                     "after_completed_epochs": 90,
                     "rollouts": 16,
                     "metric": "raw_return_mean",
-                    "minimum": 2000.0,
+                    "threshold": 2000.0,
+                    "operator": ">",
                     "use_intermediate_peak": False,
                 },
             }
@@ -1291,6 +1605,9 @@ def main(*, default_method: str = "moe") -> int:
                 "config_overrides": batch_profile.config_overrides,
                 "learning_rate_rule": batch_profile.learning_rate_rule,
                 "environment_interaction_budget_unchanged": True,
+                "overall_environment_interaction_budget_unchanged": (
+                    args.task_duration_multiplier == 1
+                ),
                 "optimization_sample_budgets_unchanged": (
                     batch_profile.scale
                     * batch_profile.optimizer_update_multiplier
@@ -1298,6 +1615,11 @@ def main(*, default_method: str = "moe") -> int:
                 ),
                 "optimizer_update_counts_unchanged": (
                     batch_profile.optimizer_update_multiplier == 1.0
+                ),
+                "overall_optimizer_update_counts_unchanged": (
+                    args.task_duration_multiplier
+                    * batch_profile.optimizer_update_multiplier
+                    == 1.0
                 ),
                 "world_model_update_multiplier": (
                     batch_profile.optimizer_update_multiplier
@@ -1440,13 +1762,22 @@ def main(*, default_method: str = "moe") -> int:
             "actor_context_batch_frames": 4 * config["ac_train_sync"],
             "actor_context_batch_frames_per_rank": 4 * local_actor_sequences,
             "optimizer_update_budgets_unchanged": (
-                batch_profile is None
-                or batch_profile.optimizer_update_multiplier == 1.0
+                args.task_duration_multiplier
+                * (
+                    batch_profile.optimizer_update_multiplier
+                    if batch_profile is not None
+                    else 1.0
+                )
+                == 1.0
             ),
             "optimization_sample_budgets_unchanged": (
-                batch_profile is None
-                or batch_profile.scale
-                * batch_profile.optimizer_update_multiplier
+                args.task_duration_multiplier
+                * (
+                    batch_profile.scale
+                    * batch_profile.optimizer_update_multiplier
+                    if batch_profile is not None
+                    else 1.0
+                )
                 == 1.0
             ),
         },
@@ -1555,13 +1886,22 @@ def main(*, default_method: str = "moe") -> int:
                 else config.get("ac_entropy_scale", 3e-4)
             ),
             "total_updates_unchanged": (
-                batch_profile is None
-                or batch_profile.optimizer_update_multiplier == 1.0
+                args.task_duration_multiplier
+                * (
+                    batch_profile.optimizer_update_multiplier
+                    if batch_profile is not None
+                    else 1.0
+                )
+                == 1.0
             ),
             "total_context_frame_uses_unchanged": (
-                batch_profile is None
-                or batch_profile.scale
-                * batch_profile.optimizer_update_multiplier
+                args.task_duration_multiplier
+                * (
+                    batch_profile.scale
+                    * batch_profile.optimizer_update_multiplier
+                    if batch_profile is not None
+                    else 1.0
+                )
                 == 1.0
             ),
         },
@@ -1765,6 +2105,9 @@ def main(*, default_method: str = "moe") -> int:
             "complete_task_bank_after_every_task": (
                 task_bank_snapshot_dir is not None
             ),
+            "expected_task_boundary_snapshot_count": (
+                len(visited_tasks) if task_bank_snapshot_dir is not None else 0
+            ),
             "task_boundary_snapshot_project_git_commit": (
                 project_git["commit"]
                 if task_bank_snapshot_dir is not None
@@ -1783,7 +2126,20 @@ def main(*, default_method: str = "moe") -> int:
             ),
             "best_validation_pointer": evaluation_snapshot_dir is not None,
             "resumable": False,
-            "reason": "replay and optimizer states are not serialized by vendored ARROW",
+            "resumable_checkpoint_state_coverage": {
+                "model_parameters": True,
+                "target_parameters": False,
+                "optimizers": False,
+                "scalers": False,
+                "replay_or_replay_provenance": False,
+                "rng_states": False,
+                "scheduler_and_task_position": False,
+                "all_step_counters": False,
+            },
+            "reason": (
+                "optimizers, replay, RNG, and scheduler/task position are not "
+                "serialized by vendored ARROW"
+            ),
         },
         "determinism": {
             "python_numpy_torch_environment_and_replay_seeded": True,
@@ -1843,6 +2199,10 @@ def main(*, default_method: str = "moe") -> int:
                 )
             ),
         )
+    if arrow_reference_matrix is not None:
+        _write_json(arrow_reference_copy, arrow_reference_matrix)
+    if task1_gate_evidence is not None:
+        _write_json(task1_gate_evidence_copy, task1_gate_evidence)
     launch["started_at_utc"] = datetime.now(timezone.utc).isoformat()
     launch["runtime_environment"] = runtime_environment
     _write_json(output_dir / "launch.json", launch)

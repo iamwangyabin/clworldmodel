@@ -202,16 +202,54 @@ a recorded diagnostic stop, never deletion or an unrecorded restart.
 
 ## Evaluation gates
 
-The first run is a one-task, 90-epoch MsPacman pilot with the published data,
-interaction, and update budgets. It passes acquisition only if the final
-16-rollout deterministic raw mean is at least 2,000. Intermediate peaks do not
-pass the gate. A failed pilot remains recorded and is not extended into a
-continual run.
+The first run is a one-task MsPacman pilot. It passes acquisition only if the
+final independent held-out 16-rollout deterministic raw mean is strictly
+greater than 2,000 and is within or above the saved original-ARROW diagnostic
+range. Intermediate peaks do not pass the gate. A failed pilot remains
+recorded and is not extended into a continual run. The successful extended
+seed-0 gate result is frozen in
+`references/cnn_fullbank_task1_gate_seed0_20260824.json`; its raw mean/std are
+`2418.75 +/- 227.345`, and its snapshots remain inference-only.
 
 After that gate, a two-task pilot must evaluate every seen task and report the
 raw return matrix, final seen-task average, and computable forgetting. A full
 six-task claim requires the fixed seed set; no single run establishes a method
 claim.
+
+### Six-task extra-compute pilot
+
+The first six-task continuation is explicitly
+`six-task-extra-compute-pilot-v1`. It uses the original order (MsPacman,
+Boxing, CrazyClimber, Frostbite, Seaquest, Enduro), 180 epochs per task, BF16
+autocast with FP32 continuation logits/sigmoid/BCE, uint8 mmap ARROW-50 replay,
+DDP4, and `x4-full-updates`. The full schedule is 1,080 epochs, 1,080,000 WM
+updates, 864,000 Actor-Critic updates, and 70,778,880 raw environment frames.
+
+This is a single-seed, extra-sample/compute pilot. Relative to original ARROW
+per task it uses 2x environment interaction, 2x optimizer updates, and 8x WM
+sampled-frame and Actor-context use. Its replay transition capacity is matched,
+but observation dtype, bytes, device count, precision, and evaluation
+opportunities are not. It cannot support a fair superiority claim; a matched
+budget control remains required.
+
+Before candidate training, the task-specific ARROW acquisition references and
+six boundary matrices are frozen in
+`references/arrow_ar50_original_s0_reference_matrix_v1.json`. The selection
+rule is the first 16-rollout evaluation after each task's original 90-epoch
+training phase. The original run used advancing evaluation cohorts whose seeds
+were not persisted, so comparisons remain diagnostic rather than strict
+same-evaluator parity. Raw returns are reported per task and are never averaged
+across games. The only cross-task aggregate is the predeclared arithmetic mean
+of taskwise `candidate_raw_mean / frozen_ARROW_raw_mean` ratios.
+
+At each boundary, retain every seen task's raw mean/std and exact complete-bank
+inference snapshot. Report task-completion performance, later-boundary
+performance, final performance, raw delta, confidence interval, retention,
+forgetting, and backward transfer. Forward transfer is unsupported until a
+no-transfer control is frozen. Six immutable boundary snapshots and their
+SHA256/index entries are mandatory. They are not resumable checkpoints because
+optimizers, targets, replay/provenance, RNG, scheduler position, and the full
+counter set are not serialized.
 
 ## Launcher
 
@@ -230,3 +268,22 @@ python scripts/run_moe_arrow_atari.py \
 ```
 
 No `DINOV3_MODEL_PATH` is required or consumed.
+
+The six-task campaign launcher is:
+
+```bash
+python scripts/run_moe_arrow_atari.py \
+  --method cnn-fullbank \
+  --devices 4 \
+  --batch-profile x4-full-updates \
+  --task-duration-multiplier 2 \
+  --evaluation-audit-profile fixed-cohort-snapshots \
+  --continual-campaign-profile six-task-extra-compute-pilot-v1 \
+  --arrow-reference-matrix \
+    docs/protocols/references/arrow_ar50_original_s0_reference_matrix_v1.json \
+  --replay-mmap-root /dev/shm/clworldmodel-replay \
+  --profile-stages \
+  --seed 0 \
+  --output-dir /absolute/unique/run/directory \
+  --dry-run
+```

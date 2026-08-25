@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "cnn_fullbank_task1_acquisition_gate_evidence",
+  "run_id": "cnn_fullbank_arrow_v1_task1_t180_x4_fullupdates_fixed_eval_fp32cont_guard_bf16_uint8_dp4_shm_seed0_20260824_run1",
+  "project_git_commit": "be29e713e67465805f0af5e35085c151fb25e4d2",
+  "branch": "codex/karrow",
+  "git_clean_and_synced_at_completion": true,
+  "run_complete": true,
+  "return_code": 0,
+  "finished_at_utc": "2026-08-24T23:51:03.799494+00:00",
+  "task": "ALE/MsPacman-v5",
+  "completed_epochs": 180,
+  "final_evaluation": {
+    "cohort": "heldout_final",
+    "periodic_validation_cohort_used": false,
+    "policy": "deterministic_argmax_and_latent_mode",
+    "rollouts": 16,
+    "raw_return_mean": 2418.75,
+    "raw_return_std": 227.3454145128069,
+    "threshold": 2000.0,
+    "operator": ">",
+    "passed": true
+  },
+  "arrow_alignment": {
+    "reference_matrix": "arrow_ar50_original_s0_reference_matrix_v1.json",
+    "original_arrow_task_completion_raw_return_mean": 1665.625,
+    "original_arrow_task_completion_raw_return_std": 383.4378820291495,
+    "candidate_delta": 753.125,
+    "candidate_taskwise_normalized_ratio": 1.452157598499062,
+    "strict_evaluator_parity": false,
+    "reason": "The original ARROW run used an advancing evaluation cohort, FP32, one device, a 90-epoch task duration, and the original global batch. This gate supports progression to an explicitly extra-sample/compute pilot, not a fair superiority claim."
+  },
+  "early_guard": {
+    "status": "pass",
+    "comparison_window_world_model_steps": [1000, 5000],
+    "median_absolute_ratios": {
+      "continuation": 1.877701310445405,
+      "reconstruction": 0.9003132403202553,
+      "kl": 1.1146821447840185,
+      "gradient_norm": 1.0580021555581929
+    },
+    "required_non_finite_steps": []
+  },
+  "artifacts": {
+    "final_evaluation_json_sha256": "d3bfab09c6920850cc856a230d6ebdb7f4d35ff77c3481180a94682f10d2872e",
+    "run_status_json_sha256": "f38256558b5271daa744ee0732fa93511b8f5de9ee077789e64748a98db34b81",
+    "early_guard_json_sha256": "e2643b2a39ca0ca56d8b08da53111fc34119d6416df1021844ae80216821b288",
+    "best_validation_index_sha256": "c305142c9d1a60c9c569d978e2a78662cedb6c8dd3816ac049e02583c3392d18",
+    "task_boundary_index_sha256": "b37c81d41e4e48bd240dfde6bae6f7cd16f9a5e2398bcc2017cb16e70201ff85",
+    "task_boundary_snapshot_sha256": "3c7265a277cb28b9209f64ce2ea8576bb87b3dcc96349c8ab9af2081aeeff0e9",
+    "heldout_snapshot_sha256": "367d897bc8c678a17bf8322fc33eff323c7430468fc2d49a257033b8e5fa36e7",
+    "save_wm_sha256": "76456db1f5e456b4d501e16cef348ef82635c35c9187558bb2df4d26b478a7df",
+    "save_ac_sha256": "7d9e2d2672141d14ed143c3cd71f453f1945ec9fd754dfc1dc45bd3c31b6c3a6",
+    "save_ac_bank_sha256": "46ddd586303ab2009f11c08f534c960e2b784b5ce022099508db096060adf453"
+  },
+  "snapshot_semantics": {
+    "inference_only": true,
+    "resumable": false,
+    "omitted_state": [
+      "optimizers",
+      "replay",
+      "RNG",
+      "environment schedule",
+      "step schedulers"
+    ]
+  }
+}

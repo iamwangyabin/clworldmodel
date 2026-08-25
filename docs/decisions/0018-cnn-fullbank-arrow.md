@@ -46,4 +46,5 @@ same sample and update budgets as the existing DINO-ConvBank DDP path.
 - Positive retention would not show that replay alone prevented forgetting,
   because old routes receive no later updates.
 - The first gate is a completed 90-epoch MsPacman pilot with final raw mean at
-  least 2,000. A smoke run or favorable intermediate peak cannot pass it.
+  strictly greater than 2,000. A smoke run or favorable intermediate peak
+  cannot pass it.
