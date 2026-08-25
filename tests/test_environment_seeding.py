@@ -51,6 +51,29 @@ class EnvironmentSeedingTests(unittest.TestCase):
         }
         self.assertEqual(len(cohorts), 3)
 
+    def test_independent_task_seed_offset_selects_global_cohort_slot(self) -> None:
+        _, validation_full, final_full = train._environment_seed_streams(123456789)
+        validation_values = [
+            train._next_environment_seed(validation_full) for _ in range(6)
+        ]
+        final_values = [train._next_environment_seed(final_full) for _ in range(6)]
+
+        _, validation_independent, final_independent = train._environment_seed_streams(
+            123456789
+        )
+        for _ in range(3):
+            train._next_environment_seed(validation_independent)
+            train._next_environment_seed(final_independent)
+
+        self.assertEqual(
+            train._next_environment_seed(validation_independent),
+            validation_values[3],
+        )
+        self.assertEqual(
+            train._next_environment_seed(final_independent),
+            final_values[3],
+        )
+
     def test_task_cosine_actor_schedule_restarts_per_task_without_eval_input(
         self,
     ) -> None:

@@ -333,6 +333,12 @@ This is a task-aware upper bound. Its first acquisition gate is a final
 `docs/protocols/cnn_fullbank_arrow_v1_atari.md` for complete routing, storage,
 precision, DDP, and evaluation semantics.
 
+The separate `six-parallel-independent-single-gpu-experts-v1` pilot trains one
+fresh expert per game across a GPU pool and records each component's eventual
+bank slot. It is an acquisition and systems pilot, not sequential continual
+learning: it cannot measure transfer, retention, or forgetting, and its
+180-epoch children are not matched-budget ARROW controls.
+
 ## Corrected task-aware method: DINO-FullBank-ARROW-v2
 
 `DINO-FullBank-ARROW-50` keeps frozen DINOv3 but removes the remaining shared

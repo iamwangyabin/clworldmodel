@@ -249,6 +249,7 @@ class MoeArrowMethodTests(unittest.TestCase):
                 "ac_final_lr": 2.5e-5,
                 "ac_final_entropy_scale": 5e-5,
                 "evaluation_seed_protocol": "fixed_validation_heldout_final",
+                "evaluation_task_seed_offset": 3,
             }
         )
         config = Config.from_dict(data)
@@ -259,6 +260,7 @@ class MoeArrowMethodTests(unittest.TestCase):
             config.evaluation_seed_protocol,
             "fixed_validation_heldout_final",
         )
+        self.assertEqual(config.evaluation_task_seed_offset, 3)
 
         invalid = self._fullbank_config_data()
         for key in (
@@ -268,6 +270,7 @@ class MoeArrowMethodTests(unittest.TestCase):
             "ac_final_lr",
             "ac_final_entropy_scale",
             "evaluation_seed_protocol",
+            "evaluation_task_seed_offset",
         ):
             invalid[key] = data[key]
         with self.assertRaisesRegex(ValueError, "only for current-only CNN-FullBank"):
@@ -279,8 +282,42 @@ class MoeArrowMethodTests(unittest.TestCase):
             Config.from_dict(invalid)
 
         invalid = self._cnn_fullbank_config_data()
+        invalid["evaluation_task_seed_offset"] = 3
+        with self.assertRaisesRegex(ValueError, "requires fixed validation seeds"):
+            Config.from_dict(invalid)
+
+        invalid = self._cnn_fullbank_config_data()
         invalid["replay_observation_dtype"] = "float32"
         with self.assertRaisesRegex(ValueError, "requires uint8"):
+            Config.from_dict(invalid)
+
+    def test_cnn_fullbank_independent_expert_records_global_task_slot(self) -> None:
+        data = self._cnn_fullbank_config_data()
+        data["esc"]["env_configs"] = [data["esc"]["env_configs"][3]]
+        data.update(
+            {
+                "rssm_num_experts": 6,
+                "evaluation_seed_protocol": "fixed_validation_heldout_final",
+                "evaluation_task_seed_offset": 3,
+                "independent_expert_original_task_index": 3,
+            }
+        )
+        config = Config.from_dict(data)
+
+        self.assertEqual(config.independent_expert_original_task_index, 3)
+        self.assertEqual(config.evaluation_task_seed_offset, 3)
+        self.assertEqual(config.rssm_num_experts, 6)
+        self.assertEqual(len(config.esc.env_configs), 1)
+
+        invalid = data.copy()
+        invalid["evaluation_task_seed_offset"] = 2
+        with self.assertRaisesRegex(ValueError, "offset must match"):
+            Config.from_dict(invalid)
+
+        invalid = data.copy()
+        invalid["independent_expert_original_task_index"] = 6
+        invalid["evaluation_task_seed_offset"] = 6
+        with self.assertRaisesRegex(ValueError, "allocated slot"):
             Config.from_dict(invalid)
 
     def test_patchbank_config_retains_all_patches_and_pixel_reconstruction(self) -> None:

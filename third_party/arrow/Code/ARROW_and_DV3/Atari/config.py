@@ -237,6 +237,8 @@ class Config(Serialisable):
     compute_dtype: ComputeDType = "float32"
     data_parallel_world_size: DataParallelWorldSize = 1
     evaluation_seed_protocol: EvaluationSeedProtocol = "advancing"
+    evaluation_task_seed_offset: int = 0
+    independent_expert_original_task_index: Optional[int] = None
 
     actor_network: ActorNetwork = "mlp"
     actor_kan_hidden_features: int = 64
@@ -367,6 +369,9 @@ class Config(Serialisable):
             or is_dino_fullbank
             or is_dino_pixelbank
         )
+        is_independent_expert = (
+            self.independent_expert_original_task_index is not None
+        )
         if self.data_parallel_world_size not in {1, 2, 4}:
             raise ValueError("data_parallel_world_size must be one of 1, 2, or 4")
         if self.evaluation_seed_protocol not in {
@@ -375,6 +380,15 @@ class Config(Serialisable):
         }:
             raise ValueError(
                 f"Unknown evaluation seed protocol: {self.evaluation_seed_protocol!r}"
+            )
+        if self.evaluation_task_seed_offset < 0:
+            raise ValueError("evaluation_task_seed_offset must be non-negative")
+        if (
+            self.evaluation_task_seed_offset
+            and self.evaluation_seed_protocol != "fixed_validation_heldout_final"
+        ):
+            raise ValueError(
+                "evaluation_task_seed_offset requires fixed validation seeds"
             )
         if self.data_parallel_world_size > 1:
             if not (is_dino_convbank or is_cnn_fullbank):
@@ -432,12 +446,39 @@ class Config(Serialisable):
                 raise ValueError("Task-aware expert methods require ARROW mixed replay")
             if self.esc.env_schedule_type is not SequentialEnvironments:
                 raise ValueError("Task-aware expert methods require a sequential task schedule")
-            if len(self.esc.env_configs) < 2:
-                raise ValueError("Task-aware expert methods require at least two scheduled tasks")
-            if self.rssm_num_experts != len(self.esc.env_configs):
-                raise ValueError(
-                    "Task-aware expert methods require one RSSM expert per scheduled task"
-                )
+            if is_independent_expert:
+                if not is_cnn_fullbank:
+                    raise ValueError(
+                        "Independent experts are validated only for CNN-FullBank"
+                    )
+                if len(self.esc.env_configs) != 1:
+                    raise ValueError(
+                        "Independent expert training requires exactly one environment"
+                    )
+                if not (
+                    0
+                    <= self.independent_expert_original_task_index
+                    < self.rssm_num_experts
+                ):
+                    raise ValueError(
+                        "Independent expert task index must address an allocated slot"
+                    )
+                if (
+                    self.evaluation_task_seed_offset
+                    != self.independent_expert_original_task_index
+                ):
+                    raise ValueError(
+                        "Independent expert evaluation offset must match its original task index"
+                    )
+            else:
+                if len(self.esc.env_configs) < 2:
+                    raise ValueError(
+                        "Task-aware expert methods require at least two scheduled tasks"
+                    )
+                if self.rssm_num_experts != len(self.esc.env_configs):
+                    raise ValueError(
+                        "Task-aware expert methods require one RSSM expert per scheduled task"
+                    )
             if self.residual_correction != "none":
                 raise ValueError(
                     "A task-aware expert method does not use residual corrections"

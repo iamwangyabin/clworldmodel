@@ -251,6 +251,34 @@ SHA256/index entries are mandatory. They are not resumable checkpoints because
 optimizers, targets, replay/provenance, RNG, scheduler position, and the full
 counter set are not serialized.
 
+## Parallel independent expert-bank pilot
+
+`six-parallel-independent-single-gpu-experts-v1` is a separate task-aware
+systems and acquisition pilot. It does not replace the sequential continual
+protocol.
+
+Each game is trained in an independent single-GPU process for 180 epochs using
+the original single-device world-model and actor context batch sizes (`16` and
+`128`) and the corrected BF16 continuation path. Four processes may run
+concurrently on four GPUs; the remaining two tasks start as GPUs become free.
+Every process owns a unique run directory and mmap Replay backing.
+
+Each child trains local expert slot 0 from fresh initialization and records its
+original curriculum index as the eventual assembly slot. Completed experts may
+be appended to a task-aware inference bank without changing previously
+completed experts. This additive assembly is operationally incremental, but
+there is no sequential warm start, parameter interference, retention curve,
+forgetting measurement, or forward/backward transfer result.
+
+The fixed validation and held-out seed generators skip to the original task
+index before selecting the child's cohort. This preserves the same per-task
+seed slot that the complete six-task evaluator uses despite local routing as
+task 0.
+
+Relative to original ARROW, each child has twice the task duration, interaction,
+updates, sampled contexts, and evaluation opportunities. The campaign is a
+single-seed pilot and cannot support a fair superiority claim.
+
 ## Launcher
 
 ```bash
@@ -264,6 +292,20 @@ python scripts/run_moe_arrow_atari.py \
   --replay-mmap-root /dev/shm/clworldmodel-replay \
   --seed 0 \
   --task-prefix-length 1 \
+  --dry-run
+```
+
+The parallel independent expert-bank launcher is:
+
+```bash
+python scripts/run_cnn_fullbank_parallel_experts.py \
+  --profile six-parallel-independent-single-gpu-experts-v1 \
+  --campaign-id parallel_experts_20260825_run1 \
+  --output-root /absolute/run/root \
+  --replay-mmap-root /dev/shm/clworldmodel-replay \
+  --arrow-reference-matrix \
+    docs/protocols/references/arrow_ar50_original_s0_reference_matrix_v1.json \
+  --gpu-ids 0,1,2,3 \
   --dry-run
 ```
 

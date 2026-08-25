@@ -55,6 +55,7 @@ CONV_ADAPTER_OUTPUT_GRID_SIZE = 8
 RSSM_LATENT_SHAPE = (32, 32)
 CNN_ENCODER_OUTPUT_SIZE = 4_096
 CONTINUAL_CAMPAIGN_PROFILE = "six-task-extra-compute-pilot-v1"
+INDEPENDENT_EXPERT_PROFILE = "parallel-independent-single-gpu-v1"
 TASK1_GATE_EVIDENCE_PATH = (
     ROOT
     / "docs"
@@ -644,6 +645,23 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         choices=[1, 2, 3],
         help="Run a task-prefix pilot without changing per-task duration",
     )
+    parser.add_argument(
+        "--independent-task-index",
+        type=int,
+        choices=range(6),
+        help=(
+            "Train exactly one curriculum task as an independent expert. The "
+            "task is locally routed as task 0 and records its original assembly slot"
+        ),
+    )
+    parser.add_argument(
+        "--independent-expert-profile",
+        choices=(INDEPENDENT_EXPERT_PROFILE,),
+        help=(
+            "Freeze the single-GPU, 180-epoch, independently trainable expert "
+            "component protocol used by the parallel six-task expert-bank campaign"
+        ),
+    )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument(
@@ -831,6 +849,8 @@ def _resolved_config(
             "ac_final_lr": 2.5e-5,
             "ac_final_entropy_scale": 5e-5,
             "evaluation_seed_protocol": "advancing",
+            "evaluation_task_seed_offset": 0,
+            "independent_expert_original_task_index": None,
             "fresh_ac": False,
             "random_policy": variant.random_policy,
             "residual_correction": "none",
@@ -922,9 +942,47 @@ def main(*, default_method: str = "moe") -> int:
                 f"requires {', '.join(missing)}"
             )
     elif args.arrow_reference_matrix is not None:
+        if args.independent_expert_profile is None:
+            parser.error(
+                "--arrow-reference-matrix requires --continual-campaign-profile "
+                "or --independent-expert-profile"
+            )
+    if (
+        args.independent_task_index is not None
+        and args.independent_expert_profile is None
+    ):
         parser.error(
-            "--arrow-reference-matrix requires --continual-campaign-profile"
+            "--independent-task-index requires --independent-expert-profile"
         )
+    if args.independent_expert_profile is not None:
+        independent_requirements = {
+            "--method cnn-fullbank": args.method == "cnn-fullbank",
+            "--devices 1": args.devices == 1,
+            "--independent-task-index": args.independent_task_index is not None,
+            "--task-duration-multiplier 2": args.task_duration_multiplier == 2,
+            "--evaluation-audit-profile fixed-cohort-snapshots": (
+                args.evaluation_audit_profile == "fixed-cohort-snapshots"
+            ),
+            "--curriculum original": args.curriculum == "original",
+            "--seed 0": args.seed == 0,
+            "--profile-stages": args.profile_stages,
+            "--replay-mmap-root": args.replay_mmap_root is not None,
+            "--output-dir": args.output_dir is not None,
+            "--arrow-reference-matrix": args.arrow_reference_matrix is not None,
+            "no task-prefix pilot": args.task_prefix_length is None,
+            "no sequential continual campaign": args.continual_campaign_profile is None,
+            "no batch profile": args.batch_profile is None,
+            "no actor-stability profile": args.actor_stability_profile is None,
+            "no Task-1 early guard": args.early_progress_guard is None,
+        }
+        missing = [
+            name for name, present in independent_requirements.items() if not present
+        ]
+        if missing:
+            parser.error(
+                f"--independent-expert-profile {INDEPENDENT_EXPERT_PROFILE} "
+                f"requires {', '.join(missing)}"
+            )
     if args.evaluation_audit_profile is not None:
         if args.method != "cnn-fullbank":
             parser.error(
@@ -933,6 +991,7 @@ def main(*, default_method: str = "moe") -> int:
         if (
             args.task_prefix_length != 1
             and args.continual_campaign_profile is None
+            and args.independent_expert_profile is None
         ):
             parser.error(
                 "--evaluation-audit-profile requires a Task 1 pilot or the "
@@ -949,14 +1008,17 @@ def main(*, default_method: str = "moe") -> int:
                 "--batch-profile x4-full-updates, and --task-prefix-length 1"
             )
     if args.task_duration_multiplier > 1:
-        if args.method != "cnn-fullbank" or args.batch_profile is None:
+        if args.method != "cnn-fullbank" or (
+            args.batch_profile is None and args.independent_expert_profile is None
+        ):
             parser.error(
                 "--task-duration-multiplier above 1 requires cnn-fullbank "
-                "with --batch-profile"
+                "with --batch-profile or --independent-expert-profile"
             )
         if (
             args.task_prefix_length != 1
             and args.continual_campaign_profile is None
+            and args.independent_expert_profile is None
         ):
             parser.error(
                 "--task-duration-multiplier above 1 requires "
@@ -990,17 +1052,34 @@ def main(*, default_method: str = "moe") -> int:
     source_config = _verify_primary_config(
         source_config_path, args.curriculum, args.seed
     )
+    all_tasks = source_config["esc"]["env_configs"]
+    all_task_names = [task["name"] for task in all_tasks]
+    independent_task: dict | None = None
+    if args.independent_expert_profile is not None:
+        if args.independent_task_index is None or args.independent_task_index >= len(
+            all_tasks
+        ):
+            parser.error("--independent-task-index is outside the curriculum")
+        independent_task = json.loads(
+            json.dumps(all_tasks[args.independent_task_index])
+        )
+        source_config = json.loads(json.dumps(source_config))
+        source_config["esc"]["env_configs"] = [independent_task]
     tasks = source_config["esc"]["env_configs"]
     task_names = [task["name"] for task in tasks]
     source_swap_sched = int(source_config["esc"]["kwargs"]["swap_sched"])
     swap_sched = source_swap_sched * args.task_duration_multiplier
     training_epochs = (
-        swap_sched * len(tasks)
-        if args.continual_campaign_profile is not None
+        swap_sched
+        if args.independent_expert_profile is not None
         else (
-            int(source_config["epochs"])
-            if args.task_prefix_length is None
-            else swap_sched * args.task_prefix_length
+            swap_sched * len(tasks)
+            if args.continual_campaign_profile is not None
+            else (
+                int(source_config["epochs"])
+                if args.task_prefix_length is None
+                else swap_sched * args.task_prefix_length
+            )
         )
     )
     arrow_reference_path: Path | None = None
@@ -1015,7 +1094,7 @@ def main(*, default_method: str = "moe") -> int:
             arrow_reference_sha256,
         ) = _load_arrow_reference_matrix(
             args.arrow_reference_matrix,
-            expected_tasks=task_names,
+            expected_tasks=all_task_names,
         )
     if args.continual_campaign_profile is not None:
         task1_gate_evidence, task1_gate_evidence_sha256 = (
@@ -1055,6 +1134,16 @@ def main(*, default_method: str = "moe") -> int:
         config_overrides.update(actor_stability_profile.config_overrides)
     if evaluation_audit_profile is not None:
         config_overrides.update(evaluation_audit_profile.config_overrides)
+    if args.independent_expert_profile is not None:
+        # Keep the same six-slot model topology so independently trained slot-0
+        # components can later be remapped into their frozen curriculum slots.
+        config_overrides["rssm_num_experts"] = len(all_tasks)
+        config_overrides["evaluation_task_seed_offset"] = (
+            args.independent_task_index
+        )
+        config_overrides["independent_expert_original_task_index"] = (
+            args.independent_task_index
+        )
     config = _resolved_config(
         source_config,
         model_path=model_path,
@@ -1137,6 +1226,12 @@ def main(*, default_method: str = "moe") -> int:
         protocol = protocol.replace(
             "-Atari-", "-SixTaskExtraComputePilotV1-Atari-"
         )
+    if args.independent_expert_profile is not None:
+        task_suffix = f"IndependentExpertT{args.independent_task_index:02d}"
+        method += f"-{task_suffix}"
+        role += "-parallel-independent-task-expert-component"
+        output_prefix += f"_independent_task_{args.independent_task_index:02d}"
+        protocol = protocol.replace("-Atari-", f"-{task_suffix}-Atari-")
     if args.task_prefix_length is not None:
         method += f"-T{args.task_prefix_length}Pilot"
         role += "-pilot"
@@ -1433,7 +1528,11 @@ def main(*, default_method: str = "moe") -> int:
         "seed": SEEDS[args.seed],
         "task_identity": {
             "exposed_to_agent": True,
-            "source": "sequential scheduler",
+            "source": (
+                "independent expert selector remapped to local task 0"
+                if args.independent_expert_profile is not None
+                else "sequential scheduler"
+            ),
             "uses": [
                 (
                     "CNN/RSSM/head expert routing"
@@ -1448,6 +1547,7 @@ def main(*, default_method: str = "moe") -> int:
         },
         "training_scope": {
             "task_prefix_length": args.task_prefix_length,
+            "independent_original_task_index": args.independent_task_index,
             "epochs": training_epochs,
             "task_duration_epochs": swap_sched,
             "tasks": [task["name"] for task in visited_tasks],
@@ -1502,6 +1602,42 @@ def main(*, default_method: str = "moe") -> int:
             if args.continual_campaign_profile is not None
             else None
         ),
+        "independent_expert": (
+            {
+                "profile": args.independent_expert_profile,
+                "classification": "single_seed_parallel_task_expert_component",
+                "original_task_index": args.independent_task_index,
+                "original_task_name": independent_task["name"],
+                "local_training_task_index": 0,
+                "full_bank_assembly_slot": args.independent_task_index,
+                "concurrent_training_with_other_tasks_allowed": True,
+                "sequential_transfer_measured": False,
+                "retention_or_forgetting_measured": False,
+                "incremental_assembly_semantics": (
+                    "completed immutable expert components may be appended to a "
+                    "task-aware bank without modifying earlier experts"
+                ),
+                "not_a_sequential_continual_learning_run": True,
+                "task_identity_required_at_inference": True,
+                "evaluation_seed_slot_matches_original_task_index": True,
+                "world_model_initialization": "independent random initialization",
+                "actor_critic_initialization": "independent random initialization",
+                "comparison_to_original_arrow": {
+                    "environment_interaction_multiplier": 2.0,
+                    "world_model_update_multiplier": 2.0,
+                    "actor_critic_update_multiplier": 2.0,
+                    "world_model_sampled_frame_use_multiplier": 2.0,
+                    "actor_context_frame_use_multiplier": 2.0,
+                    "global_optimization_batches_matched": True,
+                    "device_count_matched": True,
+                    "periodic_evaluation_opportunity_multiplier": 2.0,
+                    "strict_fair_superiority_claim": False,
+                },
+                "expected_boundary_snapshot_count": 1,
+            }
+            if args.independent_expert_profile is not None
+            else None
+        ),
         "task1_gate_evidence": (
             {
                 "source": str(TASK1_GATE_EVIDENCE_PATH),
@@ -1541,6 +1677,13 @@ def main(*, default_method: str = "moe") -> int:
                 "derived_metric_protocol": arrow_reference_matrix[
                     "derived_metric_protocol"
                 ],
+                "selected_acquisition_reference": (
+                    arrow_reference_matrix["acquisition_references"][
+                        args.independent_task_index
+                    ]
+                    if args.independent_expert_profile is not None
+                    else None
+                ),
                 "strict_same_cohort_comparison": False,
             }
             if arrow_reference_matrix is not None
@@ -1561,11 +1704,19 @@ def main(*, default_method: str = "moe") -> int:
                 "optimizer_update_multiplier_vs_90_epoch_fixed_batch": {
                     "world_model": (
                         args.task_duration_multiplier
-                        * batch_profile.optimizer_update_multiplier
+                        * (
+                            batch_profile.optimizer_update_multiplier
+                            if batch_profile is not None
+                            else 1.0
+                        )
                     ),
                     "actor_critic": (
                         args.task_duration_multiplier
-                        * batch_profile.optimizer_update_multiplier
+                        * (
+                            batch_profile.optimizer_update_multiplier
+                            if batch_profile is not None
+                            else 1.0
+                        )
                     ),
                 },
                 "baseline_comparability": (
@@ -1830,7 +1981,9 @@ def main(*, default_method: str = "moe") -> int:
                 ]
             ),
             "new_task_initialization": (
-                "copy previous complete world-model expert once"
+                "independent random initialization; remap local slot 0 at assembly"
+                if args.independent_expert_profile is not None
+                else "copy previous complete world-model expert once"
                 if variant.full_task_experts
                 else "copy previous task expert once"
             ),
@@ -2060,6 +2213,9 @@ def main(*, default_method: str = "moe") -> int:
             "evaluation_data_enters_replay": False,
             "seed_protocol": config.get(
                 "evaluation_seed_protocol", "advancing"
+            ),
+            "task_seed_index_offset": config.get(
+                "evaluation_task_seed_offset", 0
             ),
             "periodic_validation_cohort_reused": (
                 config.get("evaluation_seed_protocol")

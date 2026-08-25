@@ -1060,6 +1060,160 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertFalse(output_dir.exists())
         self.assertFalse(scratch_root.exists())
 
+    def test_cnn_fullbank_independent_single_gpu_expert_is_frozen(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_dir = root / "frostbite_expert"
+            scratch_root = root / "node_local_replay"
+            reference = (
+                ROOT
+                / "docs"
+                / "protocols"
+                / "references"
+                / "arrow_ar50_original_s0_reference_matrix_v1.json"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--devices",
+                    "1",
+                    "--independent-expert-profile",
+                    "parallel-independent-single-gpu-v1",
+                    "--independent-task-index",
+                    "3",
+                    "--task-duration-multiplier",
+                    "2",
+                    "--evaluation-audit-profile",
+                    "fixed-cohort-snapshots",
+                    "--arrow-reference-matrix",
+                    str(reference),
+                    "--replay-mmap-root",
+                    str(scratch_root),
+                    "--profile-stages",
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+        self.assertIn("IndependentExpertT03", launch["method"])
+        self.assertIn("IndependentExpertT03", launch["protocol"])
+        self.assertIsNone(launch["continual_campaign"])
+        scope = launch["training_scope"]
+        self.assertEqual(scope["independent_original_task_index"], 3)
+        self.assertEqual(scope["tasks"], ["ALE/Frostbite-v5"])
+        self.assertEqual(scope["epochs"], 180)
+        self.assertEqual(scope["world_model_updates"], 180_000)
+        self.assertEqual(scope["actor_critic_updates"], 144_000)
+        self.assertEqual(scope["world_model_sampled_replay_frame_uses"], 92_160_000)
+        self.assertEqual(scope["actor_context_frame_uses"], 73_728_000)
+        self.assertEqual(launch["world_model"]["allocated_experts"], 6)
+        self.assertFalse(launch["distributed_execution"]["enabled"])
+        self.assertEqual(
+            launch["distributed_execution"]["world_model_sequences"],
+            {"global": 16, "per_rank": 16},
+        )
+        self.assertEqual(
+            launch["distributed_execution"]["actor_context_sequences"],
+            {"global": 128, "per_rank": 128},
+        )
+        independent = launch["independent_expert"]
+        self.assertEqual(independent["original_task_index"], 3)
+        self.assertEqual(independent["local_training_task_index"], 0)
+        self.assertEqual(independent["full_bank_assembly_slot"], 3)
+        self.assertTrue(independent["concurrent_training_with_other_tasks_allowed"])
+        self.assertFalse(independent["sequential_transfer_measured"])
+        self.assertFalse(independent["retention_or_forgetting_measured"])
+        self.assertTrue(independent["not_a_sequential_continual_learning_run"])
+        self.assertTrue(
+            independent["evaluation_seed_slot_matches_original_task_index"]
+        )
+        self.assertEqual(launch["evaluation"]["task_seed_index_offset"], 3)
+        comparison = independent["comparison_to_original_arrow"]
+        self.assertEqual(comparison["world_model_sampled_frame_use_multiplier"], 2.0)
+        self.assertFalse(comparison["strict_fair_superiority_claim"])
+        self.assertEqual(
+            launch["arrow_reference_matrix"]["selected_acquisition_reference"][
+                "raw_return_mean"
+            ],
+            1870.625,
+        )
+        self.assertEqual(
+            launch["checkpointing"]["expected_task_boundary_snapshot_count"], 1
+        )
+        self.assertFalse(output_dir.exists())
+        self.assertFalse(scratch_root.exists())
+
+    def test_parallel_independent_expert_campaign_dry_run_assigns_six_tasks(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_root = root / "runs"
+            scratch_root = root / "replay"
+            reference = (
+                ROOT
+                / "docs"
+                / "protocols"
+                / "references"
+                / "arrow_ar50_original_s0_reference_matrix_v1.json"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_cnn_fullbank_parallel_experts.py",
+                    "--profile",
+                    "six-parallel-independent-single-gpu-experts-v1",
+                    "--campaign-id",
+                    "parallel_experts_test",
+                    "--output-root",
+                    str(output_root),
+                    "--replay-mmap-root",
+                    str(scratch_root),
+                    "--arrow-reference-matrix",
+                    str(reference),
+                    "--gpu-ids",
+                    "0,1,2,3",
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            campaign = json.loads(result.stdout)
+
+        self.assertEqual(
+            campaign["classification"],
+            "single_seed_parallel_independent_expert_bank_pilot",
+        )
+        self.assertEqual(campaign["maximum_concurrent_tasks"], 4)
+        self.assertEqual(len(campaign["tasks"]), 6)
+        self.assertFalse(campaign["semantics"]["sequential_continual_learning"])
+        self.assertTrue(campaign["semantics"]["parallel_independent_training"])
+        self.assertFalse(campaign["semantics"]["retention_and_forgetting_measured"])
+        for task_index, task in enumerate(campaign["tasks"]):
+            self.assertEqual(task["task_index"], task_index)
+            self.assertEqual(task["assembly_slot"], task_index)
+            command = task["command"]
+            self.assertEqual(
+                command[command.index("--independent-task-index") + 1],
+                str(task_index),
+            )
+            self.assertIn("--independent-expert-profile", command)
+            self.assertIn("--devices", command)
+            self.assertEqual(command[command.index("--devices") + 1], "1")
+        self.assertFalse(output_root.exists())
+        self.assertFalse(scratch_root.exists())
+
     def test_six_task_campaign_requires_frozen_reference_matrix(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -281,6 +281,17 @@ documented here, covered by focused parity tests, and followed by regenerating
     explicitly omit optimizer, replay, RNG, and schedule state and are not
     resumable checkpoints. Focused tests cover payload completeness, atomic
     files, duplicate rejection, commit provenance, and launcher accounting.
+38. Add an opt-in independent-expert task index and non-negative fixed-
+    evaluation seed offset for separately named CNN-FullBank components. The
+    explicit index permits exactly one scheduled environment while retaining
+    the complete six-slot world-model allocation; only local route 0 trains and
+    its original assembly slot is recorded. The offset advances only the
+    isolated periodic-validation and held-out-final seed generators before a
+    child task chooses its cohort, so the local task uses its original six-task
+    cohort slot. Collection RNG, interaction, gradients, and default sequential
+    behavior remain unchanged. The offset is rejected with advancing seeds or
+    when it disagrees with the assembly slot. Focused tests cover config
+    validation, global-slot equivalence, and launcher provenance.
 
 ## Known issues at import
 

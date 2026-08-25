@@ -1681,6 +1681,10 @@ if __name__ == "__main__":
     fixed_evaluation_cohorts = (
         config.evaluation_seed_protocol == "fixed_validation_heldout_final"
     )
+    if fixed_evaluation_cohorts:
+        for _ in range(config.evaluation_task_seed_offset):
+            _next_environment_seed(validation_environment_seed_rng)
+            _next_environment_seed(final_environment_seed_rng)
     validation_task_seeds = (
         tuple(
             _next_environment_seed(validation_environment_seed_rng)
@@ -1954,6 +1958,7 @@ if __name__ == "__main__":
         evaluation_seed_manifest = {
             "schema_version": 1,
             "protocol": config.evaluation_seed_protocol,
+            "task_seed_index_offset": config.evaluation_task_seed_offset,
             "periodic_validation": {
                 "task_base_seeds": list(validation_task_seeds),
                 "reused_at_every_checkpoint": fixed_evaluation_cohorts,
