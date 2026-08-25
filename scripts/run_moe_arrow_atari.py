@@ -111,6 +111,7 @@ class BatchProfile:
     classification: str
     learning_rate_rule: str
     optimizer_update_multiplier: float
+    required_device_count: int = 4
 
 
 @dataclass(frozen=True)
@@ -229,6 +230,31 @@ BATCH_PROFILES = {
         classification="compute_saturation_large_batch_ablation",
         learning_rate_rule="unchanged_from_fixed_batch",
         optimizer_update_multiplier=1.0,
+    ),
+    "single-gpu-x4-linear-lr": BatchProfile(
+        scale=4,
+        protocol_suffix="SingleGPULargeBatchX4LinearLR",
+        output_suffix="single_gpu_large_batch_x4_linear_lr",
+        config_overrides={
+            "mb_n_size": 64,
+            "pretrain_mb_n_size": 64,
+            "steps_per_batch": 250,
+            "pretrain_steps": 7_500,
+            "ac_train_sync": 512,
+            "ac_train_steps": 200,
+            "wm_lr": 4e-4,
+            "ac_lr": 4e-4,
+        },
+        hypothesis=(
+            "On one GPU, quadrupling the world-model and actor context batches "
+            "while quartering optimizer steps preserves per-epoch sampled-frame "
+            "use, reduces launch overhead, and improves accelerator occupancy; "
+            "linear learning-rate scaling preserves the large-batch update rule."
+        ),
+        classification="single_gpu_sample_matched_large_batch_ablation",
+        learning_rate_rule="linear_with_global_batch_scale",
+        optimizer_update_multiplier=0.25,
+        required_device_count=1,
     ),
 }
 
@@ -697,9 +723,9 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         "--batch-profile",
         choices=tuple(BATCH_PROFILES),
         help=(
-            "Named large-batch ablation. Requires cnn-fullbank with --devices "
-            "4; each profile records whether optimizer steps and sampled "
-            "replay/context-frame budgets change"
+            "Named CNN-FullBank large-batch ablation. Each profile fixes its "
+            "supported device count and records whether optimizer steps and "
+            "sampled replay/context-frame budgets change"
         ),
     )
     parser.add_argument(
@@ -900,8 +926,14 @@ def main(*, default_method: str = "moe") -> int:
     if args.batch_profile is not None:
         if args.method != "cnn-fullbank":
             parser.error("--batch-profile is validated only for cnn-fullbank")
-        if args.devices != 4:
-            parser.error("--batch-profile requires --devices 4")
+        required_devices = BATCH_PROFILES[
+            args.batch_profile
+        ].required_device_count
+        if args.devices != required_devices:
+            parser.error(
+                f"--batch-profile {args.batch_profile} requires "
+                f"--devices {required_devices}"
+            )
     if args.actor_stability_profile is not None:
         if args.method != "cnn-fullbank":
             parser.error(
@@ -942,10 +974,18 @@ def main(*, default_method: str = "moe") -> int:
                 f"requires {', '.join(missing)}"
             )
     elif args.arrow_reference_matrix is not None:
-        if args.independent_expert_profile is None:
+        task1_large_batch_reference = (
+            args.batch_profile == "single-gpu-x4-linear-lr"
+            and args.task_prefix_length == 1
+            and args.evaluation_audit_profile == "fixed-cohort-snapshots"
+        )
+        if (
+            args.independent_expert_profile is None
+            and not task1_large_batch_reference
+        ):
             parser.error(
                 "--arrow-reference-matrix requires --continual-campaign-profile "
-                "or --independent-expert-profile"
+                "or a supported fixed-cohort expert/acquisition profile"
             )
     if (
         args.independent_task_index is not None
@@ -1682,6 +1722,8 @@ def main(*, default_method: str = "moe") -> int:
                         args.independent_task_index
                     ]
                     if args.independent_expert_profile is not None
+                    else arrow_reference_matrix["acquisition_references"][0]
+                    if args.task_prefix_length == 1
                     else None
                 ),
                 "strict_same_cohort_comparison": False,
@@ -1755,6 +1797,7 @@ def main(*, default_method: str = "moe") -> int:
                 "scale": batch_profile.scale,
                 "config_overrides": batch_profile.config_overrides,
                 "learning_rate_rule": batch_profile.learning_rate_rule,
+                "required_device_count": batch_profile.required_device_count,
                 "environment_interaction_budget_unchanged": True,
                 "overall_environment_interaction_budget_unchanged": (
                     args.task_duration_multiplier == 1

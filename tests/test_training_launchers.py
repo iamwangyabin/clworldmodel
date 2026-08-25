@@ -560,6 +560,78 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(launch["actor_critic"]["learning_rate"], 4e-4)
         self.assertFalse(output_dir.exists())
 
+    def test_cnn_fullbank_single_gpu_x4_profile_is_sample_matched(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_dir = root / "cnn_fullbank_single_gpu_large_batch_run"
+            reference = (
+                ROOT
+                / "docs"
+                / "protocols"
+                / "references"
+                / "arrow_ar50_original_s0_reference_matrix_v1.json"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--task-prefix-length",
+                    "1",
+                    "--devices",
+                    "1",
+                    "--batch-profile",
+                    "single-gpu-x4-linear-lr",
+                    "--evaluation-audit-profile",
+                    "fixed-cohort-snapshots",
+                    "--arrow-reference-matrix",
+                    str(reference),
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+        self.assertIn("SingleGPULargeBatchX4LinearLR", launch["method"])
+        self.assertIn("SingleGPULargeBatchX4LinearLR", launch["protocol"])
+        batch_tuning = launch["batch_tuning"]
+        self.assertEqual(batch_tuning["profile"], "single-gpu-x4-linear-lr")
+        self.assertEqual(batch_tuning["required_device_count"], 1)
+        self.assertTrue(batch_tuning["optimization_sample_budgets_unchanged"])
+        self.assertFalse(batch_tuning["optimizer_update_counts_unchanged"])
+        execution = launch["distributed_execution"]
+        self.assertFalse(execution["enabled"])
+        self.assertEqual(
+            execution["world_model_sequences"], {"global": 64, "per_rank": 64}
+        )
+        self.assertEqual(
+            execution["actor_context_sequences"],
+            {"global": 512, "per_rank": 512},
+        )
+        scope = launch["training_scope"]
+        self.assertEqual(scope["epochs"], 90)
+        self.assertEqual(scope["world_model_updates"], 22_500)
+        self.assertEqual(scope["actor_critic_updates"], 18_000)
+        self.assertEqual(scope["world_model_sampled_replay_frame_uses"], 46_080_000)
+        self.assertEqual(scope["actor_context_frame_uses"], 36_864_000)
+        self.assertEqual(batch_tuning["config_overrides"]["wm_lr"], 4e-4)
+        self.assertEqual(launch["actor_critic"]["learning_rate"], 4e-4)
+        self.assertEqual(
+            launch["arrow_reference_matrix"]["selected_acquisition_reference"][
+                "raw_return_mean"
+            ],
+            1665.625,
+        )
+        self.assertFalse(output_dir.exists())
+
     def test_cnn_fullbank_x4_full_updates_saturates_dp4_compute(self) -> None:
         with TemporaryDirectory() as temporary:
             output_dir = Path(temporary) / "cnn_fullbank_full_updates_run"
@@ -1250,12 +1322,19 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--arrow-reference-matrix", result.stderr)
 
-    def test_batch_profile_requires_cnn_fullbank_dp4(self) -> None:
+    def test_batch_profile_requires_its_supported_device_count(self) -> None:
         invalid_argument_sets = (
-            ("--method", "cnn-fullbank", "--devices", "2"),
-            ("--method", "dino-convbank", "--devices", "4"),
+            ("x4-linear-lr", "--method", "cnn-fullbank", "--devices", "2"),
+            ("x4-linear-lr", "--method", "dino-convbank", "--devices", "4"),
+            (
+                "single-gpu-x4-linear-lr",
+                "--method",
+                "cnn-fullbank",
+                "--devices",
+                "4",
+            ),
         )
-        for arguments in invalid_argument_sets:
+        for profile, *arguments in invalid_argument_sets:
             with self.subTest(arguments=arguments):
                 result = subprocess.run(
                     [
@@ -1265,7 +1344,7 @@ class TrainingLauncherTests(unittest.TestCase):
                         "0",
                         *arguments,
                         "--batch-profile",
-                        "x4-linear-lr",
+                        profile,
                         "--dry-run",
                     ],
                     cwd=ROOT,

@@ -113,6 +113,21 @@ the run consumes roughly four times the optimization FLOPs and sample uses.
 Measure examples per second and acquisition alongside epoch wall time; this is
 additional training compute, not a transparent four-GPU speedup.
 
+### Single-GPU 90-epoch large-batch speed pilot
+
+`single-gpu-x4-linear-lr` applies the sample-matched x4 rule on one GPU instead
+of distributing the global batch across four ranks. It uses the original
+90-epoch Task 1 duration, world-model `N=64` with 250 updates per epoch, and
+actor context `N=512` with 200 updates per epoch. Both learning rates are
+`4e-4`. Per-epoch environment interaction and sampled replay/context-frame use
+remain unchanged relative to original single-GPU ARROW.
+
+This profile is intended to improve GPU occupancy and reduce optimizer-loop
+overhead. It is not optimization-equivalent to the original `N=16/128`,
+1000/800-update schedule and must report acquisition quality alongside speed.
+It uses fixed periodic validation, an independent final held-out cohort, and
+the frozen task-specific ARROW reference matrix.
+
 ### Late actor-stability pilot
 
 The first `x4-full-updates` seed-0 Task 1 pilot reached a periodic MsPacman raw
