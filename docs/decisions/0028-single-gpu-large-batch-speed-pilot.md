@@ -18,7 +18,9 @@ device would hide a material execution-protocol change.
 
 ## Decision
 
-Add `single-gpu-x4-linear-lr` as a distinct CNN-FullBank Task 1 profile:
+Add `single-gpu-x4-linear-lr` as a distinct CNN-FullBank Task 1 profile and
+freeze `single-gpu-large-batch-90-v1` as its independent-expert execution
+profile:
 
 - one GPU and the original 90-epoch task duration;
 - world-model `N=64`, 250 optimizer updates per epoch, and `wm_lr=4e-4`;
@@ -39,4 +41,6 @@ reproduction. Equal sampled-frame use does not make the optimization trajectory
 equivalent: it has one quarter as many Adam updates, a four-times larger batch,
 and a four-times larger learning rate. Report wall time, stage time, GPU
 utilization, and raw return together. Do not claim a speed improvement without
-also reporting acquisition quality.
+also reporting acquisition quality. The independent-expert form sees and
+evaluates exactly one task, preserves its original bank assembly slot, and is
+not a sequential continual-learning result.

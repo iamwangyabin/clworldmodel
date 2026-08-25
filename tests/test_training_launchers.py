@@ -1226,6 +1226,93 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertFalse(output_dir.exists())
         self.assertFalse(scratch_root.exists())
 
+    def test_cnn_fullbank_independent_speed_expert_is_sample_matched(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_dir = root / "mspacman_speed_expert"
+            scratch_root = root / "node_local_replay"
+            reference = (
+                ROOT
+                / "docs"
+                / "protocols"
+                / "references"
+                / "arrow_ar50_original_s0_reference_matrix_v1.json"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--devices",
+                    "1",
+                    "--independent-expert-profile",
+                    "single-gpu-large-batch-90-v1",
+                    "--independent-task-index",
+                    "0",
+                    "--batch-profile",
+                    "single-gpu-x4-linear-lr",
+                    "--evaluation-audit-profile",
+                    "fixed-cohort-snapshots",
+                    "--arrow-reference-matrix",
+                    str(reference),
+                    "--replay-mmap-root",
+                    str(scratch_root),
+                    "--profile-stages",
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+        self.assertIn("SingleGPULargeBatchX4LinearLR", launch["method"])
+        self.assertIn("IndependentExpertT00", launch["method"])
+        scope = launch["training_scope"]
+        self.assertEqual(scope["tasks"], ["ALE/MsPacman-v5"])
+        self.assertEqual(scope["epochs"], 90)
+        self.assertEqual(scope["world_model_updates"], 22_500)
+        self.assertEqual(scope["actor_critic_updates"], 18_000)
+        self.assertEqual(scope["world_model_sampled_replay_frame_uses"], 46_080_000)
+        self.assertEqual(scope["actor_context_frame_uses"], 36_864_000)
+        self.assertEqual(launch["world_model"]["allocated_experts"], 6)
+        self.assertEqual(launch["evaluation"]["task_seed_index_offset"], 0)
+        self.assertEqual(
+            launch["distributed_execution"]["world_model_sequences"],
+            {"global": 64, "per_rank": 64},
+        )
+        self.assertEqual(
+            launch["distributed_execution"]["actor_context_sequences"],
+            {"global": 512, "per_rank": 512},
+        )
+        independent = launch["independent_expert"]
+        self.assertEqual(independent["profile"], "single-gpu-large-batch-90-v1")
+        self.assertEqual(independent["full_bank_assembly_slot"], 0)
+        comparison = independent["comparison_to_original_arrow"]
+        self.assertEqual(comparison["environment_interaction_multiplier"], 1.0)
+        self.assertEqual(comparison["world_model_update_multiplier"], 0.25)
+        self.assertEqual(comparison["actor_critic_update_multiplier"], 0.25)
+        self.assertEqual(
+            comparison["world_model_sampled_frame_use_multiplier"], 1.0
+        )
+        self.assertEqual(comparison["actor_context_frame_use_multiplier"], 1.0)
+        self.assertFalse(comparison["global_optimization_batches_matched"])
+        self.assertEqual(comparison["periodic_evaluation_opportunity_multiplier"], 1.0)
+        self.assertEqual(
+            launch["arrow_reference_matrix"]["selected_acquisition_reference"][
+                "raw_return_mean"
+            ],
+            1665.625,
+        )
+        self.assertFalse(output_dir.exists())
+        self.assertFalse(scratch_root.exists())
+
     def test_parallel_independent_expert_campaign_dry_run_assigns_six_tasks(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -56,6 +56,7 @@ RSSM_LATENT_SHAPE = (32, 32)
 CNN_ENCODER_OUTPUT_SIZE = 4_096
 CONTINUAL_CAMPAIGN_PROFILE = "six-task-extra-compute-pilot-v1"
 INDEPENDENT_EXPERT_PROFILE = "parallel-independent-single-gpu-v1"
+SINGLE_GPU_SPEED_EXPERT_PROFILE = "single-gpu-large-batch-90-v1"
 TASK1_GATE_EVIDENCE_PATH = (
     ROOT
     / "docs"
@@ -682,10 +683,10 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--independent-expert-profile",
-        choices=(INDEPENDENT_EXPERT_PROFILE,),
+        choices=(INDEPENDENT_EXPERT_PROFILE, SINGLE_GPU_SPEED_EXPERT_PROFILE),
         help=(
-            "Freeze the single-GPU, 180-epoch, independently trainable expert "
-            "component protocol used by the parallel six-task expert-bank campaign"
+            "Freeze a named single-GPU independently trainable expert component "
+            "protocol"
         ),
     )
     parser.add_argument("--output-dir", type=Path)
@@ -995,11 +996,10 @@ def main(*, default_method: str = "moe") -> int:
             "--independent-task-index requires --independent-expert-profile"
         )
     if args.independent_expert_profile is not None:
-        independent_requirements = {
+        independent_requirements: dict[str, bool] = {
             "--method cnn-fullbank": args.method == "cnn-fullbank",
             "--devices 1": args.devices == 1,
             "--independent-task-index": args.independent_task_index is not None,
-            "--task-duration-multiplier 2": args.task_duration_multiplier == 2,
             "--evaluation-audit-profile fixed-cohort-snapshots": (
                 args.evaluation_audit_profile == "fixed-cohort-snapshots"
             ),
@@ -1011,16 +1011,35 @@ def main(*, default_method: str = "moe") -> int:
             "--arrow-reference-matrix": args.arrow_reference_matrix is not None,
             "no task-prefix pilot": args.task_prefix_length is None,
             "no sequential continual campaign": args.continual_campaign_profile is None,
-            "no batch profile": args.batch_profile is None,
             "no actor-stability profile": args.actor_stability_profile is None,
             "no Task-1 early guard": args.early_progress_guard is None,
         }
+        if args.independent_expert_profile == INDEPENDENT_EXPERT_PROFILE:
+            independent_requirements.update(
+                {
+                    "--task-duration-multiplier 2": (
+                        args.task_duration_multiplier == 2
+                    ),
+                    "no batch profile": args.batch_profile is None,
+                }
+            )
+        else:
+            independent_requirements.update(
+                {
+                    "the original 90-epoch task duration": (
+                        args.task_duration_multiplier == 1
+                    ),
+                    "--batch-profile single-gpu-x4-linear-lr": (
+                        args.batch_profile == "single-gpu-x4-linear-lr"
+                    ),
+                }
+            )
         missing = [
             name for name, present in independent_requirements.items() if not present
         ]
         if missing:
             parser.error(
-                f"--independent-expert-profile {INDEPENDENT_EXPERT_PROFILE} "
+                f"--independent-expert-profile {args.independent_expert_profile} "
                 f"requires {', '.join(missing)}"
             )
     if args.evaluation_audit_profile is not None:
@@ -1645,7 +1664,12 @@ def main(*, default_method: str = "moe") -> int:
         "independent_expert": (
             {
                 "profile": args.independent_expert_profile,
-                "classification": "single_seed_parallel_task_expert_component",
+                "classification": (
+                    "single_seed_sample_matched_large_batch_task_expert_component"
+                    if args.independent_expert_profile
+                    == SINGLE_GPU_SPEED_EXPERT_PROFILE
+                    else "single_seed_parallel_task_expert_component"
+                ),
                 "original_task_index": args.independent_task_index,
                 "original_task_name": independent_task["name"],
                 "local_training_task_index": 0,
@@ -1663,14 +1687,48 @@ def main(*, default_method: str = "moe") -> int:
                 "world_model_initialization": "independent random initialization",
                 "actor_critic_initialization": "independent random initialization",
                 "comparison_to_original_arrow": {
-                    "environment_interaction_multiplier": 2.0,
-                    "world_model_update_multiplier": 2.0,
-                    "actor_critic_update_multiplier": 2.0,
-                    "world_model_sampled_frame_use_multiplier": 2.0,
-                    "actor_context_frame_use_multiplier": 2.0,
-                    "global_optimization_batches_matched": True,
+                    "environment_interaction_multiplier": float(
+                        args.task_duration_multiplier
+                    ),
+                    "world_model_update_multiplier": float(
+                        args.task_duration_multiplier
+                        * (
+                            batch_profile.optimizer_update_multiplier
+                            if batch_profile is not None
+                            else 1.0
+                        )
+                    ),
+                    "actor_critic_update_multiplier": float(
+                        args.task_duration_multiplier
+                        * (
+                            batch_profile.optimizer_update_multiplier
+                            if batch_profile is not None
+                            else 1.0
+                        )
+                    ),
+                    "world_model_sampled_frame_use_multiplier": float(
+                        args.task_duration_multiplier
+                        * (
+                            batch_profile.scale
+                            * batch_profile.optimizer_update_multiplier
+                            if batch_profile is not None
+                            else 1.0
+                        )
+                    ),
+                    "actor_context_frame_use_multiplier": float(
+                        args.task_duration_multiplier
+                        * (
+                            batch_profile.scale
+                            * batch_profile.optimizer_update_multiplier
+                            if batch_profile is not None
+                            else 1.0
+                        )
+                    ),
+                    "global_optimization_batches_matched": batch_profile is None,
                     "device_count_matched": True,
-                    "periodic_evaluation_opportunity_multiplier": 2.0,
+                    "periodic_evaluation_opportunity_multiplier": float(
+                        args.task_duration_multiplier
+                    ),
                     "strict_fair_superiority_claim": False,
                 },
                 "expected_boundary_snapshot_count": 1,

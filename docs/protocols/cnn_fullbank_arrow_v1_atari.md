@@ -128,6 +128,13 @@ overhead. It is not optimization-equivalent to the original `N=16/128`,
 It uses fixed periodic validation, an independent final held-out cohort, and
 the frozen task-specific ARROW reference matrix.
 
+For independently trained task-bank components, pair this batch rule with
+`--independent-expert-profile single-gpu-large-batch-90-v1`. That profile
+restricts collection, replay, training, and evaluation to one selected task,
+records the task's original assembly slot, and retains the same six-slot model
+topology for later expert-bank assembly. It is an independent task-aware expert
+ablation, not evidence about sequential transfer, retention, or forgetting.
+
 ### Late actor-stability pilot
 
 The first `x4-full-updates` seed-0 Task 1 pilot reached a periodic MsPacman raw
