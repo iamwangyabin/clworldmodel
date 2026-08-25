@@ -1151,6 +1151,8 @@ class TrainingLauncherTests(unittest.TestCase):
             campaign["classification"],
             "single_seed_two_task_sequential_extra_sample_pilot",
         )
+        self.assertEqual(campaign["configured_curriculum_task_count"], 6)
+        self.assertFalse(campaign["curriculum_restricted_to_trained_tasks"])
         self.assertEqual(campaign["expected_task_boundary_snapshots"], 2)
         comparison = campaign["comparison_to_original_arrow"]
         self.assertEqual(
@@ -1184,6 +1186,93 @@ class TrainingLauncherTests(unittest.TestCase):
         )
         self.assertEqual(
             launch["checkpointing"]["expected_task_boundary_snapshot_count"], 2
+        )
+
+    def test_cnn_fullbank_three_task_campaign_restricts_training_and_evaluation(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_dir = root / "cnn_fullbank_three_task_campaign"
+            scratch_root = root / "node_local_replay"
+            reference = (
+                ROOT
+                / "docs"
+                / "protocols"
+                / "references"
+                / "arrow_ar50_original_s0_reference_matrix_v1.json"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_moe_arrow_atari.py",
+                    "--seed",
+                    "0",
+                    "--method",
+                    "cnn-fullbank",
+                    "--devices",
+                    "1",
+                    "--batch-profile",
+                    "single-gpu-x4-double-sample-linear-lr",
+                    "--task-prefix-length",
+                    "3",
+                    "--evaluation-audit-profile",
+                    "fixed-cohort-snapshots",
+                    "--continual-campaign-profile",
+                    "three-task-single-gpu-x4-double-sample-pilot-v1",
+                    "--arrow-reference-matrix",
+                    str(reference),
+                    "--replay-mmap-root",
+                    str(scratch_root),
+                    "--profile-stages",
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+        expected_tasks = [
+            "ALE/MsPacman-v5",
+            "ALE/Boxing-v5",
+            "ALE/CrazyClimber-v5",
+        ]
+        self.assertIn(
+            "ThreeTaskSingleGPUX4DoubleSamplePilotV1", launch["method"]
+        )
+        scope = launch["training_scope"]
+        self.assertEqual(scope["task_prefix_length"], 3)
+        self.assertEqual(scope["epochs"], 270)
+        self.assertEqual(scope["tasks"], expected_tasks)
+        self.assertEqual(scope["raw_environment_frames"], 17_694_720)
+        self.assertEqual(scope["world_model_updates"], 135_000)
+        self.assertEqual(scope["actor_critic_updates"], 108_000)
+        self.assertEqual(
+            scope["world_model_sampled_replay_frame_uses"], 276_480_000
+        )
+        self.assertEqual(scope["actor_context_frame_uses"], 221_184_000)
+
+        campaign = launch["continual_campaign"]
+        self.assertEqual(
+            campaign["classification"],
+            "single_seed_three_task_sequential_extra_sample_pilot",
+        )
+        self.assertEqual(campaign["task_count"], 3)
+        self.assertEqual(campaign["configured_curriculum_task_count"], 3)
+        self.assertTrue(campaign["curriculum_restricted_to_trained_tasks"])
+        self.assertEqual(campaign["expected_task_boundary_snapshots"], 3)
+        self.assertEqual(
+            campaign["derived_summary"],
+            "arithmetic mean of the 3 frozen taskwise normalized ratios",
+        )
+        self.assertEqual(launch["evaluation"]["configured_tasks"], expected_tasks)
+        self.assertEqual(launch["world_model"]["allocated_experts"], 3)
+        self.assertEqual(
+            launch["checkpointing"]["expected_task_boundary_snapshot_count"], 3
         )
 
     def test_cnn_fullbank_six_task_extra_compute_campaign_is_frozen(self) -> None:

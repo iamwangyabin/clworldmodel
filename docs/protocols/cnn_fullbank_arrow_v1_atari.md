@@ -300,6 +300,46 @@ python scripts/run_moe_arrow_atari.py \
   --dry-run
 ```
 
+### Three-task restricted continual pilot
+
+`three-task-single-gpu-x4-double-sample-pilot-v1` supersedes the exploratory
+two-task launch as the requested continual-learning scope. It trains only the
+first three original-order tasks: MsPacman, Boxing, and CrazyClimber, for 90
+epochs each. The resolved curriculum and every periodic/final evaluation are
+restricted to those same three tasks; Frostbite, Seaquest, and Enduro are not
+constructed, evaluated, or allocated expert slots.
+
+The run starts from epoch zero. The completed standalone MsPacman pilot and the
+interrupted exploratory two-task launch are not resumable because their
+snapshots omit optimizer, Replay, RNG, and scheduler/task-position state. The
+three-task run therefore preserves the sequential semantics without presenting
+an inference snapshot as a training checkpoint.
+
+The 270-epoch schedule records 17,694,720 raw environment frames, 135,000
+world-model updates, 108,000 Actor-Critic updates, 276,480,000 sampled replay
+frame uses, and 221,184,000 actor-context frame uses. Per task, environment
+interaction matches original single-GPU ARROW, Adam updates are halved, and
+sample use is doubled. This remains a single-seed extra-sample pilot rather
+than a fair superiority comparison.
+
+```bash
+python scripts/run_moe_arrow_atari.py \
+  --method cnn-fullbank \
+  --devices 1 \
+  --batch-profile single-gpu-x4-double-sample-linear-lr \
+  --task-prefix-length 3 \
+  --evaluation-audit-profile fixed-cohort-snapshots \
+  --continual-campaign-profile \
+    three-task-single-gpu-x4-double-sample-pilot-v1 \
+  --arrow-reference-matrix \
+    docs/protocols/references/arrow_ar50_original_s0_reference_matrix_v1.json \
+  --replay-mmap-root /dev/shm/clworldmodel-replay \
+  --profile-stages \
+  --seed 0 \
+  --output-dir /absolute/unique/run/directory \
+  --dry-run
+```
+
 ### Six-task extra-compute pilot
 
 The first six-task continuation is explicitly

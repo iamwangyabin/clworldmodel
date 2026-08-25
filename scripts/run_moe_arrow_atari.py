@@ -58,6 +58,9 @@ SIX_TASK_CONTINUAL_CAMPAIGN_PROFILE = "six-task-extra-compute-pilot-v1"
 TWO_TASK_CONTINUAL_CAMPAIGN_PROFILE = (
     "two-task-single-gpu-x4-double-sample-pilot-v1"
 )
+THREE_TASK_CONTINUAL_CAMPAIGN_PROFILE = (
+    "three-task-single-gpu-x4-double-sample-pilot-v1"
+)
 # Kept as an import-compatible alias for callers that reference the original name.
 CONTINUAL_CAMPAIGN_PROFILE = SIX_TASK_CONTINUAL_CAMPAIGN_PROFILE
 INDEPENDENT_EXPERT_PROFILE = "parallel-independent-single-gpu-v1"
@@ -156,6 +159,7 @@ class EarlyProgressGuardProfile:
 class ContinualCampaignProfile:
     task_count: int
     task_prefix_length: int | None
+    restrict_curriculum_to_task_count: bool
     devices: int
     batch_profile: str
     task_duration_multiplier: int
@@ -322,6 +326,7 @@ CONTINUAL_CAMPAIGN_PROFILES = {
     SIX_TASK_CONTINUAL_CAMPAIGN_PROFILE: ContinualCampaignProfile(
         task_count=6,
         task_prefix_length=None,
+        restrict_curriculum_to_task_count=False,
         devices=4,
         batch_profile="x4-full-updates",
         task_duration_multiplier=2,
@@ -340,6 +345,7 @@ CONTINUAL_CAMPAIGN_PROFILES = {
     TWO_TASK_CONTINUAL_CAMPAIGN_PROFILE: ContinualCampaignProfile(
         task_count=2,
         task_prefix_length=2,
+        restrict_curriculum_to_task_count=False,
         devices=1,
         batch_profile="single-gpu-x4-double-sample-linear-lr",
         task_duration_multiplier=1,
@@ -347,6 +353,25 @@ CONTINUAL_CAMPAIGN_PROFILES = {
         output_suffix="two_task_single_gpu_x4_double_sample_pilot_v1",
         role_suffix="single-seed-two-task-sequential-extra-sample-pilot",
         classification="single_seed_two_task_sequential_extra_sample_pilot",
+        gate_evidence_path=TASK1_X4_DOUBLE_SAMPLE_GATE_EVIDENCE_PATH,
+        environment_interaction_multiplier=1.0,
+        world_model_update_multiplier=0.5,
+        actor_critic_update_multiplier=0.5,
+        optimization_sample_use_multiplier=2.0,
+        periodic_evaluation_opportunity_multiplier=1.0,
+        device_count_matched=True,
+    ),
+    THREE_TASK_CONTINUAL_CAMPAIGN_PROFILE: ContinualCampaignProfile(
+        task_count=3,
+        task_prefix_length=3,
+        restrict_curriculum_to_task_count=True,
+        devices=1,
+        batch_profile="single-gpu-x4-double-sample-linear-lr",
+        task_duration_multiplier=1,
+        protocol_suffix="ThreeTaskSingleGPUX4DoubleSamplePilotV1",
+        output_suffix="three_task_single_gpu_x4_double_sample_pilot_v1",
+        role_suffix="single-seed-three-task-sequential-extra-sample-pilot",
+        classification="single_seed_three_task_sequential_extra_sample_pilot",
         gate_evidence_path=TASK1_X4_DOUBLE_SAMPLE_GATE_EVIDENCE_PATH,
         environment_interaction_multiplier=1.0,
         world_model_update_multiplier=0.5,
@@ -1239,7 +1264,15 @@ def main(*, default_method: str = "moe") -> int:
     all_tasks = source_config["esc"]["env_configs"]
     all_task_names = [task["name"] for task in all_tasks]
     independent_task: dict | None = None
-    if args.independent_expert_profile is not None:
+    if (
+        continual_campaign_profile is not None
+        and continual_campaign_profile.restrict_curriculum_to_task_count
+    ):
+        source_config = json.loads(json.dumps(source_config))
+        source_config["esc"]["env_configs"] = source_config["esc"][
+            "env_configs"
+        ][: continual_campaign_profile.task_count]
+    elif args.independent_expert_profile is not None:
         if args.independent_task_index is None or args.independent_task_index >= len(
             all_tasks
         ):
@@ -1753,6 +1786,10 @@ def main(*, default_method: str = "moe") -> int:
                 "classification": continual_campaign_profile.classification,
                 "official_superiority_claim_allowed": False,
                 "task_count": len(visited_tasks),
+                "configured_curriculum_task_count": len(tasks),
+                "curriculum_restricted_to_trained_tasks": (
+                    continual_campaign_profile.restrict_curriculum_to_task_count
+                ),
                 "expected_task_boundary_snapshots": len(visited_tasks),
                 "future_task_evaluation_isolated_from_training": True,
                 "task_specific_acquisition_references_frozen_before_run": True,
@@ -2466,6 +2503,7 @@ def main(*, default_method: str = "moe") -> int:
         "evaluation": {
             "policy": "deterministic_argmax_and_latent_mode",
             "all_configured_tasks_at_periodic_checkpoints": True,
+            "configured_tasks": [task["name"] for task in tasks],
             "evaluation_data_enters_replay": False,
             "seed_protocol": config.get(
                 "evaluation_seed_protocol", "advancing"
