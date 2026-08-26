@@ -237,7 +237,7 @@ def _install_oracle_state_delta(
     layers: dict[str, Any] = {}
     with torch.no_grad():
         for name, target in target_state.items():
-            base = base_state[name]
+            base = base_state[name].to(device=target.device)
             if not target.is_floating_point():
                 continue
             delta_energy = float((target.double() - base.double()).square().sum())
