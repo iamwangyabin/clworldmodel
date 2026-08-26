@@ -428,6 +428,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--adapter-mode", choices=("residual", "direct"), default="direct"
     )
+    parser.add_argument(
+        "--keep-target-actor",
+        action="store_true",
+        help="Project the RSSM only and retain the complete target-task actor.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -490,6 +495,7 @@ def main() -> None:
         "base_task": args.base_task,
         "target_task": args.target_task,
         "rank": args.rank,
+        "project_actor": not args.keep_target_actor,
         "heldout_seed": args.heldout_seed,
         "decision_budget": args.decisions,
         "evaluation_transitions_enter_replay": False,
@@ -527,17 +533,25 @@ def main() -> None:
             world_model.rssm.transition_for(args.target_task),
             args.rank,
         ),
-        "actor": _install_oracle_actor_delta(
-            torch, actor, actor_bank[str(args.base_task)], args.rank
-        ),
     }
+    if args.keep_target_actor:
+        projection["actor"] = {
+            "projected": False,
+            "reason": "complete target-task actor retained",
+        }
+        projected_condition = "oracle_rank_rssm_full_target_actor"
+    else:
+        projection["actor"] = _install_oracle_actor_delta(
+            torch, actor, actor_bank[str(args.base_task)], args.rank
+        )
+        projected_condition = "oracle_rank_route"
     _synthetic_forward(torch, vendor, world_model, actor, args.target_task)
     output["projection"] = projection
     if args.dry_run:
         output["dry_run"] = True
         print(json.dumps(output, indent=2, sort_keys=True))
         return
-    output["conditions"]["oracle_rank_route"] = _evaluate(
+    output["conditions"][projected_condition] = _evaluate(
         torch,
         vendor,
         config,

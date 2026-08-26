@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,8 +18,30 @@ except ImportError:  # pragma: no cover - exercised only in minimal host envs.
 
 from evaluate_cnn_fullbank_oracle_lora import (
     _install_oracle_state_delta,
+    _parse_args,
     _truncated_delta,
 )
+
+
+class OracleLoraArgumentTests(unittest.TestCase):
+    def test_rssm_only_mode_keeps_the_target_actor(self) -> None:
+        argv = [
+            "evaluate_cnn_fullbank_oracle_lora.py",
+            "--checkpoint",
+            "checkpoint.pt",
+            "--adapter",
+            "adapter.pt",
+            "--output",
+            "result.json",
+            "--heldout-seed",
+            "7",
+            "--keep-target-actor",
+        ]
+        with mock.patch.object(sys, "argv", argv):
+            args = _parse_args()
+
+        self.assertTrue(args.keep_target_actor)
+        self.assertEqual(args.adapter_mode, "direct")
 
 
 @unittest.skipIf(torch is None, "PyTorch is not installed")
