@@ -30,6 +30,7 @@ ContinualMethod = Literal[
     "none",
     "moe_arrow",
     "cnn_fullbank_arrow",
+    "cnn_projector_lora_arrow",
     "dino_fullbank_arrow",
     "dino_patchbank_arrow",
     "dino_convbank_arrow",
@@ -43,6 +44,7 @@ SharedCoreMode = Literal[
     "snapshot_adaptation",
     "task_isolated",
     "task_banked_shared_adapter",
+    "task1_frozen_projector_lora",
 ]
 ActorNetwork = Literal[
     "mlp",
@@ -289,6 +291,11 @@ class Config(Serialisable):
     r2_normalization_eps: float = 1e-8
     observation_encoder: ObservationEncoder = "cnn"
     task_banked_image_encoder: bool = False
+    task_projected_image_encoder: bool = False
+    task_projector_bottleneck_features: int = 64
+    task_lora_recurrent_rank: int = 0
+    task_lora_representation_rank: int = 0
+    task_lora_transition_rank: int = 0
     dinov3_model_path: Optional[str] = None
     dinov3_input_size: int = 256
     dinov3_max_batch_size: int = 128
@@ -352,6 +359,7 @@ class Config(Serialisable):
             "none",
             "moe_arrow",
             "cnn_fullbank_arrow",
+            "cnn_projector_lora_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -359,6 +367,9 @@ class Config(Serialisable):
             raise ValueError(f"Unknown continual method: {self.continual_method!r}")
         is_moe_arrow = self.continual_method == "moe_arrow"
         is_cnn_fullbank = self.continual_method == "cnn_fullbank_arrow"
+        is_cnn_projector_lora = (
+            self.continual_method == "cnn_projector_lora_arrow"
+        )
         is_dino_fullbank = self.continual_method == "dino_fullbank_arrow"
         is_dino_patchbank = self.continual_method == "dino_patchbank_arrow"
         is_dino_convbank = self.continual_method == "dino_convbank_arrow"
@@ -366,6 +377,7 @@ class Config(Serialisable):
         uses_task_experts = (
             is_moe_arrow
             or is_cnn_fullbank
+            or is_cnn_projector_lora
             or is_dino_fullbank
             or is_dino_pixelbank
         )
@@ -429,12 +441,12 @@ class Config(Serialisable):
                 raise ValueError(
                     "DINO-ConvBank-ARROW requires uint8 observation replay"
                 )
-        elif is_cnn_fullbank:
+        elif is_cnn_fullbank or is_cnn_projector_lora:
             if self.compute_dtype != "bfloat16":
-                raise ValueError("CNN-FullBank-ARROW requires bfloat16 compute")
+                raise ValueError("CNN task-bank methods require bfloat16 compute")
             if self.replay_observation_dtype != "uint8":
                 raise ValueError(
-                    "CNN-FullBank-ARROW requires uint8 observation replay"
+                    "CNN task-bank methods require uint8 observation replay"
                 )
         elif self.replay_observation_dtype != "float32":
             raise ValueError(
@@ -500,7 +512,12 @@ class Config(Serialisable):
                 raise ValueError(
                     "MoE-ARROW predicts frozen DINOv3 features from the RSSM prior"
                 )
-        elif is_cnn_fullbank or is_dino_fullbank or is_dino_pixelbank:
+        elif (
+            is_cnn_fullbank
+            or is_cnn_projector_lora
+            or is_dino_fullbank
+            or is_dino_pixelbank
+        ):
             if self.dino_fullbank_current_task_fraction != 1.0:
                 raise ValueError(
                     "Full task banks assign all updates to the current task"
@@ -508,6 +525,8 @@ class Config(Serialisable):
             expected_shared_core_mode = (
                 "task_banked_shared_adapter"
                 if is_dino_convbank
+                else "task1_frozen_projector_lora"
+                if is_cnn_projector_lora
                 else "task_isolated"
             )
             if self.shared_core_mode != expected_shared_core_mode:
@@ -517,14 +536,14 @@ class Config(Serialisable):
                 )
             expected_objective = (
                 "reconstruction"
-                if is_cnn_fullbank or is_dino_pixelbank
+                if is_cnn_fullbank or is_cnn_projector_lora or is_dino_pixelbank
                 else "dinov3_posterior_feature"
             )
             if self.observation_objective != expected_objective:
                 raise ValueError(
                     (
                         "CNN and DINO patch task banks keep DreamerV3 pixel reconstruction"
-                        if is_cnn_fullbank or is_dino_pixelbank
+                        if is_cnn_fullbank or is_cnn_projector_lora or is_dino_pixelbank
                         else "DINO-FullBank-ARROW reconstructs posterior DINOv3 features"
                     )
                 )
@@ -532,7 +551,7 @@ class Config(Serialisable):
                 raise ValueError(
                     "Full task banks require a random collection for each new task"
                 )
-            if (is_cnn_fullbank or is_dino_pixelbank) and any(
+            if (is_cnn_fullbank or is_cnn_projector_lora or is_dino_pixelbank) and any(
                 replay_config.rb_device.split(":", 1)[0] != "cpu"
                 for replay_config in self.replay_buffers
             ):
@@ -543,8 +562,43 @@ class Config(Serialisable):
             raise ValueError(
                 "task_banked_image_encoder is required only by CNN-FullBank-ARROW"
             )
-        if is_cnn_fullbank and self.observation_encoder != "cnn":
-            raise ValueError("CNN-FullBank-ARROW requires the CNN observation encoder")
+        if self.task_projected_image_encoder != is_cnn_projector_lora:
+            raise ValueError(
+                "task_projected_image_encoder is required only by "
+                "CNN-Projector-LoRA-ARROW"
+            )
+        if is_cnn_projector_lora:
+            if self.data_parallel_world_size != 1:
+                raise ValueError(
+                    "CNN-Projector-LoRA-ARROW is initially validated on one GPU"
+                )
+            if self.task_projector_bottleneck_features != 64:
+                raise ValueError(
+                    "CNN-Projector-LoRA-ARROW fixes the projector bottleneck at 64"
+                )
+            expected_ranks = (128, 128, 32)
+            observed_ranks = (
+                self.task_lora_recurrent_rank,
+                self.task_lora_representation_rank,
+                self.task_lora_transition_rank,
+            )
+            if observed_ranks != expected_ranks:
+                raise ValueError(
+                    "CNN-Projector-LoRA-ARROW fixes recurrent/representation/"
+                    f"transition ranks at {expected_ranks}, got {observed_ranks}"
+                )
+        elif any(
+            (
+                self.task_lora_recurrent_rank,
+                self.task_lora_representation_rank,
+                self.task_lora_transition_rank,
+            )
+        ):
+            raise ValueError("RSSM LoRA ranks require CNN-Projector-LoRA-ARROW")
+        if (
+            is_cnn_fullbank or is_cnn_projector_lora
+        ) and self.observation_encoder != "cnn":
+            raise ValueError("CNN task-bank methods require the CNN observation encoder")
         if self.observation_objective not in {
             "reconstruction",
             "r2",
@@ -1114,6 +1168,7 @@ class Config(Serialisable):
         return self.continual_method in {
             "moe_arrow",
             "cnn_fullbank_arrow",
+            "cnn_projector_lora_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1123,6 +1178,7 @@ class Config(Serialisable):
     def uses_full_task_experts(self) -> bool:
         return self.continual_method in {
             "cnn_fullbank_arrow",
+            "cnn_projector_lora_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1134,6 +1190,7 @@ class Config(Serialisable):
             return self.moe_arrow_current_task_fraction
         if self.continual_method in {
             "cnn_fullbank_arrow",
+            "cnn_projector_lora_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",

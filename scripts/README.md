@@ -12,6 +12,9 @@ contains experiment-facing code.
 - `train_r2dreamer_arrow_atari.py`: native R2-Dreamer training implementation used by the launcher.
 - `run_karrow_ar50_atari.py`: all KARROW visual versions and `dino`/`mlp`/`kan` arms.
 - `run_karrow_task2_from_snapshot.py`: isolated Task-2 acquisition diagnostic.
+- `run_cnn_projector_lora_incremental.py`: Task-1-snapshot-seeded true
+  Boxing/CrazyClimber acquisition with a frozen CNN/RSSM core, per-task
+  projectors/RSSM LoRA, and independent Actor-Critics.
 - `run_moe_arrow_atari.py`: task-aware MoE, CNN-FullBank, DINO-FullBank, DINO-PatchBank, and DINO-ConvBank launchers.
 - `verify_arrow_environment.py`: pinned dependency, CUDA, and Atari registration check.
 

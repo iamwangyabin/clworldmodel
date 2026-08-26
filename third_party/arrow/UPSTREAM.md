@@ -292,6 +292,20 @@ documented here, covered by focused parity tests, and followed by regenerating
     behavior remain unchanged. The offset is rejected with advancing seeds or
     when it disagrees with the assembly slot. Focused tests cover config
     validation, global-slot equivalence, and launcher provenance.
+39. Add the separately named, task-aware
+    `CNN-Projector-RSSM-LoRA-ARROW-v1-Task1SnapshotSeeded` path. It imports only
+    a completed CNN-FullBank Task-1 inference route and policy, explicitly
+    resets Replay/optimizers/RNG/schedule state, and begins new environment
+    interaction at Task 2. The Task-1 CNN and RSSM become immutable. Every later
+    task owns a zero-effect residual spatial projector, affine RSSM LoRA at
+    recurrent/representation/transition ranks `128/128/32`, private pixel and
+    reward/continuation heads, and a fresh Actor-Critic. Normal Dreamer losses
+    and current-task-only ARROW updates replace the privileged teacher used by
+    the preceding posthoc capacity probe. Later LoRA routes share the exact
+    frozen Task-1 base parameters rather than storing another full RSSM copy.
+    Focused tests cover zero-effect initialization, base sharing,
+    selected-route gradients, frozen Task-1 tensors, strict config isolation,
+    and snapshot-seeded launcher semantics.
 
 ## Known issues at import
 

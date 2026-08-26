@@ -466,6 +466,13 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         for task_id in range(wm.rssm.num_task_experts)
         if wm.rssm.task_banked_image_encoder
     }
+    projectors_per_task = {
+        str(task_id): _parameter_accounting(
+            wm.rssm.image_projectors[task_id - 1]
+        )
+        for task_id in range(1, wm.rssm.num_task_experts)
+        if wm.rssm.task_projected_image_encoder
+    }
     return {
         "schema_version": 1,
         "observation_objective": wm.observation_objective,
@@ -478,6 +485,10 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
             else "shared"
         ),
         "observation_encoders_per_task": observation_encoders_per_task,
+        "task_projected_image_encoder": wm.rssm.task_projected_image_encoder,
+        "observation_projectors_per_task": projectors_per_task,
+        "rssm_task_lora_enabled": wm.rssm.task_lora_enabled,
+        "rssm_task_lora_reports": wm.rssm.task_lora_reports,
         "aggregate_observation_encoder_parameters": (
             sum(
                 accounting["parameters"]
@@ -608,6 +619,96 @@ def _load_analysis_snapshot(path: Path) -> Mapping[str, object]:
     if not isinstance(payload["actor_critic_state_dict"], Mapping):
         raise ValueError(f"Actor-critic state is not a mapping: {path}")
     return payload
+
+
+def _load_task1_boundary_snapshot(path: Path) -> Mapping[str, object]:
+    """Load a finished Task-1 inference bank as a new incremental-run seed."""
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"Task boundary snapshot must contain a mapping: {path}")
+    required = {
+        "artifact_kind",
+        "resumable",
+        "completed_epochs",
+        "completed_task",
+        "world_model_state_dict",
+        "actor_critic_bank_state_dict",
+    }
+    missing = sorted(required - set(payload))
+    if missing:
+        raise ValueError(f"Task boundary snapshot is missing {missing}: {path}")
+    if (
+        payload["artifact_kind"] != "task_bank_boundary_inference_snapshot"
+        or payload["resumable"]
+    ):
+        raise ValueError(f"Snapshot is not a non-resumable task boundary: {path}")
+    completed_task = payload["completed_task"]
+    if not isinstance(completed_task, Mapping) or int(
+        completed_task.get("task_index", -1)
+    ) != 0:
+        raise ValueError("The incremental seed must be the completed first task")
+    actor_bank = payload["actor_critic_bank_state_dict"]
+    if not isinstance(actor_bank, Mapping):
+        raise ValueError("Task boundary actor bank is not a mapping")
+    tasks = actor_bank.get("tasks")
+    if not isinstance(tasks, Mapping) or "0" not in tasks:
+        raise ValueError("Task boundary snapshot does not contain the Task-1 actor")
+    if not isinstance(payload["world_model_state_dict"], Mapping):
+        raise ValueError("Task boundary world-model state is not a mapping")
+    return payload
+
+
+def _load_prefixed_module_state(
+    module: torch.nn.Module,
+    state: Mapping[str, object],
+    *,
+    prefix: str,
+    label: str,
+) -> int:
+    prefix_with_dot = f"{prefix}."
+    selected = {
+        key[len(prefix_with_dot) :]: value
+        for key, value in state.items()
+        if key.startswith(prefix_with_dot)
+    }
+    if not selected:
+        raise ValueError(f"Task-1 snapshot has no {label} state")
+    result = module.load_state_dict(selected, strict=True)
+    if result.missing_keys or result.unexpected_keys:
+        raise ValueError(
+            f"Task-1 {label} mismatch: missing={result.missing_keys} "
+            f"unexpected={result.unexpected_keys}"
+        )
+    return len(selected)
+
+
+def _seed_task1_world_model_from_fullbank(
+    wm: WorldModel, payload: Mapping[str, object]
+) -> dict[str, int]:
+    """Import only Task-1 core/head tensors into the new frozen-core topology."""
+    state = payload["world_model_state_dict"]
+    if not isinstance(state, Mapping):
+        raise ValueError("Task-1 world-model state must be a mapping")
+    modules = {
+        "rssm.image_embedder": (wm.rssm.image_embedder, "CNN encoder"),
+        "rssm.recurrent": (wm.rssm.recurrent, "recurrent RSSM"),
+        "rssm.representation": (wm.rssm.representation, "posterior RSSM"),
+        "rssm.transition": (wm.rssm.transition, "prior RSSM"),
+        "decoder": (wm.decoder, "pixel decoder"),
+        "reward_fc": (wm.reward_fc, "reward head"),
+        "continue_fc": (wm.continue_fc, "continuation head"),
+    }
+    report = {
+        prefix: _load_prefixed_module_state(
+            module, state, prefix=prefix, label=label
+        )
+        for prefix, (module, label) in modules.items()
+    }
+    if wm.task_expert_initialized is None:
+        raise ValueError("Task-1 seed requires a task-routed world model")
+    wm.task_expert_initialized.zero_()
+    wm.task_expert_initialized[0] = True
+    return report
 
 
 def _load_snapshot_state(
@@ -1435,6 +1536,15 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--init-task1-boundary-snapshot",
+        type=Path,
+        help=(
+            "Seed CNN-Projector-LoRA training from a completed Task-1 "
+            "CNN-FullBank inference boundary. Replay, optimizers, RNG, and "
+            "the environment schedule are deliberately restarted at Task 2."
+        ),
+    )
+    parser.add_argument(
         "--resume-adaptation-mode",
         choices=sorted(RESUME_ADAPTATION_MODES),
         default=None,
@@ -1540,7 +1650,10 @@ if __name__ == "__main__":
             raise ValueError(
                 "Evaluation snapshots require fixed validation and held-out final seeds"
             )
-    if config.continual_method == "cnn_fullbank_arrow":
+    if config.continual_method in {
+        "cnn_fullbank_arrow",
+        "cnn_projector_lora_arrow",
+    }:
         if task_bank_snapshot_dir is None:
             raise ValueError(
                 "CNN-FullBank-ARROW requires --task-bank-snapshot-dir"
@@ -1552,7 +1665,7 @@ if __name__ == "__main__":
     elif task_bank_snapshot_dir is not None:
         raise ValueError(
             "Task-bank boundary snapshots are currently required only for "
-            "CNN-FullBank-ARROW"
+            "CNN task-bank methods"
         )
     milestone_completed_epochs = set(args.milestone_completed_epoch)
     invalid_milestones = sorted(
@@ -1567,7 +1680,14 @@ if __name__ == "__main__":
         )
 
     resume_payload = None
+    task1_seed_payload = None
+    training_start_epoch = 0
     resume_mode = args.resume_adaptation_mode
+    if (
+        args.init_analysis_snapshot is not None
+        and args.init_task1_boundary_snapshot is not None
+    ):
+        raise ValueError("Only one snapshot initialization mode may be selected")
     if args.init_analysis_snapshot is not None:
         if resume_mode is None:
             resume_mode = "kan_only"
@@ -1594,6 +1714,35 @@ if __name__ == "__main__":
         raise ValueError(
             "shared_core_mode=snapshot_adaptation requires --init-analysis-snapshot"
         )
+    if args.init_task1_boundary_snapshot is not None:
+        if config.continual_method != "cnn_projector_lora_arrow":
+            raise ValueError(
+                "Task-1 boundary initialization requires "
+                "continual_method=cnn_projector_lora_arrow"
+            )
+        task1_seed_payload = _load_task1_boundary_snapshot(
+            args.init_task1_boundary_snapshot.expanduser().resolve()
+        )
+        source_config = task1_seed_payload.get("config")
+        if not isinstance(source_config, Mapping) or source_config.get(
+            "continual_method"
+        ) != "cnn_fullbank_arrow":
+            raise ValueError(
+                "Task-1 incremental training must be seeded by CNN-FullBank"
+            )
+        training_start_epoch = int(task1_seed_payload["completed_epochs"])
+        swap_sched = int(config.esc.kwargs["swap_sched"])
+        if training_start_epoch != swap_sched:
+            raise ValueError(
+                "Task-1 snapshot completion must equal one task duration: "
+                f"{training_start_epoch} != {swap_sched}"
+            )
+        if config.epochs <= training_start_epoch:
+            raise ValueError(
+                "Incremental training must include at least one post-Task-1 epoch"
+            )
+    elif config.continual_method == "cnn_projector_lora_arrow":
+        training_start_epoch = 0
 
     if config.algorithm == "arrow":
         print(f"ARROW FIFO/LTDM capacity ratio: {config.arrow_replay_capacity_ratio}")
@@ -1623,6 +1772,17 @@ if __name__ == "__main__":
             f"experts={config.rssm_num_experts} actor_bank=per_task "
             "world_model_warm_start=previous_task_once actor_init=fresh "
             "visual_encoder=per_task_dreamerv3_cnn observation=pixels "
+            f"current_fraction={config.dino_fullbank_current_task_fraction}"
+        )
+    elif config.continual_method == "cnn_projector_lora_arrow":
+        print(
+            "CNN-Projector-LoRA-ARROW routing: "
+            f"experts={config.rssm_num_experts} actor_bank=per_task "
+            "base=task0_frozen_after_acquisition encoder=task0_plus_projector "
+            "rssm=task0_plus_lora actor_init=fresh "
+            f"ranks={config.task_lora_recurrent_rank}/"
+            f"{config.task_lora_representation_rank}/"
+            f"{config.task_lora_transition_rank} "
             f"current_fraction={config.dino_fullbank_current_task_fraction}"
         )
     elif config.continual_method == "dino_fullbank_arrow":
@@ -1744,9 +1904,17 @@ if __name__ == "__main__":
         num_task_experts=config.rssm_num_experts,
         full_task_experts=config.uses_full_task_experts,
         task_banked_image_encoder=config.task_banked_image_encoder,
+        task_projected_image_encoder=config.task_projected_image_encoder,
+        task_projector_bottleneck_features=(
+            config.task_projector_bottleneck_features
+        ),
+        task_lora_recurrent_rank=config.task_lora_recurrent_rank,
+        task_lora_representation_rank=config.task_lora_representation_rank,
+        task_lora_transition_rank=config.task_lora_transition_rank,
     ).to(device)
     resume_world_model_opened: list[str] = []
     resume_state_report: dict[str, dict[str, list[str]]] = {}
+    task1_seed_world_model_report: dict[str, int] = {}
     if resume_payload is not None:
         resume_state_report["world_model"] = _load_snapshot_state(
             wm,
@@ -1760,6 +1928,14 @@ if __name__ == "__main__":
         print(
             "Loaded world-model weights; KAN residuals are plastic. "
             f"Opened shared readouts: {resume_world_model_opened or 'none'}"
+        )
+    elif task1_seed_payload is not None:
+        task1_seed_world_model_report = _seed_task1_world_model_from_fullbank(
+            wm, task1_seed_payload
+        )
+        print(
+            "Loaded the completed Task-1 CNN/RSSM/heads; later routes remain "
+            "zero-effect projector/LoRA adaptations"
         )
     trainable_world_model_parameters = [
         parameter for parameter in wm.parameters() if parameter.requires_grad
@@ -1780,9 +1956,17 @@ if __name__ == "__main__":
     print(f"Local torch sampling seed: {local_torch_seed}")
 
     envs = config.get_env_schedule()
+    for _ in range(training_start_epoch):
+        envs.step()
+    if training_start_epoch:
+        print(
+            "Restarted the environment schedule at completed epoch "
+            f"{training_start_epoch}; current_task={envs.current_task_index()}"
+        )
     replay_storage_directory = None
     if config.continual_method in {
         "cnn_fullbank_arrow",
+        "cnn_projector_lora_arrow",
         "dino_patchbank_arrow",
         "dino_convbank_arrow",
     } and (not distributed_context.enabled or distributed_context.is_primary):
@@ -1876,6 +2060,10 @@ if __name__ == "__main__":
             actor_bank_artifact_kind = (
                 "cnn_fullbank_arrow_actor_critic_bank_inference_state"
             )
+        elif config.continual_method == "cnn_projector_lora_arrow":
+            actor_bank_artifact_kind = (
+                "cnn_projector_lora_arrow_actor_critic_bank_inference_state"
+            )
         elif config.continual_method == "dino_patchbank_arrow":
             actor_bank_artifact_kind = (
                 "dino_patchbank_arrow_actor_critic_bank_inference_state"
@@ -1906,6 +2094,20 @@ if __name__ == "__main__":
                     lr=config.ac_lr,
                     **_actor_critic_constructor_kwargs(config),
                 )
+
+        if task1_seed_payload is not None:
+            seeded_actor = actor_critic_bank.ensure(0, build_task_actor_critic)
+            actor_bank_state = task1_seed_payload["actor_critic_bank_state_dict"]
+            if not isinstance(actor_bank_state, Mapping):
+                raise ValueError("Task-1 actor bank state must be a mapping")
+            task_states = actor_bank_state.get("tasks")
+            if not isinstance(task_states, Mapping) or not isinstance(
+                task_states.get("0"), Mapping
+            ):
+                raise ValueError("Task-1 actor state is missing")
+            seeded_actor.ac.load_state_dict(task_states["0"], strict=True)
+            aco = seeded_actor
+            print("Loaded and froze the completed Task-1 Actor-Critic bank entry")
 
     if log_dir is None:
         current_time = datetime.now().strftime("%b%d_%H-%M-%S")
@@ -2001,6 +2203,30 @@ if __name__ == "__main__":
                 json.dumps(resume_metadata, indent=2) + "\n",
                 encoding="utf-8",
             )
+        if task1_seed_payload is not None:
+            seed_metadata = {
+                "schema_version": 1,
+                "artifact_kind": "task1_boundary_seeded_incremental_training",
+                "initial_snapshot": str(
+                    args.init_task1_boundary_snapshot.expanduser().resolve()
+                ),
+                "initial_snapshot_completed_epochs": training_start_epoch,
+                "replay_state": "reset_empty",
+                "optimizer_state": "reset_new_optimizers",
+                "rng_state": "reset_from_config_seed",
+                "environment_schedule_restart_task": 1,
+                "source_task1_world_model_modules": task1_seed_world_model_report,
+                "source_task1_actor_loaded": True,
+                "source_snapshot_resumable": False,
+                "scientific_scope": (
+                    "snapshot-seeded Task-2/3 acquisition; not an equivalent "
+                    "resume of the source run"
+                ),
+            }
+            (log_dir / "task1_seed_initialization.json").write_text(
+                json.dumps(seed_metadata, indent=2) + "\n",
+                encoding="utf-8",
+            )
         if feature_cache is not None:
             feature_accounting_path = log_dir / "feature_cache_storage_accounting.json"
             temporary_feature_accounting_path = feature_accounting_path.with_suffix(
@@ -2035,11 +2261,19 @@ if __name__ == "__main__":
     profile_stages = args.profile_stages and distributed_context.is_primary
 
     
-    total_env_steps = 0        # number of *real* environment interactions so far
+    total_env_steps = (
+        int(task1_seed_payload.get("total_raw_environment_frames", 0))
+        if task1_seed_payload is not None
+        else 0
+    )  # number of *real* environment interactions so far
 
     best_rews_mean = float("-inf")
     best_validation_seen_task_raw_mean = float("-inf")
-    global_step = 0            # gradient updates so far  training iterations
+    global_step = (
+        int(task1_seed_payload.get("world_model_updates", 0))
+        if task1_seed_payload is not None
+        else 0
+    )  # gradient updates so far
     shared_core_frozen = resume_payload is not None
     capture_kan_parameter_values = None
     protect_kan_parameter_updates = None
@@ -2049,12 +2283,19 @@ if __name__ == "__main__":
             protect_kan_parameter_updates,
         )
 
-    for epoch in range(config.epochs):
+    for epoch in range(training_start_epoch, config.epochs):
         print("Starting Epoch ", epoch)
         current_task_id = None
         if config.uses_task_experts:
             current_task_id = envs.current_task_index()
-            warm_start_from = current_task_id - 1 if current_task_id > 0 else None
+            warm_start_from = (
+                0
+                if config.continual_method == "cnn_projector_lora_arrow"
+                and current_task_id > 0
+                else current_task_id - 1
+                if current_task_id > 0
+                else None
+            )
             if current_task_id not in actor_critic_bank:
                 if warm_start_from is not None:
                     if warm_start_from not in actor_critic_bank:
@@ -2353,6 +2594,8 @@ if __name__ == "__main__":
                     (
                         f"CNNFullBankArrow/world_model_updates_task_{task_id}"
                         if config.continual_method == "cnn_fullbank_arrow"
+                        else f"CNNProjectorLoraArrow/world_model_updates_task_{task_id}"
+                        if config.continual_method == "cnn_projector_lora_arrow"
                         else f"DINOPatchBankArrow/world_model_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
                         else f"DINOConvBankArrow/world_model_updates_task_{task_id}"
@@ -2598,6 +2841,8 @@ if __name__ == "__main__":
                     (
                         f"CNNFullBankArrow/actor_critic_updates_task_{task_id}"
                         if config.continual_method == "cnn_fullbank_arrow"
+                        else f"CNNProjectorLoraArrow/actor_critic_updates_task_{task_id}"
+                        if config.continual_method == "cnn_projector_lora_arrow"
                         else f"DINOPatchBankArrow/actor_critic_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
                         else f"DINOConvBankArrow/actor_critic_updates_task_{task_id}"

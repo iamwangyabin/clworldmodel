@@ -108,6 +108,11 @@ class Rssm(nn.Module):
         num_task_experts: int = 1,
         full_task_experts: bool = False,
         task_banked_image_encoder: bool = False,
+        task_projected_image_encoder: bool = False,
+        task_projector_bottleneck_features: int = 64,
+        task_lora_recurrent_rank: int = 0,
+        task_lora_representation_rank: int = 0,
+        task_lora_transition_rank: int = 0,
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
         residual_grid_size: int = 8,
@@ -133,6 +138,23 @@ class Rssm(nn.Module):
             raise ValueError(
                 "A task-banked image encoder does not use a shared observation adapter"
             )
+        if task_projected_image_encoder and not full_task_experts:
+            raise ValueError(
+                "A projected shared image encoder requires complete task experts"
+            )
+        if task_projected_image_encoder and task_banked_image_encoder:
+            raise ValueError(
+                "Projected and fully banked image encoders are mutually exclusive"
+            )
+        task_lora_ranks = (
+            task_lora_recurrent_rank,
+            task_lora_representation_rank,
+            task_lora_transition_rank,
+        )
+        if any(task_lora_ranks) and not all(rank > 0 for rank in task_lora_ranks):
+            raise ValueError("Task RSSM LoRA requires three positive ranks")
+        if any(task_lora_ranks) and not full_task_experts:
+            raise ValueError("Task RSSM LoRA requires complete task experts")
         if num_task_experts > 1 and residual_correction != "none":
             raise ValueError(
                 "Task-routed RSSM experts do not compose with residual corrections"
@@ -142,6 +164,8 @@ class Rssm(nn.Module):
         self.num_task_experts = num_task_experts
         self.full_task_experts = full_task_experts
         self.task_banked_image_encoder = task_banked_image_encoder
+        self.task_projected_image_encoder = task_projected_image_encoder
+        self.task_lora_enabled = all(rank > 0 for rank in task_lora_ranks)
 
         self.recurrent = Recurrent(
             ls,
@@ -188,6 +212,21 @@ class Rssm(nn.Module):
             copy.deepcopy(self.image_embedder)
             for _ in range(num_task_experts - 1 if task_banked_image_encoder else 0)
         )
+        self.image_projectors = nn.ModuleList()
+        self.image_projector_identity = nn.Identity()
+        if task_projected_image_encoder:
+            if observation_encoder != "cnn" or self.image_embedder.output_size != 4096:
+                raise ValueError(
+                    "The first projected-encoder protocol requires 4096-wide CNN features"
+                )
+            from clworldmodel.models.rssm_lora import SpatialFeatureProjector
+
+            self.image_projectors.extend(
+                SpatialFeatureProjector(
+                    bottleneck_channels=task_projector_bottleneck_features
+                )
+                for _ in range(num_task_experts - 1)
+            )
         self.observation_adapter_kind = dinov3_patch_adapter
         self.observation_adapter: nn.Module = nn.Identity()
         self.observation_embedding_size = self.image_embedder.output_size
@@ -250,6 +289,40 @@ class Rssm(nn.Module):
         self.transition_experts = nn.ModuleList(
             copy.deepcopy(self.transition) for _ in range(num_task_experts - 1)
         )
+        self.task_lora_reports: list[dict[str, object]] = []
+        if self.task_lora_enabled:
+            from clworldmodel.models.rssm_lora import (
+                install_affine_lora,
+                reset_affine_lora_from,
+            )
+
+            for task_index in range(1, num_task_experts):
+                self.task_lora_reports.append(
+                    {
+                        "task_index": task_index,
+                        "recurrent": install_affine_lora(
+                            self.recurrent_for(task_index),
+                            task_lora_recurrent_rank,
+                        ),
+                        "representation": install_affine_lora(
+                            self.representation_for(task_index),
+                            task_lora_representation_rank,
+                        ),
+                        "transition": install_affine_lora(
+                            self.transition_for(task_index),
+                            task_lora_transition_rank,
+                        ),
+                    }
+                )
+                reset_affine_lora_from(
+                    self.recurrent_for(task_index), self.recurrent
+                )
+                reset_affine_lora_from(
+                    self.representation_for(task_index), self.representation
+                )
+                reset_affine_lora_from(
+                    self.transition_for(task_index), self.transition
+                )
 
     def freeze_shared_core(self) -> None:
         """Freeze base RSSM functions while leaving residual adapters plastic."""
@@ -257,6 +330,8 @@ class Rssm(nn.Module):
         for image_embedder in self.image_embedder_experts:
             image_embedder.requires_grad_(False)
         self.observation_adapter.requires_grad_(False)
+        for projector in self.image_projectors:
+            projector.requires_grad_(False)
         self.recurrent.freeze_shared_core()
         for recurrent in self.recurrent_experts:
             recurrent.freeze_shared_core()
@@ -298,6 +373,14 @@ class Rssm(nn.Module):
             return self.image_embedder
         return self.image_embedder_experts[task_index - 1]
 
+    def image_projector_for(
+        self, task_id: Optional[int | torch.Tensor]
+    ) -> nn.Module:
+        task_index = self._task_index(task_id)
+        if task_index == 0 or not self.task_projected_image_encoder:
+            return self.image_projector_identity
+        return self.image_projectors[task_index - 1]
+
     def transition_for(self, task_id: Optional[int | torch.Tensor]) -> "Transition":
         task_index = self._task_index(task_id)
         return self.transition if task_index == 0 else self.transition_experts[task_index - 1]
@@ -318,16 +401,32 @@ class Rssm(nn.Module):
     def copy_task_expert(self, target_task_id: int, source_task_id: int) -> None:
         if target_task_id == source_task_id:
             return
-        self.recurrent_for(target_task_id).load_state_dict(
-            self.recurrent_for(source_task_id).state_dict()
-        )
-        self.transition_for(target_task_id).load_state_dict(
-            self.transition_for(source_task_id).state_dict()
-        )
-        if self.full_task_experts:
-            self.representation_for(target_task_id).load_state_dict(
-                self.representation_for(source_task_id).state_dict()
+        if self.task_lora_enabled and target_task_id > 0:
+            from clworldmodel.models.rssm_lora import reset_affine_lora_from
+
+            reset_affine_lora_from(
+                self.recurrent_for(target_task_id),
+                self.recurrent_for(source_task_id),
             )
+            reset_affine_lora_from(
+                self.transition_for(target_task_id),
+                self.transition_for(source_task_id),
+            )
+            reset_affine_lora_from(
+                self.representation_for(target_task_id),
+                self.representation_for(source_task_id),
+            )
+        else:
+            self.recurrent_for(target_task_id).load_state_dict(
+                self.recurrent_for(source_task_id).state_dict()
+            )
+            self.transition_for(target_task_id).load_state_dict(
+                self.transition_for(source_task_id).state_dict()
+            )
+            if self.full_task_experts:
+                self.representation_for(target_task_id).load_state_dict(
+                    self.representation_for(source_task_id).state_dict()
+                )
         if self.task_banked_image_encoder:
             self.image_embedder_for(target_task_id).load_state_dict(
                 self.image_embedder_for(source_task_id).state_dict()
@@ -374,7 +473,7 @@ class Rssm(nn.Module):
             h = self.recurrent_for(task_id)(prev_z, prev_a, prev_h)
             if x is not None:
                 e = self.adapt_observation_embeddings(
-                    self.image_embedder_for(task_id)(x)
+                    self.image_embedder_for(task_id)(x), task_id=task_id
                 )
                 z_log_dist = self.representation_for(task_id)(e, h)
             else:
@@ -433,9 +532,15 @@ class Rssm(nn.Module):
         raw_embeddings = self.image_embedder_for(task_id)(
             x.reshape(-1, *x.shape[-3:])
         )
-        return self.adapt_observation_embeddings(raw_embeddings).view(t, n, -1)
+        return self.adapt_observation_embeddings(
+            raw_embeddings, task_id=task_id
+        ).view(t, n, -1)
 
-    def adapt_observation_embeddings(self, embeddings: EmbedT) -> EmbedT:
+    def adapt_observation_embeddings(
+        self,
+        embeddings: EmbedT,
+        task_id: Optional[int | torch.Tensor] = None,
+    ) -> EmbedT:
         """Map frozen encoder outputs to the posterior's embedding interface."""
         if embeddings.ndim < 2:
             raise ValueError("Observation embeddings must include a feature axis")
@@ -446,8 +551,10 @@ class Rssm(nn.Module):
                 f"got {embeddings.shape[-1]}"
             )
         leading_shape = embeddings.shape[:-1]
+        flattened = embeddings.reshape(-1, embeddings.shape[-1])
+        projected = self.image_projector_for(task_id)(flattened)
         adapted = self.observation_adapter(
-            embeddings.reshape(-1, embeddings.shape[-1])
+            projected
         )
         if adapted.shape[-1] != self.observation_embedding_size:
             raise RuntimeError("Observation adapter returned an unexpected width")

@@ -142,6 +142,11 @@ class WorldModel(nn.Module):
         num_task_experts: int = 1,
         full_task_experts: bool = False,
         task_banked_image_encoder: bool = False,
+        task_projected_image_encoder: bool = False,
+        task_projector_bottleneck_features: int = 64,
+        task_lora_recurrent_rank: int = 0,
+        task_lora_representation_rank: int = 0,
+        task_lora_transition_rank: int = 0,
         image_embedder: Optional[nn.Module] = None,
         compute_dtype: str = "float32",
     ) -> None:
@@ -219,6 +224,11 @@ class WorldModel(nn.Module):
             num_task_experts=num_task_experts,
             full_task_experts=full_task_experts,
             task_banked_image_encoder=task_banked_image_encoder,
+            task_projected_image_encoder=task_projected_image_encoder,
+            task_projector_bottleneck_features=task_projector_bottleneck_features,
+            task_lora_recurrent_rank=task_lora_recurrent_rank,
+            task_lora_representation_rank=task_lora_representation_rank,
+            task_lora_transition_rank=task_lora_transition_rank,
             residual_correction=residual_correction,
             residual_bottleneck_features=residual_bottleneck_features,
             residual_grid_size=residual_grid_size,
@@ -490,18 +500,46 @@ class WorldModel(nn.Module):
         ):
             raise ValueError(f"Task expert {task_index} has not been initialized")
 
-        for index in range(self.rssm.num_task_experts):
-            self.rssm.image_embedder_for(index).requires_grad_(
-                self.rssm.task_banked_image_encoder and index == task_index
-            )
+        if self.rssm.task_projected_image_encoder:
+            self.rssm.image_embedder.requires_grad_(task_index == 0)
+            for index, projector in enumerate(self.rssm.image_projectors, start=1):
+                projector.requires_grad_(index == task_index)
+        else:
+            for index in range(self.rssm.num_task_experts):
+                self.rssm.image_embedder_for(index).requires_grad_(
+                    self.rssm.task_banked_image_encoder and index == task_index
+                )
         self.rssm.observation_adapter.requires_grad_(
             self.rssm.observation_adapter_kind != "none"
         )
+        if self.rssm.task_lora_enabled:
+            from clworldmodel.models.rssm_lora import set_affine_lora_trainable
+
+            for index in range(1, self.rssm.num_task_experts):
+                set_affine_lora_trainable(
+                    self.rssm.recurrent_for(index), index == task_index
+                )
+                set_affine_lora_trainable(
+                    self.rssm.representation_for(index), index == task_index
+                )
+                set_affine_lora_trainable(
+                    self.rssm.transition_for(index), index == task_index
+                )
+            # LoRA routes share these exact Parameters. Set the base last so
+            # Task 0 remains trainable in a from-scratch protocol, while later
+            # tasks keep it frozen and expose only their selected deltas.
+            base_is_active = task_index == 0
+            self.rssm.recurrent.requires_grad_(base_is_active)
+            self.rssm.representation.requires_grad_(base_is_active)
+            self.rssm.transition.requires_grad_(base_is_active)
+        else:
+            for index in range(self.rssm.num_task_experts):
+                is_active = index == task_index
+                self.rssm.recurrent_for(index).requires_grad_(is_active)
+                self.rssm.representation_for(index).requires_grad_(is_active)
+                self.rssm.transition_for(index).requires_grad_(is_active)
         for index in range(self.rssm.num_task_experts):
             is_active = index == task_index
-            self.rssm.recurrent_for(index).requires_grad_(is_active)
-            self.rssm.representation_for(index).requires_grad_(is_active)
-            self.rssm.transition_for(index).requires_grad_(is_active)
             self._head_for(self.reward_fc, self.reward_experts, index).requires_grad_(
                 is_active
             )
