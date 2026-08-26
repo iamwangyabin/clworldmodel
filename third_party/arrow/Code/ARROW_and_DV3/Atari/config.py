@@ -31,6 +31,7 @@ ContinualMethod = Literal[
     "moe_arrow",
     "cnn_fullbank_arrow",
     "cnn_projector_lora_arrow",
+    "cnn_compact_shared_actor_arrow",
     "dino_fullbank_arrow",
     "dino_patchbank_arrow",
     "dino_convbank_arrow",
@@ -45,6 +46,7 @@ SharedCoreMode = Literal[
     "task_isolated",
     "task_banked_shared_adapter",
     "task1_frozen_projector_lora",
+    "task1_frozen_projector_compact_rssm",
 ]
 ActorNetwork = Literal[
     "mlp",
@@ -296,6 +298,13 @@ class Config(Serialisable):
     task_lora_recurrent_rank: int = 0
     task_lora_representation_rank: int = 0
     task_lora_transition_rank: int = 0
+    task_recurrent_output_adapter_features: int = 0
+    shared_actor_imagination_distillation: bool = False
+    shared_actor_distill_scale: float = 0.0
+    shared_actor_distill_interval: int = 1
+    shared_actor_distill_n_sync: int = 1
+    shared_actor_distill_burnin_steps: int = 0
+    shared_actor_distill_steps: int = 1
     dinov3_model_path: Optional[str] = None
     dinov3_input_size: int = 256
     dinov3_max_batch_size: int = 128
@@ -360,6 +369,7 @@ class Config(Serialisable):
             "moe_arrow",
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
+            "cnn_compact_shared_actor_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -370,6 +380,9 @@ class Config(Serialisable):
         is_cnn_projector_lora = (
             self.continual_method == "cnn_projector_lora_arrow"
         )
+        is_cnn_compact_shared_actor = (
+            self.continual_method == "cnn_compact_shared_actor_arrow"
+        )
         is_dino_fullbank = self.continual_method == "dino_fullbank_arrow"
         is_dino_patchbank = self.continual_method == "dino_patchbank_arrow"
         is_dino_convbank = self.continual_method == "dino_convbank_arrow"
@@ -378,6 +391,7 @@ class Config(Serialisable):
             is_moe_arrow
             or is_cnn_fullbank
             or is_cnn_projector_lora
+            or is_cnn_compact_shared_actor
             or is_dino_fullbank
             or is_dino_pixelbank
         )
@@ -441,7 +455,11 @@ class Config(Serialisable):
                 raise ValueError(
                     "DINO-ConvBank-ARROW requires uint8 observation replay"
                 )
-        elif is_cnn_fullbank or is_cnn_projector_lora:
+        elif (
+            is_cnn_fullbank
+            or is_cnn_projector_lora
+            or is_cnn_compact_shared_actor
+        ):
             if self.compute_dtype != "bfloat16":
                 raise ValueError("CNN task-bank methods require bfloat16 compute")
             if self.replay_observation_dtype != "uint8":
@@ -515,6 +533,7 @@ class Config(Serialisable):
         elif (
             is_cnn_fullbank
             or is_cnn_projector_lora
+            or is_cnn_compact_shared_actor
             or is_dino_fullbank
             or is_dino_pixelbank
         ):
@@ -525,6 +544,8 @@ class Config(Serialisable):
             expected_shared_core_mode = (
                 "task_banked_shared_adapter"
                 if is_dino_convbank
+                else "task1_frozen_projector_compact_rssm"
+                if is_cnn_compact_shared_actor
                 else "task1_frozen_projector_lora"
                 if is_cnn_projector_lora
                 else "task_isolated"
@@ -536,14 +557,20 @@ class Config(Serialisable):
                 )
             expected_objective = (
                 "reconstruction"
-                if is_cnn_fullbank or is_cnn_projector_lora or is_dino_pixelbank
+                if is_cnn_fullbank
+                or is_cnn_projector_lora
+                or is_cnn_compact_shared_actor
+                or is_dino_pixelbank
                 else "dinov3_posterior_feature"
             )
             if self.observation_objective != expected_objective:
                 raise ValueError(
                     (
                         "CNN and DINO patch task banks keep DreamerV3 pixel reconstruction"
-                        if is_cnn_fullbank or is_cnn_projector_lora or is_dino_pixelbank
+                        if is_cnn_fullbank
+                        or is_cnn_projector_lora
+                        or is_cnn_compact_shared_actor
+                        or is_dino_pixelbank
                         else "DINO-FullBank-ARROW reconstructs posterior DINOv3 features"
                     )
                 )
@@ -551,7 +578,12 @@ class Config(Serialisable):
                 raise ValueError(
                     "Full task banks require a random collection for each new task"
                 )
-            if (is_cnn_fullbank or is_cnn_projector_lora or is_dino_pixelbank) and any(
+            if (
+                is_cnn_fullbank
+                or is_cnn_projector_lora
+                or is_cnn_compact_shared_actor
+                or is_dino_pixelbank
+            ) and any(
                 replay_config.rb_device.split(":", 1)[0] != "cpu"
                 for replay_config in self.replay_buffers
             ):
@@ -562,41 +594,84 @@ class Config(Serialisable):
             raise ValueError(
                 "task_banked_image_encoder is required only by CNN-FullBank-ARROW"
             )
-        if self.task_projected_image_encoder != is_cnn_projector_lora:
+        uses_cnn_projector = (
+            is_cnn_projector_lora or is_cnn_compact_shared_actor
+        )
+        if self.task_projected_image_encoder != uses_cnn_projector:
             raise ValueError(
                 "task_projected_image_encoder is required only by "
-                "CNN-Projector-LoRA-ARROW"
+                "named CNN projector methods"
             )
-        if is_cnn_projector_lora:
+        if uses_cnn_projector:
             if self.data_parallel_world_size != 1:
                 raise ValueError(
-                    "CNN-Projector-LoRA-ARROW is initially validated on one GPU"
+                    "CNN projector methods are initially validated on one GPU"
                 )
             if self.task_projector_bottleneck_features != 64:
                 raise ValueError(
-                    "CNN-Projector-LoRA-ARROW fixes the projector bottleneck at 64"
+                    "CNN projector methods fix the projector bottleneck at 64"
                 )
-            expected_ranks = (128, 128, 32)
+            expected_ranks = (
+                (0, 32, 32, 32)
+                if is_cnn_compact_shared_actor
+                else (128, 128, 32, 0)
+            )
             observed_ranks = (
                 self.task_lora_recurrent_rank,
                 self.task_lora_representation_rank,
                 self.task_lora_transition_rank,
+                self.task_recurrent_output_adapter_features,
             )
             if observed_ranks != expected_ranks:
+                method_description = (
+                    "The compact recurrent/representation protocol fixes "
+                    "recurrent-LoRA/representation-LoRA/transition-LoRA/"
+                    "GRU-output-adapter sizes"
+                    if is_cnn_compact_shared_actor
+                    else "CNN-Projector-LoRA-ARROW fixes recurrent/representation/"
+                    "transition/output-adapter sizes"
+                )
                 raise ValueError(
-                    "CNN-Projector-LoRA-ARROW fixes recurrent/representation/"
-                    f"transition ranks at {expected_ranks}, got {observed_ranks}"
+                    f"{method_description} at {expected_ranks}, got {observed_ranks}"
                 )
         elif any(
             (
                 self.task_lora_recurrent_rank,
                 self.task_lora_representation_rank,
                 self.task_lora_transition_rank,
+                self.task_recurrent_output_adapter_features,
             )
         ):
-            raise ValueError("RSSM LoRA ranks require CNN-Projector-LoRA-ARROW")
+            raise ValueError("RSSM adapters require a named CNN projector method")
+        shared_actor_defaults = (False, 0.0, 1, 1, 0, 1)
+        shared_actor_values = (
+            self.shared_actor_imagination_distillation,
+            self.shared_actor_distill_scale,
+            self.shared_actor_distill_interval,
+            self.shared_actor_distill_n_sync,
+            self.shared_actor_distill_burnin_steps,
+            self.shared_actor_distill_steps,
+        )
+        if is_cnn_compact_shared_actor:
+            expected_shared_actor_values = (True, 1.0, 4, 128, 16, 16)
+            if shared_actor_values != expected_shared_actor_values:
+                raise ValueError(
+                    "CNN-Compact-SharedActor requires fixed imagination distillation "
+                    f"settings {expected_shared_actor_values}, got {shared_actor_values}"
+                )
+            if self.fresh_ac is not False or self.actor_network != "mlp":
+                raise ValueError(
+                    "CNN-Compact-SharedActor requires one persistent MLP actor-critic"
+                )
+        elif shared_actor_values != shared_actor_defaults:
+            raise ValueError(
+                "Shared-actor imagination distillation settings require "
+                "CNN-Compact-SharedActor"
+            )
         if (
-            is_cnn_fullbank or is_cnn_projector_lora
+            is_cnn_fullbank
+            or is_cnn_projector_lora
+            or is_cnn_compact_shared_actor
         ) and self.observation_encoder != "cnn":
             raise ValueError("CNN task-bank methods require the CNN observation encoder")
         if self.observation_objective not in {
@@ -863,6 +938,7 @@ class Config(Serialisable):
             "task_isolated",
             "task_banked_shared_adapter",
             "task1_frozen_projector_lora",
+            "task1_frozen_projector_compact_rssm",
         }:
             raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
         if self.shared_core_mode == "task_isolated" and not (
@@ -886,6 +962,14 @@ class Config(Serialisable):
             raise ValueError(
                 "shared_core_mode='task1_frozen_projector_lora' is reserved for "
                 "CNN-Projector-LoRA-ARROW"
+            )
+        if (
+            self.shared_core_mode == "task1_frozen_projector_compact_rssm"
+            and not is_cnn_compact_shared_actor
+        ):
+            raise ValueError(
+                "shared_core_mode='task1_frozen_projector_compact_rssm' is "
+                "reserved for CNN-Compact-SharedActor-ARROW"
             )
         if self.residual_correction != "none" and not uses_dinov3:
             raise ValueError("KARROW residuals require the frozen DINOv3 protocol")
@@ -1178,6 +1262,7 @@ class Config(Serialisable):
             "moe_arrow",
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
+            "cnn_compact_shared_actor_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1188,6 +1273,7 @@ class Config(Serialisable):
         return self.continual_method in {
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
+            "cnn_compact_shared_actor_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1200,12 +1286,17 @@ class Config(Serialisable):
         if self.continual_method in {
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
+            "cnn_compact_shared_actor_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
         }:
             return self.dino_fullbank_current_task_fraction
         raise ValueError("Task update fractions require a task-aware expert method")
+
+    @property
+    def uses_shared_actor(self) -> bool:
+        return self.continual_method == "cnn_compact_shared_actor_arrow"
 
     def get_env_schedule(self) -> EnvironmentSchedule:
         return self.esc.env_schedule_type(

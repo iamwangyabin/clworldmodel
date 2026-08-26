@@ -1,4 +1,5 @@
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -449,6 +450,26 @@ def _actor_critic_bank_parameter_accounting(bank) -> dict:
     }
 
 
+def _shared_actor_parameter_accounting(
+    aco: ActorCriticOpt,
+    teacher_actor: Optional[torch.nn.Module],
+) -> dict:
+    accounting = _actor_critic_parameter_accounting(aco)
+    accounting["topology"] = "single_shared_actor_critic"
+    accounting["persistent_actor_copies"] = 1
+    accounting["per_task_actor_growth"] = 0
+    accounting["transient_teacher"] = (
+        {
+            "persistent": False,
+            "lifetime": "current task only",
+            "actor": _module_state_accounting(teacher_actor),
+        }
+        if teacher_actor is not None
+        else None
+    )
+    return accounting
+
+
 def _world_model_parameter_accounting(wm: WorldModel) -> dict:
     if wm.observation_objective == "reconstruction":
         observation_head_name = "decoder"
@@ -489,6 +510,12 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         "observation_projectors_per_task": projectors_per_task,
         "rssm_task_lora_enabled": wm.rssm.task_lora_enabled,
         "rssm_task_lora_reports": wm.rssm.task_lora_reports,
+        "rssm_recurrent_output_adapter_enabled": (
+            wm.rssm.task_recurrent_output_adapter_enabled
+        ),
+        "rssm_recurrent_output_adapter_features": (
+            wm.rssm.task_recurrent_output_adapter_features
+        ),
         "aggregate_observation_encoder_parameters": (
             sum(
                 accounting["parameters"]
@@ -1180,6 +1207,7 @@ def _save_task_bank_evaluation_snapshot(
     config: Config,
     wm: WorldModel,
     actor_critic_bank,
+    aco: Optional[ActorCriticOpt] = None,
     completed_epochs: int,
     world_model_updates: int,
     actor_critic_updates: int,
@@ -1192,7 +1220,13 @@ def _save_task_bank_evaluation_snapshot(
     cohort: str,
 ) -> Path:
     """Save the exact task-bank weights evaluated by a fixed seed cohort."""
-    if actor_critic_bank is None:
+    uses_shared_actor = config.uses_shared_actor
+    if uses_shared_actor:
+        if actor_critic_bank is not None or aco is None:
+            raise ValueError(
+                "Shared-actor evaluation snapshots require exactly one actor-critic"
+            )
+    elif actor_critic_bank is None:
         raise ValueError("Task-bank evaluation snapshots require an actor bank")
     lengths = {
         len(task_seeds),
@@ -1244,8 +1278,18 @@ def _save_task_bank_evaluation_snapshot(
         ],
         "config": config.to_dict(),
         "world_model_state_dict": _cpu_state_dict(wm),
-        "actor_critic_bank_state_dict": actor_critic_bank.inference_state_dict(),
+        "actor_topology": (
+            "single_shared_actor_critic"
+            if uses_shared_actor
+            else "per_task_actor_critic_bank"
+        ),
     }
+    if uses_shared_actor:
+        payload["actor_critic_state_dict"] = _cpu_state_dict(aco.ac)
+    else:
+        payload["actor_critic_bank_state_dict"] = (
+            actor_critic_bank.inference_state_dict()
+        )
     torch.save(payload, temporary_path)
     os.replace(temporary_path, path)
     digest = _sha256(path)
@@ -1267,6 +1311,7 @@ def _save_task_bank_boundary_snapshot(
     config: Config,
     wm: WorldModel,
     actor_critic_bank,
+    aco: Optional[ActorCriticOpt] = None,
     epoch: int,
     world_model_updates: int,
     total_env_steps: int,
@@ -1274,7 +1319,13 @@ def _save_task_bank_boundary_snapshot(
     project_git_commit: str,
 ) -> Path:
     """Save one complete task bank immediately after a task's final update."""
-    if actor_critic_bank is None:
+    uses_shared_actor = config.uses_shared_actor
+    if uses_shared_actor:
+        if actor_critic_bank is not None or aco is None:
+            raise ValueError(
+                "Shared-actor boundary snapshots require exactly one actor-critic"
+            )
+    elif actor_critic_bank is None:
         raise ValueError("Task-bank boundary snapshots require an actor bank")
     if len(project_git_commit) != 40:
         raise ValueError("Project Git commit must be a full 40-character hash")
@@ -1291,7 +1342,7 @@ def _save_task_bank_boundary_snapshot(
     if not required_task_fields.issubset(task_metadata):
         raise ValueError("Task-boundary metadata is incomplete")
     task_id = int(task_metadata["task_index"])
-    completed_actor = actor_critic_bank.get(task_id)
+    completed_actor = aco if uses_shared_actor else actor_critic_bank.get(task_id)
 
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     completed_epochs = epoch + 1
@@ -1350,11 +1401,21 @@ def _save_task_bank_boundary_snapshot(
         ],
         "config": config.to_dict(),
         "world_model_state_dict": _cpu_state_dict(wm),
-        "actor_critic_bank_state_dict": actor_critic_bank.inference_state_dict(),
-        "completed_task_actor_critic_state_dict": _cpu_state_dict(
-            completed_actor.ac
+        "actor_topology": (
+            "single_shared_actor_critic"
+            if uses_shared_actor
+            else "per_task_actor_critic_bank"
         ),
     }
+    if uses_shared_actor:
+        payload["actor_critic_state_dict"] = _cpu_state_dict(completed_actor.ac)
+    else:
+        payload["actor_critic_bank_state_dict"] = (
+            actor_critic_bank.inference_state_dict()
+        )
+        payload["completed_task_actor_critic_state_dict"] = _cpu_state_dict(
+            completed_actor.ac
+        )
     torch.save(payload, temporary_path)
     os.replace(temporary_path, path)
 
@@ -1539,7 +1600,7 @@ if __name__ == "__main__":
         "--init-task1-boundary-snapshot",
         type=Path,
         help=(
-            "Seed CNN-Projector-LoRA training from a completed Task-1 "
+            "Seed a named CNN projector method from a completed Task-1 "
             "CNN-FullBank inference boundary. Replay, optimizers, RNG, and "
             "the environment schedule are deliberately restarted at Task 2."
         ),
@@ -1653,6 +1714,7 @@ if __name__ == "__main__":
     if config.continual_method in {
         "cnn_fullbank_arrow",
         "cnn_projector_lora_arrow",
+        "cnn_compact_shared_actor_arrow",
     }:
         if task_bank_snapshot_dir is None:
             raise ValueError(
@@ -1715,10 +1777,13 @@ if __name__ == "__main__":
             "shared_core_mode=snapshot_adaptation requires --init-analysis-snapshot"
         )
     if args.init_task1_boundary_snapshot is not None:
-        if config.continual_method != "cnn_projector_lora_arrow":
+        if config.continual_method not in {
+            "cnn_projector_lora_arrow",
+            "cnn_compact_shared_actor_arrow",
+        }:
             raise ValueError(
                 "Task-1 boundary initialization requires "
-                "continual_method=cnn_projector_lora_arrow"
+                "a named CNN projector continual method"
             )
         task1_seed_payload = _load_task1_boundary_snapshot(
             args.init_task1_boundary_snapshot.expanduser().resolve()
@@ -1741,6 +1806,10 @@ if __name__ == "__main__":
             raise ValueError(
                 "Incremental training must include at least one post-Task-1 epoch"
             )
+    elif config.uses_shared_actor:
+        raise ValueError(
+            "CNN-Compact-SharedActor requires --init-task1-boundary-snapshot"
+        )
     elif config.continual_method == "cnn_projector_lora_arrow":
         training_start_epoch = 0
 
@@ -1783,6 +1852,18 @@ if __name__ == "__main__":
             f"ranks={config.task_lora_recurrent_rank}/"
             f"{config.task_lora_representation_rank}/"
             f"{config.task_lora_transition_rank} "
+            f"current_fraction={config.dino_fullbank_current_task_fraction}"
+        )
+    elif config.continual_method == "cnn_compact_shared_actor_arrow":
+        print(
+            "CNN-Compact-SharedActor-ARROW routing: "
+            f"experts={config.rssm_num_experts} actor=single_shared "
+            "base=task0_frozen_after_acquisition encoder=task0_plus_projector "
+            "recurrent=gru_output_adapter "
+            f"adapter_sizes={config.task_recurrent_output_adapter_features}/"
+            f"{config.task_lora_representation_rank}/"
+            f"{config.task_lora_transition_rank} "
+            "old_policy_retention=frozen_route_imagination "
             f"current_fraction={config.dino_fullbank_current_task_fraction}"
         )
     elif config.continual_method == "dino_fullbank_arrow":
@@ -1911,6 +1992,9 @@ if __name__ == "__main__":
         task_lora_recurrent_rank=config.task_lora_recurrent_rank,
         task_lora_representation_rank=config.task_lora_representation_rank,
         task_lora_transition_rank=config.task_lora_transition_rank,
+        task_recurrent_output_adapter_features=(
+            config.task_recurrent_output_adapter_features
+        ),
     ).to(device)
     resume_world_model_opened: list[str] = []
     resume_state_report: dict[str, dict[str, list[str]]] = {}
@@ -1935,7 +2019,7 @@ if __name__ == "__main__":
         )
         print(
             "Loaded the completed Task-1 CNN/RSSM/heads; later routes remain "
-            "zero-effect projector/LoRA adaptations"
+            "zero-effect projector/RSSM adaptations"
         )
     trainable_world_model_parameters = [
         parameter for parameter in wm.parameters() if parameter.requires_grad
@@ -1967,6 +2051,7 @@ if __name__ == "__main__":
     if config.continual_method in {
         "cnn_fullbank_arrow",
         "cnn_projector_lora_arrow",
+        "cnn_compact_shared_actor_arrow",
         "dino_patchbank_arrow",
         "dino_convbank_arrow",
     } and (not distributed_context.enabled or distributed_context.is_primary):
@@ -2049,37 +2134,13 @@ if __name__ == "__main__":
         )
 
     actor_critic_bank = None
+    shared_actor_teacher: Optional[torch.nn.Module] = None
+    shared_actor_teacher_seen_tasks = 0
     if config.uses_task_experts:
         from clworldmodel.continual import (
             ActorCriticBank,
             allocate_task_updates,
             shuffled_task_schedule,
-        )
-
-        if config.continual_method == "cnn_fullbank_arrow":
-            actor_bank_artifact_kind = (
-                "cnn_fullbank_arrow_actor_critic_bank_inference_state"
-            )
-        elif config.continual_method == "cnn_projector_lora_arrow":
-            actor_bank_artifact_kind = (
-                "cnn_projector_lora_arrow_actor_critic_bank_inference_state"
-            )
-        elif config.continual_method == "dino_patchbank_arrow":
-            actor_bank_artifact_kind = (
-                "dino_patchbank_arrow_actor_critic_bank_inference_state"
-            )
-        elif config.continual_method == "dino_convbank_arrow":
-            actor_bank_artifact_kind = (
-                "dino_convbank_arrow_actor_critic_bank_inference_state"
-            )
-        elif config.uses_full_task_experts:
-            actor_bank_artifact_kind = (
-                "dino_fullbank_arrow_actor_critic_bank_inference_state"
-            )
-        else:
-            actor_bank_artifact_kind = "moe_arrow_actor_critic_bank_inference_state"
-        actor_critic_bank = ActorCriticBank(
-            artifact_kind=actor_bank_artifact_kind
         )
         task_update_rng = np.random.default_rng(
             np.random.SeedSequence([config.seed, 0x4D4F4541])
@@ -2095,7 +2156,56 @@ if __name__ == "__main__":
                     **_actor_critic_constructor_kwargs(config),
                 )
 
-        if task1_seed_payload is not None:
+        if config.uses_shared_actor:
+            aco = build_task_actor_critic(0)
+            if task1_seed_payload is not None:
+                actor_bank_state = task1_seed_payload[
+                    "actor_critic_bank_state_dict"
+                ]
+                if not isinstance(actor_bank_state, Mapping):
+                    raise ValueError("Task-1 actor bank state must be a mapping")
+                task_states = actor_bank_state.get("tasks")
+                if not isinstance(task_states, Mapping) or not isinstance(
+                    task_states.get("0"), Mapping
+                ):
+                    raise ValueError("Task-1 actor state is missing")
+                aco.ac.load_state_dict(task_states["0"], strict=True)
+                shared_actor_teacher = copy.deepcopy(aco.ac.actor).eval()
+                shared_actor_teacher.requires_grad_(False)
+                shared_actor_teacher_seen_tasks = 1
+                print(
+                    "Loaded the completed Task-1 actor as the shared actor and "
+                    "created one transient frozen teacher"
+                )
+        else:
+            if config.continual_method == "cnn_fullbank_arrow":
+                actor_bank_artifact_kind = (
+                    "cnn_fullbank_arrow_actor_critic_bank_inference_state"
+                )
+            elif config.continual_method == "cnn_projector_lora_arrow":
+                actor_bank_artifact_kind = (
+                    "cnn_projector_lora_arrow_actor_critic_bank_inference_state"
+                )
+            elif config.continual_method == "dino_patchbank_arrow":
+                actor_bank_artifact_kind = (
+                    "dino_patchbank_arrow_actor_critic_bank_inference_state"
+                )
+            elif config.continual_method == "dino_convbank_arrow":
+                actor_bank_artifact_kind = (
+                    "dino_convbank_arrow_actor_critic_bank_inference_state"
+                )
+            elif config.uses_full_task_experts:
+                actor_bank_artifact_kind = (
+                    "dino_fullbank_arrow_actor_critic_bank_inference_state"
+                )
+            else:
+                actor_bank_artifact_kind = (
+                    "moe_arrow_actor_critic_bank_inference_state"
+                )
+            actor_critic_bank = ActorCriticBank(
+                artifact_kind=actor_bank_artifact_kind
+            )
+        if task1_seed_payload is not None and not config.uses_shared_actor:
             seeded_actor = actor_critic_bank.ensure(0, build_task_actor_critic)
             actor_bank_state = task1_seed_payload["actor_critic_bank_state_dict"]
             if not isinstance(actor_bank_state, Mapping):
@@ -2217,6 +2327,18 @@ if __name__ == "__main__":
                 "environment_schedule_restart_task": 1,
                 "source_task1_world_model_modules": task1_seed_world_model_report,
                 "source_task1_actor_loaded": True,
+                "actor_topology": (
+                    "single_shared_actor_critic"
+                    if config.uses_shared_actor
+                    else "per_task_actor_critic_bank"
+                ),
+                "old_real_replay_used": False,
+                "old_policy_protection": (
+                    "frozen old-route world-model imagination with one transient "
+                    "previous shared-actor teacher"
+                    if config.uses_shared_actor
+                    else "frozen task-specific actor entries"
+                ),
                 "source_snapshot_resumable": False,
                 "scientific_scope": (
                     "snapshot-seeded Task-2/3 acquisition; not an equivalent "
@@ -2258,6 +2380,12 @@ if __name__ == "__main__":
         )
         os.replace(temporary_accounting_path, parameter_accounting_path)
     actor_accounting_path = log_dir / "actor_critic_parameter_accounting.json"
+    shared_actor_distillation_counters = {
+        "optimizer_updates": 0,
+        "distillation_batches": 0,
+        "distilled_states": 0,
+        "burnin_state_uses": 0,
+    }
     profile_stages = args.profile_stages and distributed_context.is_primary
 
     
@@ -2290,13 +2418,41 @@ if __name__ == "__main__":
             current_task_id = envs.current_task_index()
             warm_start_from = (
                 0
-                if config.continual_method == "cnn_projector_lora_arrow"
+                if config.continual_method in {
+                    "cnn_projector_lora_arrow",
+                    "cnn_compact_shared_actor_arrow",
+                }
                 and current_task_id > 0
                 else current_task_id - 1
                 if current_task_id > 0
                 else None
             )
-            if current_task_id not in actor_critic_bank:
+            if config.uses_shared_actor:
+                if aco is None:
+                    raise RuntimeError("Shared actor was not initialized")
+                if warm_start_from is not None:
+                    initialized = wm.initialize_task_expert(
+                        current_task_id, warm_start_from
+                    )
+                    if initialized:
+                        print(
+                            f"Warm-started world-model expert {current_task_id} "
+                            f"from expert {warm_start_from}"
+                        )
+                if current_task_id > shared_actor_teacher_seen_tasks:
+                    if current_task_id != shared_actor_teacher_seen_tasks + 1:
+                        raise RuntimeError(
+                            "Shared-actor teacher tasks must advance sequentially"
+                        )
+                    shared_actor_teacher = copy.deepcopy(aco.ac.actor).eval()
+                    shared_actor_teacher.requires_grad_(False)
+                    shared_actor_teacher_seen_tasks = current_task_id
+                    print(
+                        "Refreshed the one transient shared-actor teacher before "
+                        f"task {current_task_id}; old routes={tuple(range(current_task_id))}"
+                    )
+                wm.activate_task_expert(current_task_id)
+            elif current_task_id not in actor_critic_bank:
                 if warm_start_from is not None:
                     if warm_start_from not in actor_critic_bank:
                         raise RuntimeError(
@@ -2325,8 +2481,10 @@ if __name__ == "__main__":
                 )
             if config.uses_full_task_experts:
                 wm.activate_task_expert(current_task_id)
-                actor_critic_bank.activate(current_task_id)
-            aco = actor_critic_bank.get(current_task_id)
+                if actor_critic_bank is not None:
+                    actor_critic_bank.activate(current_task_id)
+            if actor_critic_bank is not None:
+                aco = actor_critic_bank.get(current_task_id)
         task_boundary = epoch > 0 and envs.is_new_env()
         if config.residual_consolidation == "replay_functional" and task_boundary:
             if aco is None:
@@ -2529,6 +2687,7 @@ if __name__ == "__main__":
                         config=config,
                         wm=wm,
                         actor_critic_bank=actor_critic_bank,
+                        aco=aco,
                         completed_epochs=epoch,
                         world_model_updates=global_step,
                         actor_critic_updates=epoch * config.ac_train_steps,
@@ -2596,6 +2755,8 @@ if __name__ == "__main__":
                         if config.continual_method == "cnn_fullbank_arrow"
                         else f"CNNProjectorLoraArrow/world_model_updates_task_{task_id}"
                         if config.continual_method == "cnn_projector_lora_arrow"
+                        else f"CNNCompactSharedActor/world_model_updates_task_{task_id}"
+                        if config.continual_method == "cnn_compact_shared_actor_arrow"
                         else f"DINOPatchBankArrow/world_model_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
                         else f"DINOConvBankArrow/world_model_updates_task_{task_id}"
@@ -2821,7 +2982,57 @@ if __name__ == "__main__":
             config.ac_train_sync
         )
 
-        if config.uses_task_experts:
+        if config.uses_shared_actor:
+            if current_task_id is None:
+                raise RuntimeError("Shared-actor training requires a current task route")
+            distillation_kwargs = {}
+            if current_task_id > 0:
+                if shared_actor_teacher is None:
+                    raise RuntimeError(
+                        "Old-task actor distillation requires the frozen teacher"
+                    )
+                distillation_kwargs = {
+                    "actor_teacher": shared_actor_teacher,
+                    "actor_distill_task_ids": tuple(range(current_task_id)),
+                    "actor_distill_scale": config.shared_actor_distill_scale,
+                    "actor_distill_interval": config.shared_actor_distill_interval,
+                    "actor_distill_n_sync": config.shared_actor_distill_n_sync,
+                    "actor_distill_burnin_steps": (
+                        config.shared_actor_distill_burnin_steps
+                    ),
+                    "actor_distill_steps": config.shared_actor_distill_steps,
+                }
+            aco, approx_perf, actor_critic_metrics = train_ac_from_wm(
+                wm,
+                replay,
+                config.ac_train_steps,
+                local_ac_train_sync,
+                aco=aco,
+                lr=scheduled_ac_lr,
+                task_id=current_task_id,
+                **distillation_kwargs,
+                **actor_critic_kwargs,
+            )
+            writer.add_scalar(
+                f"CNNCompactSharedActor/actor_updates_task_{current_task_id}",
+                config.ac_train_steps,
+                (epoch + 1) * config.ac_train_steps,
+            )
+            shared_actor_distillation_counters["optimizer_updates"] += (
+                config.ac_train_steps
+            )
+            shared_actor_distillation_counters["distillation_batches"] += int(
+                actor_critic_metrics["shared_actor_distillation_batches"]
+            )
+            shared_actor_distillation_counters["distilled_states"] += int(
+                actor_critic_metrics["shared_actor_distillation_states"]
+            )
+            shared_actor_distillation_counters["burnin_state_uses"] += int(
+                actor_critic_metrics[
+                    "shared_actor_distillation_burnin_state_uses"
+                ]
+            )
+        elif config.uses_task_experts:
             replay_task_ids = replay.available_task_ids()
             actor_available_tasks = tuple(
                 task_id
@@ -2911,7 +3122,9 @@ if __name__ == "__main__":
 
         actor_seconds = _stage_elapsed(actor_started, profile_stages)
         if distributed_context.is_primary and (
-            actor_critic_bank is not None or not actor_accounting_path.exists()
+            actor_critic_bank is not None
+            or config.uses_shared_actor
+            or not actor_accounting_path.exists()
         ):
             temporary_actor_accounting_path = actor_accounting_path.with_suffix(
                 ".json.tmp"
@@ -2919,6 +3132,10 @@ if __name__ == "__main__":
             actor_accounting = (
                 _actor_critic_bank_parameter_accounting(actor_critic_bank)
                 if actor_critic_bank is not None
+                else _shared_actor_parameter_accounting(
+                    aco, shared_actor_teacher
+                )
+                if config.uses_shared_actor
                 else _actor_critic_parameter_accounting(aco)
             )
             temporary_actor_accounting_path.write_text(
@@ -2926,6 +3143,33 @@ if __name__ == "__main__":
                 encoding="utf-8",
             )
             os.replace(temporary_actor_accounting_path, actor_accounting_path)
+            if config.uses_shared_actor:
+                distillation_accounting = {
+                    "schema_version": 1,
+                    "method": config.continual_method,
+                    "real_old_task_replay_samples": 0,
+                    "evaluation_transitions_enter_training": False,
+                    "old_state_source": (
+                        "zero_initialized_frozen_world_model_routes"
+                    ),
+                    "teacher_topology": "one transient previous shared actor",
+                    "teacher_persistent": False,
+                    "counts": dict(shared_actor_distillation_counters),
+                }
+                distillation_accounting_path = (
+                    log_dir / "shared_actor_distillation_accounting.json"
+                )
+                temporary_distillation_accounting_path = (
+                    distillation_accounting_path.with_suffix(".json.tmp")
+                )
+                temporary_distillation_accounting_path.write_text(
+                    json.dumps(distillation_accounting, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(
+                    temporary_distillation_accounting_path,
+                    distillation_accounting_path,
+                )
         writer.add_scalar("Perf/approx_perf", approx_perf, global_step)
         actor_critic_updates = (epoch + 1) * config.ac_train_steps
         writer.add_scalar(
@@ -2968,6 +3212,7 @@ if __name__ == "__main__":
                 config=config,
                 wm=wm,
                 actor_critic_bank=actor_critic_bank,
+                aco=aco,
                 epoch=epoch,
                 world_model_updates=global_step,
                 total_env_steps=total_env_steps,
@@ -3152,6 +3397,7 @@ if __name__ == "__main__":
                     config=config,
                     wm=wm,
                     actor_critic_bank=actor_critic_bank,
+                    aco=aco,
                     completed_epochs=config.epochs,
                     world_model_updates=global_step,
                     actor_critic_updates=config.epochs * config.ac_train_steps,

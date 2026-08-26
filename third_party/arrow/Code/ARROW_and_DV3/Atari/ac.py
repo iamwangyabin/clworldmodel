@@ -1,7 +1,7 @@
 import copy
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 import numpy as np
 import torch
@@ -42,6 +42,79 @@ def _full_precision_context(device: torch.device):
 
 def zh_to_ac_state(z: LatentT, h: HiddenT) -> AcStateT:
     return torch.cat((z.flatten(-2), h), dim=-1)
+
+
+@torch.no_grad()
+def dream_frozen_actor_policy(
+    wm: WorldModel,
+    teacher_actor: nn.Module,
+    *,
+    task_id: int,
+    n_sync: int,
+    burnin_steps: int,
+    dream_steps: int,
+    temperature: float = 1.0,
+) -> tuple[AcStateT, ActionLogT]:
+    """Generate old-route states and policy targets without real old replay."""
+    if task_id < 0:
+        raise ValueError("Distillation task_id must be non-negative")
+    if n_sync < 1 or dream_steps < 1 or burnin_steps < 0:
+        raise ValueError(
+            "Frozen-policy imagination requires positive batch/dream sizes and "
+            "a non-negative burn-in"
+        )
+    if temperature <= 0:
+        raise ValueError("Frozen-policy imagination temperature must be positive")
+
+    z, h = wm.rssm.initial_state(n_sync)
+    no_reset = torch.zeros(n_sync, 1, device=z.device)
+    compute_dtype = getattr(wm, "compute_dtype", "float32")
+    states = []
+    teacher_logs = []
+    with _autocast_context(z.device, compute_dtype):
+        for step in range(burnin_steps + dream_steps):
+            state = zh_to_ac_state(z, h)
+            teacher_log = teacher_actor(state)
+            with _full_precision_context(teacher_log.device):
+                action = td.OneHotCategorical(
+                    logits=teacher_log.float()
+                ).sample()
+            if step >= burnin_steps:
+                states.append(state.detach())
+                teacher_logs.append(teacher_log.detach().float())
+            _, z, h = wm.rssm(
+                z,
+                action,
+                h,
+                None,
+                no_reset,
+                temperature=temperature,
+                task_id=task_id,
+            )
+    return torch.stack(states), torch.stack(teacher_logs)
+
+
+def actor_policy_kl(
+    student_actor: nn.Module,
+    states: AcStateT,
+    teacher_logs: ActionLogT,
+) -> torch.Tensor:
+    """Return KL(teacher || student) over imagined states in FP32."""
+    if states.ndim < 2 or teacher_logs.ndim != states.ndim:
+        raise ValueError("Actor distillation tensors must include batch and feature axes")
+    student_logs = student_actor(states)
+    if student_logs.shape != teacher_logs.shape:
+        raise ValueError(
+            "Teacher and student action distributions must have identical shapes: "
+            f"{tuple(teacher_logs.shape)} != {tuple(student_logs.shape)}"
+        )
+    with _full_precision_context(student_logs.device):
+        teacher_logs_fp32 = teacher_logs.float()
+        student_logs_fp32 = student_logs.float()
+        teacher_probs = teacher_logs_fp32.exp()
+        return (
+            teacher_probs * (teacher_logs_fp32 - student_logs_fp32)
+        ).sum(dim=-1).mean()
 
 
 def ac_state_to_zh(state: AcStateT, ls: LatentShape, h_dim: int) -> tuple[LatentT, HiddenT]:
@@ -878,6 +951,13 @@ def train_ac_from_wm(
     protect_residual_updates: bool = False,
     feature_cache: Optional[object] = None,
     task_id: Optional[int] = None,
+    actor_teacher: Optional[nn.Module] = None,
+    actor_distill_task_ids: Sequence[int] = (),
+    actor_distill_scale: float = 0.0,
+    actor_distill_interval: int = 1,
+    actor_distill_n_sync: int = 1,
+    actor_distill_burnin_steps: int = 0,
+    actor_distill_steps: int = 1,
     distributed_context: Optional[object] = None,
 ) -> tuple[ActorCriticOpt, torch.Tensor, dict[str, float]]:
     if aco is None:
@@ -939,6 +1019,37 @@ def train_ac_from_wm(
         distributed_context is not None
         and getattr(distributed_context, "enabled", False)
     )
+    distillation_enabled = actor_teacher is not None
+    if distillation_enabled != bool(actor_distill_task_ids):
+        raise ValueError(
+            "Actor distillation requires both a frozen teacher and old task routes"
+        )
+    if distillation_enabled:
+        if task_id is None or any(
+            old_task_id < 0 or old_task_id >= task_id
+            for old_task_id in actor_distill_task_ids
+        ):
+            raise ValueError(
+                "Actor distillation routes must be non-negative tasks older than "
+                "the current task"
+            )
+        if actor_distill_scale <= 0 or actor_distill_interval < 1:
+            raise ValueError(
+                "Actor distillation requires a positive scale and interval"
+            )
+        if actor_distill_n_sync < 1 or actor_distill_steps < 1:
+            raise ValueError(
+                "Actor distillation requires positive batch and rollout sizes"
+            )
+        if actor_distill_burnin_steps < 0:
+            raise ValueError("Actor distillation burn-in must be non-negative")
+        if distributed_enabled:
+            raise ValueError(
+                "Shared-actor imagination distillation is validated only on one GPU"
+            )
+        actor_teacher.eval()
+    elif actor_distill_scale:
+        raise ValueError("Actor distillation scale requires a frozen teacher")
     distributed_training_step = None
     if distributed_enabled:
         training_step = ActorCriticTrainingStep(
@@ -962,6 +1073,10 @@ def train_ac_from_wm(
         "return_scale": 0.0,
         "gradient_norm": 0.0,
     }
+    actor_old_policy_kl_total = 0.0
+    actor_distillation_batches = 0
+    actor_distillation_states = 0
+    actor_distillation_burnin_state_uses = 0
     capture_kan_parameter_values = None
     protect_kan_parameter_updates = None
     if protect_residual_updates:
@@ -1118,11 +1233,38 @@ def train_ac_from_wm(
                 + replay_critic_loss_scale * replay_critic_loss
                 + consolidation_loss
             )
+        actor_old_policy_kl = torch.zeros((), device=states.device)
+        if distillation_enabled and step % actor_distill_interval == 0:
+            old_task_id = actor_distill_task_ids[
+                actor_distillation_batches % len(actor_distill_task_ids)
+            ]
+            old_states, old_teacher_logs = dream_frozen_actor_policy(
+                wm,
+                actor_teacher,
+                task_id=old_task_id,
+                n_sync=actor_distill_n_sync,
+                burnin_steps=actor_distill_burnin_steps,
+                dream_steps=actor_distill_steps,
+            )
+            with _autocast_context(states.device, compute_dtype):
+                actor_old_policy_kl = actor_policy_kl(
+                    ac.actor, old_states, old_teacher_logs
+                )
+            loss = loss + actor_distill_scale * actor_old_policy_kl
+            actor_distillation_batches += 1
+            actor_distillation_states += actor_distill_n_sync * actor_distill_steps
+            actor_distillation_burnin_state_uses += (
+                actor_distill_n_sync * actor_distill_burnin_steps
+            )
+            actor_old_policy_kl_total += float(
+                actor_old_policy_kl.detach().item()
+            )
         if not torch.isfinite(loss):
             raise FloatingPointError(
                 "Non-finite actor-critic loss: "
                 f"reinforce={reinforce.item()} entropy={entropy.item()} "
-                f"critic={critic_loss.item()} replay_critic={replay_critic_loss.item()}"
+                f"critic={critic_loss.item()} replay_critic={replay_critic_loss.item()} "
+                f"old_policy_kl={actor_old_policy_kl.item()}"
             )
 
         protected_values = (
@@ -1185,4 +1327,18 @@ def train_ac_from_wm(
         metric_totals = distributed_context.mean_float_mapping(metric_totals)
     metrics = {name: total / steps for name, total in metric_totals.items()}
     metrics["replay_critic_loss_scale"] = replay_critic_loss_scale
+    metrics["actor_old_policy_kl"] = (
+        actor_old_policy_kl_total / actor_distillation_batches
+        if actor_distillation_batches
+        else 0.0
+    )
+    metrics["shared_actor_distillation_batches"] = float(
+        actor_distillation_batches
+    )
+    metrics["shared_actor_distillation_states"] = float(
+        actor_distillation_states
+    )
+    metrics["shared_actor_distillation_burnin_state_uses"] = float(
+        actor_distillation_burnin_state_uses
+    )
     return aco, lam_returns_mean_ema, metrics

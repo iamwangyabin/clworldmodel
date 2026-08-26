@@ -113,6 +113,7 @@ class Rssm(nn.Module):
         task_lora_recurrent_rank: int = 0,
         task_lora_representation_rank: int = 0,
         task_lora_transition_rank: int = 0,
+        task_recurrent_output_adapter_features: int = 0,
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
         residual_grid_size: int = 8,
@@ -151,10 +152,36 @@ class Rssm(nn.Module):
             task_lora_representation_rank,
             task_lora_transition_rank,
         )
-        if any(task_lora_ranks) and not all(rank > 0 for rank in task_lora_ranks):
-            raise ValueError("Task RSSM LoRA requires three positive ranks")
-        if any(task_lora_ranks) and not full_task_experts:
-            raise ValueError("Task RSSM LoRA requires complete task experts")
+        if any(rank < 0 for rank in task_lora_ranks):
+            raise ValueError("Task RSSM LoRA ranks must be non-negative")
+        if task_recurrent_output_adapter_features < 0:
+            raise ValueError("Task recurrent output adapter size must be non-negative")
+        if (
+            task_lora_recurrent_rank > 0
+            and task_recurrent_output_adapter_features > 0
+        ):
+            raise ValueError(
+                "Recurrent matrix LoRA and recurrent output adapters are mutually exclusive"
+            )
+        task_rssm_adaptation_enabled = bool(
+            any(task_lora_ranks) or task_recurrent_output_adapter_features
+        )
+        if task_rssm_adaptation_enabled and not (
+            task_lora_representation_rank > 0
+            and task_lora_transition_rank > 0
+            and (
+                task_lora_recurrent_rank > 0
+                or task_recurrent_output_adapter_features > 0
+            )
+        ):
+            raise ValueError(
+                "Task RSSM adaptation requires posterior/prior LoRA and one "
+                "recurrent adaptation mechanism"
+            )
+        if task_rssm_adaptation_enabled and not full_task_experts:
+            raise ValueError(
+                "Task RSSM adaptation requires complete task experts"
+            )
         if num_task_experts > 1 and residual_correction != "none":
             raise ValueError(
                 "Task-routed RSSM experts do not compose with residual corrections"
@@ -165,7 +192,16 @@ class Rssm(nn.Module):
         self.full_task_experts = full_task_experts
         self.task_banked_image_encoder = task_banked_image_encoder
         self.task_projected_image_encoder = task_projected_image_encoder
-        self.task_lora_enabled = all(rank > 0 for rank in task_lora_ranks)
+        self.task_lora_recurrent_rank = task_lora_recurrent_rank
+        self.task_lora_representation_rank = task_lora_representation_rank
+        self.task_lora_transition_rank = task_lora_transition_rank
+        self.task_lora_enabled = any(rank > 0 for rank in task_lora_ranks)
+        self.task_recurrent_output_adapter_features = (
+            task_recurrent_output_adapter_features
+        )
+        self.task_recurrent_output_adapter_enabled = (
+            task_recurrent_output_adapter_features > 0
+        )
 
         self.recurrent = Recurrent(
             ls,
@@ -183,9 +219,21 @@ class Rssm(nn.Module):
             residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
         )
-        self.recurrent_experts = nn.ModuleList(
-            copy.deepcopy(self.recurrent) for _ in range(num_task_experts - 1)
-        )
+        if self.task_recurrent_output_adapter_enabled:
+            from clworldmodel.models.rssm_lora import TaskRecurrentOutputRoute
+
+            self.recurrent_experts = nn.ModuleList(
+                TaskRecurrentOutputRoute(
+                    self.recurrent,
+                    output_features=h_dim,
+                    bottleneck_features=task_recurrent_output_adapter_features,
+                )
+                for _ in range(num_task_experts - 1)
+            )
+        else:
+            self.recurrent_experts = nn.ModuleList(
+                copy.deepcopy(self.recurrent) for _ in range(num_task_experts - 1)
+            )
         if image_embedder is not None:
             self.image_embedder = image_embedder
         elif observation_encoder == "cnn":
@@ -290,39 +338,42 @@ class Rssm(nn.Module):
             copy.deepcopy(self.transition) for _ in range(num_task_experts - 1)
         )
         self.task_lora_reports: list[dict[str, object]] = []
-        if self.task_lora_enabled:
+        if task_rssm_adaptation_enabled:
             from clworldmodel.models.rssm_lora import (
                 install_affine_lora,
                 reset_affine_lora_from,
             )
 
             for task_index in range(1, num_task_experts):
-                self.task_lora_reports.append(
-                    {
-                        "task_index": task_index,
-                        "recurrent": install_affine_lora(
-                            self.recurrent_for(task_index),
-                            task_lora_recurrent_rank,
-                        ),
-                        "representation": install_affine_lora(
-                            self.representation_for(task_index),
-                            task_lora_representation_rank,
-                        ),
-                        "transition": install_affine_lora(
-                            self.transition_for(task_index),
-                            task_lora_transition_rank,
-                        ),
-                    }
-                )
-                reset_affine_lora_from(
-                    self.recurrent_for(task_index), self.recurrent
-                )
-                reset_affine_lora_from(
-                    self.representation_for(task_index), self.representation
-                )
-                reset_affine_lora_from(
-                    self.transition_for(task_index), self.transition
-                )
+                report: dict[str, object] = {"task_index": task_index}
+                if task_lora_recurrent_rank:
+                    report["recurrent"] = install_affine_lora(
+                        self.recurrent_for(task_index),
+                        task_lora_recurrent_rank,
+                    )
+                    reset_affine_lora_from(
+                        self.recurrent_for(task_index), self.recurrent
+                    )
+                elif self.task_recurrent_output_adapter_enabled:
+                    route = self.recurrent_for(task_index)
+                    report["recurrent"] = route.parameter_report()
+                if task_lora_representation_rank:
+                    report["representation"] = install_affine_lora(
+                        self.representation_for(task_index),
+                        task_lora_representation_rank,
+                    )
+                    reset_affine_lora_from(
+                        self.representation_for(task_index), self.representation
+                    )
+                if task_lora_transition_rank:
+                    report["transition"] = install_affine_lora(
+                        self.transition_for(task_index),
+                        task_lora_transition_rank,
+                    )
+                    reset_affine_lora_from(
+                        self.transition_for(task_index), self.transition
+                    )
+                self.task_lora_reports.append(report)
 
     def freeze_shared_core(self) -> None:
         """Freeze base RSSM functions while leaving residual adapters plastic."""
@@ -361,7 +412,7 @@ class Rssm(nn.Module):
             )
         return task_id
 
-    def recurrent_for(self, task_id: Optional[int | torch.Tensor]) -> "Recurrent":
+    def recurrent_for(self, task_id: Optional[int | torch.Tensor]) -> nn.Module:
         task_index = self._task_index(task_id)
         return self.recurrent if task_index == 0 else self.recurrent_experts[task_index - 1]
 
@@ -401,21 +452,28 @@ class Rssm(nn.Module):
     def copy_task_expert(self, target_task_id: int, source_task_id: int) -> None:
         if target_task_id == source_task_id:
             return
-        if self.task_lora_enabled and target_task_id > 0:
+        if (
+            self.task_lora_enabled or self.task_recurrent_output_adapter_enabled
+        ) and target_task_id > 0:
             from clworldmodel.models.rssm_lora import reset_affine_lora_from
 
-            reset_affine_lora_from(
-                self.recurrent_for(target_task_id),
-                self.recurrent_for(source_task_id),
-            )
-            reset_affine_lora_from(
-                self.transition_for(target_task_id),
-                self.transition_for(source_task_id),
-            )
-            reset_affine_lora_from(
-                self.representation_for(target_task_id),
-                self.representation_for(source_task_id),
-            )
+            if self.task_recurrent_output_adapter_enabled:
+                self.recurrent_for(target_task_id).reset_delta()
+            elif self.task_lora_recurrent_rank:
+                reset_affine_lora_from(
+                    self.recurrent_for(target_task_id),
+                    self.recurrent_for(source_task_id),
+                )
+            if self.task_lora_transition_rank:
+                reset_affine_lora_from(
+                    self.transition_for(target_task_id),
+                    self.transition_for(source_task_id),
+                )
+            if self.task_lora_representation_rank:
+                reset_affine_lora_from(
+                    self.representation_for(target_task_id),
+                    self.representation_for(source_task_id),
+                )
         else:
             self.recurrent_for(target_task_id).load_state_dict(
                 self.recurrent_for(source_task_id).state_dict()

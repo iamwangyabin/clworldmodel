@@ -306,6 +306,20 @@ documented here, covered by focused parity tests, and followed by regenerating
     Focused tests cover zero-effect initialization, base sharing,
     selected-route gradients, frozen Task-1 tensors, strict config isolation,
     and snapshot-seeded launcher semantics.
+40. Add the separately named, task-aware
+    `CNN-Projector-CompactRSSM-SharedActor-ARROW-v1-Task1SnapshotSeeded`
+    feasibility path. Later tasks retain the zero-effect spatial projector,
+    reduce representation LoRA to rank 32, keep transition LoRA at rank 32,
+    and replace recurrent matrix LoRA with a project-owned bottleneck-32
+    correction applied only to the frozen GRU output. One Actor is shared
+    across tasks. Before each new task it is copied once as a transient frozen
+    teacher; every fourth current-task Actor update adds an FP32
+    `KL(teacher || student)` target on states generated from zero initialization
+    by frozen old RSSM routes. No old real or evaluation transition enters this
+    loss. The launcher separately accounts for the extra imagined states and
+    makes no matched-compute or task-agnostic claim. Focused tests cover
+    zero-effect recurrent adaptation, base sharing, strict config isolation,
+    Actor KL targets, single-Actor launch contracts, and launch budgets.
 
 ## Known issues at import
 

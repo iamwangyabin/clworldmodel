@@ -147,6 +147,7 @@ class WorldModel(nn.Module):
         task_lora_recurrent_rank: int = 0,
         task_lora_representation_rank: int = 0,
         task_lora_transition_rank: int = 0,
+        task_recurrent_output_adapter_features: int = 0,
         image_embedder: Optional[nn.Module] = None,
         compute_dtype: str = "float32",
     ) -> None:
@@ -229,6 +230,9 @@ class WorldModel(nn.Module):
             task_lora_recurrent_rank=task_lora_recurrent_rank,
             task_lora_representation_rank=task_lora_representation_rank,
             task_lora_transition_rank=task_lora_transition_rank,
+            task_recurrent_output_adapter_features=(
+                task_recurrent_output_adapter_features
+            ),
             residual_correction=residual_correction,
             residual_bottleneck_features=residual_bottleneck_features,
             residual_grid_size=residual_grid_size,
@@ -512,19 +516,32 @@ class WorldModel(nn.Module):
         self.rssm.observation_adapter.requires_grad_(
             self.rssm.observation_adapter_kind != "none"
         )
-        if self.rssm.task_lora_enabled:
-            from clworldmodel.models.rssm_lora import set_affine_lora_trainable
+        if (
+            self.rssm.task_lora_enabled
+            or self.rssm.task_recurrent_output_adapter_enabled
+        ):
+            from clworldmodel.models.rssm_lora import (
+                set_affine_lora_trainable,
+                set_recurrent_output_adapter_trainable,
+            )
 
             for index in range(1, self.rssm.num_task_experts):
-                set_affine_lora_trainable(
-                    self.rssm.recurrent_for(index), index == task_index
-                )
-                set_affine_lora_trainable(
-                    self.rssm.representation_for(index), index == task_index
-                )
-                set_affine_lora_trainable(
-                    self.rssm.transition_for(index), index == task_index
-                )
+                if self.rssm.task_recurrent_output_adapter_enabled:
+                    set_recurrent_output_adapter_trainable(
+                        self.rssm.recurrent_for(index), index == task_index
+                    )
+                elif self.rssm.task_lora_recurrent_rank:
+                    set_affine_lora_trainable(
+                        self.rssm.recurrent_for(index), index == task_index
+                    )
+                if self.rssm.task_lora_representation_rank:
+                    set_affine_lora_trainable(
+                        self.rssm.representation_for(index), index == task_index
+                    )
+                if self.rssm.task_lora_transition_rank:
+                    set_affine_lora_trainable(
+                        self.rssm.transition_for(index), index == task_index
+                    )
             # LoRA routes share these exact Parameters. Set the base last so
             # Task 0 remains trainable in a from-scratch protocol, while later
             # tasks keep it frozen and expose only their selected deltas.

@@ -50,6 +50,91 @@ class ExactVectorDelta(nn.Module):
         return original + self.delta
 
 
+class BottleneckOutputDelta(nn.Module):
+    """Zero-effect nonlinear correction for a frozen module output."""
+
+    def __init__(self, features: int, bottleneck_features: int) -> None:
+        super().__init__()
+        if features < 1 or bottleneck_features < 1:
+            raise ValueError("Output adapter dimensions must be positive")
+        self.features = features
+        self.bottleneck_features = bottleneck_features
+        self.norm = nn.LayerNorm(features, eps=1e-3)
+        self.down = nn.Linear(features, bottleneck_features)
+        self.activation = nn.SiLU()
+        self.up = nn.Linear(bottleneck_features, features)
+        self.reset_delta()
+
+    def reset_delta(self) -> None:
+        self.norm.reset_parameters()
+        self.down.reset_parameters()
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, output: torch.Tensor) -> torch.Tensor:
+        if output.shape[-1] != self.features:
+            raise ValueError(
+                f"Expected {self.features} output features, got {output.shape[-1]}"
+            )
+        return self.up(self.activation(self.down(self.norm(output))))
+
+
+class TaskRecurrentOutputRoute(nn.Module):
+    """Reuse one frozen recurrent core and own only an output correction."""
+
+    def __init__(
+        self,
+        base: nn.Module,
+        *,
+        output_features: int,
+        bottleneck_features: int,
+    ) -> None:
+        super().__init__()
+        # The base is already registered by the parent RSSM. Keeping this
+        # reference non-registered avoids duplicate checkpoint tensors.
+        object.__setattr__(self, "_base", base)
+        self.adapter = BottleneckOutputDelta(
+            output_features, bottleneck_features
+        )
+
+    @property
+    def base(self) -> nn.Module:
+        return object.__getattribute__(self, "_base")
+
+    def reset_delta(self) -> None:
+        self.adapter.reset_delta()
+
+    def freeze_shared_core(self) -> None:
+        self.base.requires_grad_(False)
+        self.adapter.requires_grad_(True)
+
+    def forward(
+        self,
+        prev_z: torch.Tensor,
+        prev_a: torch.Tensor,
+        prev_h: torch.Tensor,
+    ) -> torch.Tensor:
+        hidden = self.base(prev_z, prev_a, prev_h)
+        return hidden + self.adapter(hidden)
+
+    def parameter_report(self) -> dict[str, int | str]:
+        parameters = sum(parameter.numel() for parameter in self.parameters())
+        return {
+            "kind": "gru_output_bottleneck_residual",
+            "output_features": self.adapter.features,
+            "bottleneck_features": self.adapter.bottleneck_features,
+            "trainable_parameters": parameters,
+        }
+
+
+def set_recurrent_output_adapter_trainable(
+    route: TaskRecurrentOutputRoute, trainable: bool
+) -> None:
+    """Keep the shared recurrent base frozen and select one route adapter."""
+    route.base.requires_grad_(False)
+    route.adapter.requires_grad_(trainable)
+
+
 def _affine_parameter_names(module: nn.Module) -> Iterable[str]:
     if isinstance(module, nn.GRUCell):
         return ("weight_ih", "weight_hh", "bias_ih", "bias_hh")
