@@ -4,10 +4,10 @@
 This is a posthoc compression probe, not a continual-training result.  It keeps
 the Task 1 CNN encoder and RSSM weights frozen, starts each later task from a
 zero-effect LoRA route, optionally continues training that task's spatial
-projector, and retains the checkpoint's complete per-task actor-critic.  A
-frozen native task route provides functional distillation targets on a private
-training trajectory cohort.  Validation and held-out environment transitions
-never enter the optimization cohort or Replay.
+projector, and gives every task an independent actor initialized from the
+checkpoint.  A frozen native route and actor provide functional distillation
+targets on a private training trajectory cohort.  Validation and held-out
+environment transitions never enter the optimization cohort or Replay.
 """
 
 from __future__ import annotations
@@ -289,6 +289,13 @@ def _trainable_state(module: nn.Module) -> dict[str, torch.Tensor]:
     }
 
 
+def _cpu_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
+    return {
+        name: tensor.detach().cpu().clone()
+        for name, tensor in module.state_dict().items()
+    }
+
+
 def _load_trainable_state(
     module: nn.Module, state: Mapping[str, torch.Tensor], label: str
 ) -> None:
@@ -365,7 +372,8 @@ def _distillation_step(
     vendor: Any,
     teacher: nn.Module,
     student: nn.Module,
-    actor: nn.Module,
+    teacher_actor: nn.Module,
+    student_actor: nn.Module,
     actions: torch.Tensor,
     observations: torch.Tensor,
     resets: torch.Tensor,
@@ -390,7 +398,7 @@ def _distillation_step(
             task_id=task,
         )
         teacher_priors = teacher.rssm.prior(teacher_h, task_id=task)
-        teacher_actor = actor.actor(
+        teacher_action_logs = teacher_actor.actor(
             vendor.ac.zh_to_ac_state(teacher_z, teacher_h)
         ).float()
 
@@ -409,15 +417,17 @@ def _distillation_step(
             task_id=task,
         )
         student_priors = student.rssm.prior(student_h, task_id=task)
-        student_actor = actor.actor(
+        student_action_logs = student_actor.actor(
             vendor.ac.zh_to_ac_state(student_z, student_h)
         ).float()
 
     posterior_kl = _categorical_kl(teacher_posts, student_posts).sum(-1).mean()
     prior_kl = _categorical_kl(teacher_priors, student_priors).sum(-1).mean()
-    actor_kl = _categorical_kl(teacher_actor, student_actor).mean()
-    teacher_actions = teacher_actor.argmax(-1, keepdim=True)
-    teacher_action_nll = -student_actor.gather(-1, teacher_actions).mean()
+    actor_kl = _categorical_kl(
+        teacher_action_logs, student_action_logs
+    ).mean()
+    teacher_actions = teacher_action_logs.argmax(-1, keepdim=True)
+    teacher_action_nll = -student_action_logs.gather(-1, teacher_actions).mean()
     hidden_mse = F.mse_loss(student_h.float(), teacher_h.detach().float())
     feature_mse = F.mse_loss(
         student_embeddings.float(), teacher_embeddings.detach().float()
@@ -444,7 +454,10 @@ def _distillation_step(
                 .mean()
             ),
             "actor_argmax_agreement": float(
-                (teacher_actor.argmax(-1) == student_actor.argmax(-1))
+                (
+                    teacher_action_logs.argmax(-1)
+                    == student_action_logs.argmax(-1)
+                )
                 .float()
                 .mean()
             ),
@@ -466,7 +479,8 @@ def _validate(
     vendor: Any,
     teacher: nn.Module,
     student: nn.Module,
-    actor: nn.Module,
+    teacher_actor: nn.Module,
+    student_actor: nn.Module,
     cohort: TrajectoryCohort,
     *,
     task: int,
@@ -492,7 +506,8 @@ def _validate(
             vendor,
             teacher,
             student,
-            actor,
+            teacher_actor,
+            student_actor,
             actions,
             observations,
             resets,
@@ -540,6 +555,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-batches", type=int, default=8)
     parser.add_argument("--lora-learning-rate", type=float, default=3e-4)
     parser.add_argument("--adapter-learning-rate", type=float, default=1e-4)
+    parser.add_argument("--actor-learning-rate", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--gradient-clip", type=float, default=100.0)
     parser.add_argument("--train-seed", type=int, required=True)
@@ -550,6 +566,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--cpu-threads", type=int, default=12)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--freeze-adapter", action="store_true")
+    parser.add_argument("--freeze-actor", action="store_true")
     parser.add_argument("--skip-teacher-evaluation", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -576,6 +593,7 @@ def _validate_args(args: argparse.Namespace) -> None:
     for name in (
         "lora_learning_rate",
         "adapter_learning_rate",
+        "actor_learning_rate",
         "gradient_clip",
     ):
         if getattr(args, name) <= 0:
@@ -609,6 +627,11 @@ def main() -> None:
         raise FileExistsError(f"Refusing to overwrite {args.output_dir}")
     git = require_synced_training_git_state(ROOT)
     vendor = _vendor_modules()
+    protocol = (
+        "posthoc-shared-task1-encoder-rssm-lora-distillation-v1"
+        if args.freeze_actor
+        else "posthoc-shared-task1-encoder-rssm-lora-actor-distillation-v1"
+    )
     args.output_dir.mkdir(parents=True, exist_ok=False)
     _write_json_atomic(
         args.output_dir / "resolved_probe_config.json",
@@ -616,7 +639,7 @@ def main() -> None:
             "schema_version": 1,
             "artifact_kind": "cnn_fullbank_rssm_lora_distillation_config",
             "official_result": False,
-            "protocol": "posthoc-shared-task1-encoder-rssm-lora-distillation-v1",
+            "protocol": protocol,
             "project_git": git,
             **planned,
             "adapter_mode": "direct",
@@ -625,6 +648,7 @@ def main() -> None:
             "validation_transitions_enter_replay": False,
             "evaluation_transitions_enter_replay": False,
             "task_identity_available": True,
+            "actor_training": not args.freeze_actor,
             "claim_scope": "posthoc task-aware compression probe only",
         },
     )
@@ -661,12 +685,16 @@ def main() -> None:
     student = _build_world_model(torch, vendor, config, device)
     _load_exact(student, checkpoint["world_model_state_dict"], "Student world model")
     actor_bank = checkpoint["actor_critic_bank_state_dict"]["tasks"]
-    actor = _build_actor(
+    teacher_actor = _build_actor(
         vendor, teacher, config, actor_bank[str(args.target_task)]
+    )
+    student_actor = _build_actor(
+        vendor, student, config, actor_bank[str(args.target_task)]
     )
     teacher.requires_grad_(False).eval()
     student.requires_grad_(False).eval()
-    actor.requires_grad_(False).eval()
+    teacher_actor.requires_grad_(False).eval()
+    student_actor.requires_grad_(False).eval()
 
     adapter = _build_adapter(
         torch, adapter_payload["state_dict"], residual=False
@@ -684,6 +712,7 @@ def main() -> None:
         transition_rank=args.transition_rank,
     )
     adapter.requires_grad_(not args.freeze_adapter)
+    student_actor.actor.requires_grad_(not args.freeze_actor)
     lora_parameters = [
         parameter
         for module in (
@@ -697,6 +726,11 @@ def main() -> None:
     adapter_parameters = [
         parameter for parameter in adapter.parameters() if parameter.requires_grad
     ]
+    actor_parameters = [
+        parameter
+        for parameter in student_actor.actor.parameters()
+        if parameter.requires_grad
+    ]
     if sum(parameter.numel() for parameter in lora_parameters) != lora_report[
         "trainable_parameters"
     ]:
@@ -707,6 +741,10 @@ def main() -> None:
     if adapter_parameters:
         optimizer_groups.append(
             {"params": adapter_parameters, "lr": args.adapter_learning_rate}
+        )
+    if actor_parameters:
+        optimizer_groups.append(
+            {"params": actor_parameters, "lr": args.actor_learning_rate}
         )
     optimizer = torch.optim.AdamW(
         optimizer_groups, weight_decay=args.weight_decay
@@ -722,8 +760,13 @@ def main() -> None:
         "adapter_trainable_parameters": sum(
             parameter.numel() for parameter in adapter_parameters
         ),
-        "actor_critic_parameters": sum(parameter.numel() for parameter in actor.parameters()),
-        "actor_critic_trainable_parameters": 0,
+        "actor_critic_parameters": sum(
+            parameter.numel() for parameter in student_actor.parameters()
+        ),
+        "actor_trainable_parameters": sum(
+            parameter.numel() for parameter in actor_parameters
+        ),
+        "critic_trainable_parameters": 0,
         "lora_to_full_rssm_ratio": lora_report["trainable_parameters"]
         / full_route_parameters,
     }
@@ -734,7 +777,7 @@ def main() -> None:
         f"rssm_lora={lora_report['trainable_parameters']:,} "
         f"full_rssm={full_route_parameters:,} "
         f"adapter={accounting['adapter_trainable_parameters']:,} "
-        "actor=frozen-full-target"
+        f"actor_trainable={accounting['actor_trainable_parameters']:,}"
     )
 
     cohort_started = time.perf_counter()
@@ -742,7 +785,7 @@ def main() -> None:
         vendor,
         config,
         teacher,
-        actor,
+        teacher_actor,
         task=args.target_task,
         frames=args.train_frames,
         seed=args.train_seed,
@@ -751,7 +794,7 @@ def main() -> None:
         vendor,
         config,
         teacher,
-        actor,
+        teacher_actor,
         task=args.target_task,
         frames=args.validation_frames,
         seed=args.validation_seed,
@@ -778,7 +821,8 @@ def main() -> None:
                 vendor,
                 teacher,
                 student,
-                actor,
+                teacher_actor,
+                student_actor,
                 validation_cohort,
                 task=args.target_task,
                 sequence_length=args.sequence_length,
@@ -817,6 +861,7 @@ def main() -> None:
                         name: tensor.detach().cpu().clone()
                         for name, tensor in adapter.state_dict().items()
                     },
+                    "actor": _cpu_state_dict(student_actor.actor),
                 }
         if update == args.updates:
             break
@@ -833,7 +878,8 @@ def main() -> None:
             vendor,
             teacher,
             student,
-            actor,
+            teacher_actor,
+            student_actor,
             actions,
             observations,
             resets,
@@ -842,7 +888,8 @@ def main() -> None:
         )
         loss.backward()
         torch.nn.utils.clip_grad_norm_(
-            [*lora_parameters, *adapter_parameters], args.gradient_clip
+            [*lora_parameters, *adapter_parameters, *actor_parameters],
+            args.gradient_clip,
         )
         optimizer.step()
 
@@ -865,6 +912,7 @@ def main() -> None:
         "Transition LoRA",
     )
     adapter.load_state_dict(best_state["adapter"])
+    student_actor.actor.load_state_dict(best_state["actor"])
     _write_json_atomic(
         args.output_dir / "distillation_metrics.json",
         {
@@ -891,7 +939,7 @@ def main() -> None:
             "official_result": False,
             "resumable": False,
             "project_git": git,
-            "protocol": "posthoc-shared-task1-encoder-rssm-lora-distillation-v1",
+            "protocol": protocol,
             "source_checkpoint": str(args.checkpoint.resolve()),
             "source_checkpoint_sha256": _sha256(args.checkpoint),
             "source_adapter": str(args.adapter.resolve()),
@@ -910,7 +958,10 @@ def main() -> None:
                 "transition": best_state["transition"],
             },
             "adapter_state_dict": best_state["adapter"],
-            "actor_critic_state_dict": actor_bank[str(args.target_task)],
+            "actor_critic_state_dict": _cpu_state_dict(student_actor),
+            "actor_initialization": "complete target-task checkpoint actor",
+            "actor_trained": not args.freeze_actor,
+            "critic_trained": False,
             "best_update": best_update,
             "best_validation": best_metrics,
             "parameter_accounting": accounting,
@@ -947,17 +998,22 @@ def main() -> None:
             vendor,
             config,
             teacher,
-            actor,
+            teacher_actor,
             task=args.target_task,
             seed=args.heldout_seed,
             decisions=args.evaluation_decisions,
         )
-    evaluation["conditions"]["trained_lora_rssm_full_target_actor"] = _evaluate(
+    student_condition = (
+        "trained_lora_rssm_full_target_actor"
+        if args.freeze_actor
+        else "trained_lora_rssm_task_actor"
+    )
+    evaluation["conditions"][student_condition] = _evaluate(
         torch,
         vendor,
         config,
         student,
-        actor,
+        student_actor,
         task=args.target_task,
         seed=args.heldout_seed,
         decisions=args.evaluation_decisions,

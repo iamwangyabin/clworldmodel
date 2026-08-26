@@ -23,15 +23,18 @@ Run a separately named
 `posthoc-shared-task1-encoder-rssm-lora-distillation-v1` probe.  Freeze the
 Task 1 CNN encoder and base RSSM.  For each later task, retain one independent
 spatial projector, add zero-effect LoRA matrices to the base RSSM, store small
-bias and normalization deltas exactly, and retain that task's complete frozen
-actor-critic from the finished checkpoint.
+bias and normalization deltas exactly, and initialize one independent full
+actor per task from the finished checkpoint.  The actor is adapted jointly to
+the LoRA latent interface; its critic remains frozen and is not used for policy
+evaluation.
 
 Use rank 128 for the recurrent and representation blocks and rank 32 for the
 smaller transition block.  Optimize the projector and LoRA parameters only by
-functional distillation from the frozen native task route on a private
-deterministic-policy trajectory cohort.  Select weights on a disjoint
+functional distillation from the frozen native task route and actor on a
+private deterministic-policy trajectory cohort.  Select weights on a disjoint
 validation cohort and evaluate once on the held-out cohort.  No collected
-transition enters Replay.
+transition enters Replay.  Preserve the already-completed frozen-actor run as
+an explicit interface-mismatch ablation rather than overwriting it.
 
 ## Consequences
 

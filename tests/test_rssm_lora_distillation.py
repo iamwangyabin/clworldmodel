@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - minimal host environments omit torch.
 if torch is not None:
     from train_cnn_fullbank_rssm_lora_distill import (
         TrajectoryCohort,
+        _cpu_state_dict,
         _parameterize_affines,
     )
 
@@ -88,6 +89,15 @@ class RssmLoraDistillationTests(unittest.TestCase):
         self.assertTrue(torch.equal(values[1:] - values[:-1], torch.ones_like(values[1:])))
         for batch in range(values.shape[1]):
             self.assertTrue(bool((values[:, batch] < 10).all() or (values[:, batch] >= 100).all()))
+
+    def test_cpu_state_dict_is_detached_from_trainable_actor(self) -> None:
+        actor = nn.Linear(3, 2)
+        saved = _cpu_state_dict(actor)
+        with torch.no_grad():
+            actor.weight.add_(1)
+
+        self.assertEqual(saved["weight"].device.type, "cpu")
+        self.assertFalse(torch.equal(saved["weight"], actor.weight.cpu()))
 
 
 if __name__ == "__main__":
