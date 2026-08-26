@@ -426,7 +426,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--decisions", type=int, default=32768)
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
-        "--adapter-mode", choices=("residual", "direct"), default="residual"
+        "--adapter-mode", choices=("residual", "direct"), default="direct"
     )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
