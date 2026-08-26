@@ -862,6 +862,7 @@ class Config(Serialisable):
             "snapshot_adaptation",
             "task_isolated",
             "task_banked_shared_adapter",
+            "task1_frozen_projector_lora",
         }:
             raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
         if self.shared_core_mode == "task_isolated" and not (
@@ -877,6 +878,14 @@ class Config(Serialisable):
             raise ValueError(
                 "shared_core_mode='task_banked_shared_adapter' is reserved for "
                 "DINO-ConvBank-ARROW"
+            )
+        if (
+            self.shared_core_mode == "task1_frozen_projector_lora"
+            and not is_cnn_projector_lora
+        ):
+            raise ValueError(
+                "shared_core_mode='task1_frozen_projector_lora' is reserved for "
+                "CNN-Projector-LoRA-ARROW"
             )
         if self.residual_correction != "none" and not uses_dinov3:
             raise ValueError("KARROW residuals require the frozen DINOv3 protocol")
