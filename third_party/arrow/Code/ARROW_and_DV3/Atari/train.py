@@ -494,6 +494,32 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         for task_id in range(1, wm.rssm.num_task_experts)
         if wm.rssm.task_projected_image_encoder
     }
+    mechanism_banks = {}
+    mechanism_parameters_per_later_task = {}
+    if wm.rssm.task_mechanism_bank_enabled:
+        banks = {
+            "recurrent": wm.rssm.recurrent_mechanism_bank,
+            "representation": wm.rssm.representation_mechanism_bank,
+            "transition": wm.rssm.transition_mechanism_bank,
+        }
+        mechanism_banks = {
+            name: {
+                **bank.parameter_report(),
+                "route_values": {
+                    str(task_id): bank.route_values(task_id)
+                    for task_id in range(bank.num_tasks)
+                },
+            }
+            for name, bank in banks.items()
+        }
+        mechanism_parameters_per_later_task = {
+            str(task_id): sum(
+                report["mechanism_parameters_per_later_task"][task_id - 1]
+                + report["route_parameters_per_later_task"][task_id - 1]
+                for report in mechanism_banks.values()
+            )
+            for task_id in range(1, wm.rssm.num_task_experts)
+        }
     return {
         "schema_version": 1,
         "observation_objective": wm.observation_objective,
@@ -515,6 +541,14 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         ),
         "rssm_recurrent_output_adapter_features": (
             wm.rssm.task_recurrent_output_adapter_features
+        ),
+        "rssm_task_mechanism_bank_enabled": (
+            wm.rssm.task_mechanism_bank_enabled
+        ),
+        "rssm_task_mechanism_reuse": wm.rssm.task_mechanism_reuse,
+        "rssm_task_mechanism_banks": mechanism_banks,
+        "rssm_task_mechanism_parameters_per_later_task": (
+            mechanism_parameters_per_later_task
         ),
         "aggregate_observation_encoder_parameters": (
             sum(
@@ -1715,6 +1749,7 @@ if __name__ == "__main__":
         "cnn_fullbank_arrow",
         "cnn_projector_lora_arrow",
         "cnn_compact_shared_actor_arrow",
+        "cnn_mechanism_bank_arrow",
     }:
         if task_bank_snapshot_dir is None:
             raise ValueError(
@@ -1780,6 +1815,7 @@ if __name__ == "__main__":
         if config.continual_method not in {
             "cnn_projector_lora_arrow",
             "cnn_compact_shared_actor_arrow",
+            "cnn_mechanism_bank_arrow",
         }:
             raise ValueError(
                 "Task-1 boundary initialization requires "
@@ -1809,6 +1845,10 @@ if __name__ == "__main__":
     elif config.uses_shared_actor:
         raise ValueError(
             "CNN-Compact-SharedActor requires --init-task1-boundary-snapshot"
+        )
+    elif config.continual_method == "cnn_mechanism_bank_arrow":
+        raise ValueError(
+            "CNN-MechanismBank requires --init-task1-boundary-snapshot"
         )
     elif config.continual_method == "cnn_projector_lora_arrow":
         training_start_epoch = 0
@@ -1864,6 +1904,19 @@ if __name__ == "__main__":
             f"{config.task_lora_representation_rank}/"
             f"{config.task_lora_transition_rank} "
             "old_policy_retention=frozen_route_imagination "
+            f"current_fraction={config.dino_fullbank_current_task_fraction}"
+        )
+    elif config.continual_method == "cnn_mechanism_bank_arrow":
+        print(
+            "CNN-MechanismBank-ARROW routing: "
+            f"tasks={config.rssm_num_experts} actor_bank=per_task "
+            "base=task0_frozen_after_acquisition encoder=task0_plus_projector "
+            "rssm=shared_base_plus_residual_mechanisms actor_init=fresh "
+            f"widths={config.task_mechanism_recurrent_width}/"
+            f"{config.task_mechanism_representation_width}/"
+            f"{config.task_mechanism_transition_width} "
+            f"residual_scale={config.task_mechanism_residual_scale} "
+            f"reuse={config.task_mechanism_reuse} "
             f"current_fraction={config.dino_fullbank_current_task_fraction}"
         )
     elif config.continual_method == "dino_fullbank_arrow":
@@ -1995,6 +2048,14 @@ if __name__ == "__main__":
         task_recurrent_output_adapter_features=(
             config.task_recurrent_output_adapter_features
         ),
+        task_mechanism_bank=config.task_mechanism_bank,
+        task_mechanism_reuse=config.task_mechanism_reuse,
+        task_mechanism_recurrent_width=config.task_mechanism_recurrent_width,
+        task_mechanism_representation_width=(
+            config.task_mechanism_representation_width
+        ),
+        task_mechanism_transition_width=config.task_mechanism_transition_width,
+        task_mechanism_residual_scale=config.task_mechanism_residual_scale,
     ).to(device)
     resume_world_model_opened: list[str] = []
     resume_state_report: dict[str, dict[str, list[str]]] = {}
@@ -2052,6 +2113,7 @@ if __name__ == "__main__":
         "cnn_fullbank_arrow",
         "cnn_projector_lora_arrow",
         "cnn_compact_shared_actor_arrow",
+        "cnn_mechanism_bank_arrow",
         "dino_patchbank_arrow",
         "dino_convbank_arrow",
     } and (not distributed_context.enabled or distributed_context.is_primary):
@@ -2185,6 +2247,10 @@ if __name__ == "__main__":
             elif config.continual_method == "cnn_projector_lora_arrow":
                 actor_bank_artifact_kind = (
                     "cnn_projector_lora_arrow_actor_critic_bank_inference_state"
+                )
+            elif config.continual_method == "cnn_mechanism_bank_arrow":
+                actor_bank_artifact_kind = (
+                    "cnn_mechanism_bank_arrow_actor_critic_bank_inference_state"
                 )
             elif config.continual_method == "dino_patchbank_arrow":
                 actor_bank_artifact_kind = (
@@ -2757,6 +2823,8 @@ if __name__ == "__main__":
                         if config.continual_method == "cnn_projector_lora_arrow"
                         else f"CNNCompactSharedActor/world_model_updates_task_{task_id}"
                         if config.continual_method == "cnn_compact_shared_actor_arrow"
+                        else f"CNNMechanismBank/world_model_updates_task_{task_id}"
+                        if config.continual_method == "cnn_mechanism_bank_arrow"
                         else f"DINOPatchBankArrow/world_model_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
                         else f"DINOConvBankArrow/world_model_updates_task_{task_id}"
@@ -3054,6 +3122,8 @@ if __name__ == "__main__":
                         if config.continual_method == "cnn_fullbank_arrow"
                         else f"CNNProjectorLoraArrow/actor_critic_updates_task_{task_id}"
                         if config.continual_method == "cnn_projector_lora_arrow"
+                        else f"CNNMechanismBank/actor_critic_updates_task_{task_id}"
+                        if config.continual_method == "cnn_mechanism_bank_arrow"
                         else f"DINOPatchBankArrow/actor_critic_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
                         else f"DINOConvBankArrow/actor_critic_updates_task_{task_id}"
@@ -3196,6 +3266,19 @@ if __name__ == "__main__":
                 torch.save(
                     actor_critic_bank.inference_state_dict(),
                     log_dir / "save_ac_bank.pt",
+                )
+            if wm.rssm.task_mechanism_bank_enabled:
+                final_accounting_path = log_dir / "model_parameter_accounting.json"
+                temporary_final_accounting_path = final_accounting_path.with_suffix(
+                    ".json.tmp"
+                )
+                temporary_final_accounting_path.write_text(
+                    json.dumps(_world_model_parameter_accounting(wm), indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(
+                    temporary_final_accounting_path,
+                    final_accounting_path,
                 )
 
         boundary_snapshot_metadata = (

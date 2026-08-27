@@ -20,6 +20,11 @@ contains experiment-facing code.
   RSSM adaptation with smaller representation/prior LoRA, GRU-output-only
   correction, and one shared Actor protected by frozen-route imagination
   distillation.
+- `run_cnn_mechanism_bank_incremental.py`: Task-1-snapshot-seeded MB-RSSM with
+  one frozen CNN/base RSSM, per-task spatial projectors and nonlinear recurrent,
+  posterior, and prior mechanisms, optional zero-initialized reuse of frozen old
+  mechanisms, private world-model heads, and independent Actor-Critics. The
+  `no-reuse` mode is the capacity-matched routing ablation.
 - `run_moe_arrow_atari.py`: task-aware MoE, CNN-FullBank, DINO-FullBank, DINO-PatchBank, and DINO-ConvBank launchers.
 - `verify_arrow_environment.py`: pinned dependency, CUDA, and Atari registration check.
 

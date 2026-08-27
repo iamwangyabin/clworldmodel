@@ -331,6 +331,23 @@ documented here, covered by focused parity tests, and followed by regenerating
     RSSM adapter parameters per later task, a 73.8 percent reduction. Focused
     tests cover exact profile selection, config isolation, and rejection of
     unnamed rank tuples.
+42. Add the separately named, task-aware
+    `CNN-MechanismBank-RSSM-ARROW-v1-Task1SnapshotSeeded` path. It retains one
+    frozen Task-1 CNN and base recurrent/posterior/prior RSSM, then applies
+    project-owned zero-output nonlinear residual mechanisms at the recurrent
+    state and raw posterior/prior logits. Every later task owns one full new
+    mechanism in each location. Independent zero-initialized tanh gates may add
+    or subtract frozen older mechanisms without scaling the new mechanism; the
+    capacity-matched NoReuse ablation stores the same route tensors but freezes
+    them at zero. Spatial projectors, decoder/reward/continue heads, and
+    Actor-Critics remain task-private, with fresh Actors and previous-task head
+    initialization. The original Dreamer losses, current-task ARROW Replay,
+    budgets, and default methods remain unchanged. Precomputed observation
+    features now retain their task id when entering a task projector, fixing a
+    latent routing error exposed by the new path. Focused parity and method tests
+    cover exact zero effect, one-time normalization of composed logits, strict
+    configuration isolation, gradient allowlists, frozen old tensors, nonzero
+    zero-gate gradients, parameter accounting, and launcher semantics.
 
 ## Known issues at import
 

@@ -148,6 +148,12 @@ class WorldModel(nn.Module):
         task_lora_representation_rank: int = 0,
         task_lora_transition_rank: int = 0,
         task_recurrent_output_adapter_features: int = 0,
+        task_mechanism_bank: bool = False,
+        task_mechanism_reuse: bool = True,
+        task_mechanism_recurrent_width: int = 512,
+        task_mechanism_representation_width: int = 512,
+        task_mechanism_transition_width: int = 256,
+        task_mechanism_residual_scale: float = 0.1,
         image_embedder: Optional[nn.Module] = None,
         compute_dtype: str = "float32",
     ) -> None:
@@ -233,6 +239,14 @@ class WorldModel(nn.Module):
             task_recurrent_output_adapter_features=(
                 task_recurrent_output_adapter_features
             ),
+            task_mechanism_bank=task_mechanism_bank,
+            task_mechanism_reuse=task_mechanism_reuse,
+            task_mechanism_recurrent_width=task_mechanism_recurrent_width,
+            task_mechanism_representation_width=(
+                task_mechanism_representation_width
+            ),
+            task_mechanism_transition_width=task_mechanism_transition_width,
+            task_mechanism_residual_scale=task_mechanism_residual_scale,
             residual_correction=residual_correction,
             residual_bottleneck_features=residual_bottleneck_features,
             residual_grid_size=residual_grid_size,
@@ -516,7 +530,16 @@ class WorldModel(nn.Module):
         self.rssm.observation_adapter.requires_grad_(
             self.rssm.observation_adapter_kind != "none"
         )
-        if (
+        if self.rssm.task_mechanism_bank_enabled:
+            base_is_active = task_index == 0
+            self.rssm.recurrent.requires_grad_(base_is_active)
+            self.rssm.representation.requires_grad_(base_is_active)
+            self.rssm.transition.requires_grad_(base_is_active)
+            self.zh_transform.requires_grad_(base_is_active)
+            self.rssm.recurrent_mechanism_bank.activate_task(task_index)
+            self.rssm.representation_mechanism_bank.activate_task(task_index)
+            self.rssm.transition_mechanism_bank.activate_task(task_index)
+        elif (
             self.rssm.task_lora_enabled
             or self.rssm.task_recurrent_output_adapter_enabled
         ):
@@ -695,7 +718,7 @@ class WorldModel(nn.Module):
                 )
             if observation_features is not None:
                 embeddings = self.rssm.adapt_observation_embeddings(
-                    observation_features.detach()
+                    observation_features.detach(), task_id=task_id
                 )
             else:
                 embeddings = raw_or_adapted
