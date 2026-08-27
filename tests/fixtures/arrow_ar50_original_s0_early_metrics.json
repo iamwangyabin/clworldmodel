@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "run_id": "arrow_ar50_original_s0_analysis",
+    "project_git_commit": "d812d54049ddc1c289a0dd951c015940094b2ab5",
+    "upstream_arrow_commit": "cb05e7d97ed83c3cf6e528960db0da6868e29232",
+    "event_file_sha256": "8538732307542c10822bd4414ba7ffefd7ba3b361b971d3323dac128e527d5f7",
+    "device_count": 1,
+    "compute_dtype": "float32",
+    "replay_observation_dtype": "float32"
+  },
+  "comparison_class": "diagnostic_non_parity_early_training_reference",
+  "interpretation": "The current CNN-FullBank run uses BF16, uint8 mmap replay, DDP4, and an x4 sampled-frame batch, while this reference used FP32, float32 GPU replay, one device, and the original global batch. The guard detects order-of-magnitude numerical failure; it is not a pure DDP or sample-matched parity claim.",
+  "guard": {
+    "start_step": 1000,
+    "end_step": 5000,
+    "required_aligned_points": 3,
+    "metric_rules": {
+      "Loss/cont": {
+        "reference_floor": 0.001,
+        "median_ratio_min": 0.05,
+        "median_ratio_max": 10.0
+      },
+      "Loss/recon": {
+        "reference_floor": 0.001,
+        "median_ratio_min": 0.2,
+        "median_ratio_max": 5.0
+      },
+      "Loss/kl": {
+        "reference_floor": 0.001,
+        "median_ratio_min": 0.2,
+        "median_ratio_max": 5.0
+      },
+      "Metric/grad_norm": {
+        "reference_floor": 0.001,
+        "median_ratio_min": 0.1,
+        "median_ratio_max": 5.0
+      }
+    }
+  },
+  "metrics": {
+    "Loss/cont": [
+      {"step": 0, "value": 0.7049484252929688},
+      {"step": 1000, "value": 0.01175408810377121},
+      {"step": 2000, "value": 0.0008965283632278442},
+      {"step": 3000, "value": 0.0022271298803389072},
+      {"step": 4000, "value": 0.021883545443415642},
+      {"step": 5000, "value": 0.00007017693133093417}
+    ],
+    "Loss/recon": [
+      {"step": 0, "value": 7782.75},
+      {"step": 1000, "value": 13.53632640838623},
+      {"step": 2000, "value": 12.782432556152344},
+      {"step": 3000, "value": 12.524212837219238},
+      {"step": 4000, "value": 11.435920715332031},
+      {"step": 5000, "value": 10.97337818145752}
+    ],
+    "Loss/kl": [
+      {"step": 0, "value": 2.973666191101074},
+      {"step": 1000, "value": 1.7732268571853638},
+      {"step": 2000, "value": 1.6211037635803223},
+      {"step": 3000, "value": 1.500582218170166},
+      {"step": 4000, "value": 1.6783859729766846},
+      {"step": 5000, "value": 2.1140708923339844}
+    ],
+    "Loss/rew": [
+      {"step": 0, "value": 0.09536416828632355},
+      {"step": 1000, "value": 0.007132245227694511},
+      {"step": 2000, "value": 0.006281455047428608},
+      {"step": 3000, "value": 0.007580053526908159},
+      {"step": 4000, "value": 0.007049337960779667},
+      {"step": 5000, "value": 0.01896141655743122}
+    ],
+    "Metric/grad_norm": [
+      {"step": 0, "value": 20633.46484375},
+      {"step": 1000, "value": 139.50900268554688},
+      {"step": 2000, "value": 100.69124603271484},
+      {"step": 3000, "value": 87.3387680053711},
+      {"step": 4000, "value": 72.42066192626953},
+      {"step": 5000, "value": 58.69042205810547}
+    ],
+    "Perf/approx_perf": [
+      {"step": 1000, "value": 2.43501877784729},
+      {"step": 2000, "value": 6.769373893737793},
+      {"step": 3000, "value": 3.872230052947998},
+      {"step": 4000, "value": 6.403499126434326},
+      {"step": 5000, "value": 3.3907415866851807}
+    ]
+  }
+}

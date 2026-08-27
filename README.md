@@ -22,6 +22,21 @@ ablations at different stages of evidence:
   single-task acquisition check rather than a retention result;
 - the implementation-ready native `R2Dreamer-ARROW-50` route, which uses the
   upstream R2-Dreamer size12M model and optimizer with ARROW-50 replay;
+- the completed negative `KARROW-FrozenCore-v1` two-task pilot and the
+  implementation-ready spatial-patch posterior correction in v2;
+- the experimental `KARROW-ReplayConsolidated-v3` incremental KAN path and its
+  fixed-checkpoint DINO/RSSM task-region audit;
+- the implementation-ready `KARROW-InputAligned-v4` path, whose KAN or matched
+  MLP branches consume each corrected module's original input;
+- the completed negative task-aware `MoE-ARROW-v1` two-task pilot, preserved as
+  a failed acquisition result;
+- the implementation-ready `DINO-FullBank-ARROW-v2` correction with complete
+  per-task world models and Actor-Critics;
+- the stopped negative/inconclusive `DINO-PatchBank-ARROW-v3` Task-1 pilot and
+  the implementation-ready `DINO-ConvBank-ARROW-v4` lightweight posterior
+  interface;
+- the implementation-ready `CNN-FullBank-ARROW-v1` task-aware method, which
+  restores the original CNN and banks the complete world model per task;
 - the exact GPU/container environment;
 - protocol, provenance, and runtime-optimization records.
 
@@ -145,6 +160,337 @@ Run `--smoke` first on a target GPU. The adapter adds a byte-accounted CPU
 posterior-state sidecar, so future comparisons must report both trajectory
 capacity and actual storage bytes. See `docs/protocols/r2dreamer_arrow_atari.md`
 for the frozen native-R2 configuration and scope labels.
+
+## New method: KARROW-FrozenCore-v1
+
+`KARROW-FrozenCore-50` freezes a local DINOv3 ViT-S/16 encoder, replaces pixel
+reconstruction with one-step frozen-feature prediction, and trains the standard
+ARROW core jointly with small zero-initialized residual adapters on task 1. At
+the first task boundary, the shared RSSM, latent transition, reward/continue
+heads, and actor-critic MLPs are frozen. Only one fixed set of residual adapters
+continues learning. The KAN arm uses fixed-grid local corrections; its control
+swaps each KAN core for an exactly parameter-matched MLP core.
+
+The launcher supports `dino`, `mlp`, and `kan` arms and never downloads model
+weights during training:
+
+```bash
+python -m pip install -e '.[dinov3]'
+export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
+python scripts/run_karrow_ar50_atari.py \
+  --variant kan \
+  --task-prefix-length 2 \
+  --seed 0 \
+  --dry-run
+```
+
+The completed seed-0 two-task pilot is a negative diagnostic: its CLS cosine
+target admitted an almost constant solution and Task 1 acquisition was weak.
+Its equations and claim limits remain frozen in
+`docs/protocols/karrow_v1_atari.md`.
+
+## Corrected visual path: KARROW-SpatialFrozenCore-v2
+
+V2 excludes CLS and register tokens, pools the final DINOv3 patch grid to
+`4 x 4`. Before the first world-model update, it fits a 384-to-64 PCA channel
+projection on 512 uniformly sampled frames from the initial random Task-1
+collection, then freezes that projection permanently. The RSSM posterior
+reconstructs the resulting 1,024 frozen spatial features. Batch-standardized
+SmoothL1 makes a constant feature prediction an explicit nonzero baseline. The
+original Dreamer KL trains the prior; v2 does not reuse the collapsed prior-only
+cosine target.
+
+The shared KARROW launcher keeps v1 as its default. Select v2 explicitly for
+the new acquisition screen:
+
+```bash
+python scripts/run_karrow_ar50_atari.py \
+  --visual-version v2 \
+  --variant dino \
+  --task-prefix-length 1 \
+  --seed 0 \
+  --dry-run
+```
+
+The float16 spatial sidecar occupies `1,073,741,824` bytes, so a target-GPU
+memory smoke is required before training. See
+`docs/protocols/karrow_spatial_v2_atari.md`.
+
+## Incremental method: KARROW-ReplayConsolidated-v3
+
+V3 keeps the v2 visual path, but turns the residual KAN into an explicit
+continual-learning mechanism. Before each new task, it estimates the functional
+importance of every Gaussian RBF coefficient from unchanged ARROW replay and
+short deterministic imagination. Task-1 coordinate maps are frozen; important
+coefficients receive smaller future gradients and an anchor penalty, while cold
+coefficients remain plastic. Inference still uses one shared fixed-capacity KAN
+with no task ID or router.
+
+```bash
+python scripts/run_karrow_ar50_atari.py \
+  --visual-version v3 \
+  --variant kan \
+  --task-prefix-length 2 \
+  --seed 0 \
+  --dry-run
+```
+
+The offline latent audit evaluates all games at one fixed checkpoint and
+reports held-out task decodability, normalized region separation, PCA
+artifacts, and per-module RBF support overlap. See
+`docs/protocols/karrow_replay_consolidated_v3_atari.md` for the equations,
+collection command, and claim limits.
+
+## Input-aligned method: KARROW-InputAligned-v4
+
+V4 fixes a plasticity problem in the earlier residual topology. The dynamics,
+posterior, prior, actor, and critic corrections no longer consume only the
+output of a frozen base trunk. Each correction is a parallel function of the
+same state variables as its base module and directly predicts that module's
+output residual. Reward, continuation, and feature prediction already followed
+this pattern through the full `[z,h]` model state.
+
+Task 1 includes both the original ARROW base and the residual branches in
+optimization. Every residual output projection starts at zero and its scale is
+`0.1`, so initialization is exactly the base model and the original path keeps
+a direct learning signal. Residual construction also preserves the matched
+base initialization and global training RNG state. At the first task boundary,
+the base is frozen and the same fixed-capacity residuals continue learning. V4
+adds no router, task ID, adapter expansion, or replay consolidation.
+
+```bash
+python scripts/run_karrow_ar50_atari.py \
+  --visual-version v4 \
+  --variant kan \
+  --task-prefix-length 2 \
+  --seed 0 \
+  --dry-run
+```
+
+This is an untrained experimental protocol, not a performance claim. Its exact
+topology and matched controls are defined in
+`docs/protocols/karrow_input_aligned_v4_atari.md`.
+
+## Task-aware method: MoE-ARROW-v1
+
+`MoE-ARROW-50` replaces the fixed KAN capacity with one routed recurrent
+dynamics, latent prior, reward/continue head, and Actor-Critic per scheduled
+game. DINOv3 spatial features, the posterior representation, and feature head
+remain shared. ARROW stores task labels and supplies task-homogeneous replay;
+half of each fixed update budget targets the current game and half rehearses
+replay-available old games. No extra gradient or environment steps are added.
+
+The visual target uses a seeded fixed orthogonal 384-to-64 patch projection, so
+it keeps the `4 x 4 x 64` spatial target without fitting anything on Task 1.
+This protocol explicitly exposes scheduler task identity and spends parameters
+per task. It is therefore a task-aware upper bound, not a direct replacement
+for task-agnostic ARROW-50.
+
+```bash
+export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
+python scripts/run_moe_arrow_atari.py \
+  --seed 0 \
+  --task-prefix-length 2 \
+  --dry-run
+```
+
+The completed seed-0 two-task pilot was negative: final deterministic raw
+returns were 700.0 on MsPacman and 9.4375 on Boxing. Its prior cosine feature
+loss collapsed while KL reached the free-bits floor, and Task 1 itself remained
+weak. See
+`docs/protocols/moe_arrow_v1_atari.md` for routing equations, fixed budgets,
+storage accounting, the pilot record, and claim limits.
+
+## CNN task bank: CNN-FullBank-ARROW-v1
+
+`CNN-FullBank-ARROW-50` restores the original DreamerV3 CNN and pixel
+reconstruction path. Every scheduled task owns its CNN encoder, posterior,
+recurrent dynamics, latent prior, decoder, reward/continue heads, and an
+independent MLP Actor-Critic. A new task copies the previous complete world
+model once, starts a fresh Actor-Critic, and then freezes every old route.
+
+Every completed task is preserved under `task_boundary_snapshots/` before the
+scheduler advances. Each immutable, checksummed artifact contains the full
+world-model bank, full Actor-Critic bank, counters, resolved config, and exact
+Git commit. These snapshots support inference and forgetting audits but are not
+resumable training checkpoints because replay, optimizers, RNG, and schedule
+state are intentionally absent.
+
+The named runtime profile uses BF16 autocast, uint8 file-backed replay, and a
+fixed global batch on one, two, or four GPUs. It does not require DINO:
+
+```bash
+python scripts/run_moe_arrow_atari.py \
+  --method cnn-fullbank \
+  --devices 4 \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+```
+
+This is a task-aware upper bound. Its first acquisition gate is a final
+90-epoch MsPacman raw mean of at least 2,000, not an intermediate peak. See
+`docs/protocols/cnn_fullbank_arrow_v1_atari.md` for complete routing, storage,
+precision, DDP, and evaluation semantics.
+
+The separate `six-parallel-independent-single-gpu-experts-v1` pilot trains one
+fresh expert per game across a GPU pool and records each component's eventual
+bank slot. It is an acquisition and systems pilot, not sequential continual
+learning: it cannot measure transfer, retention, or forgetting, and its
+180-epoch children are not matched-budget ARROW controls.
+
+## Corrected task-aware method: DINO-FullBank-ARROW-v2
+
+`DINO-FullBank-ARROW-50` keeps frozen DINOv3 but removes the remaining shared
+trainable bottlenecks. Every task owns its posterior representation, recurrent
+dynamics, latent prior, posterior feature head, reward/continue heads, and a
+fresh independent MLP Actor-Critic. Task 1 activates only expert 0. At a later
+boundary the complete previous world-model expert is copied once, all old
+parameters are frozen, and every fixed update goes to the current task.
+
+The observation target is the current stopped `4 x 4 x 64` DINO patch feature.
+It is reconstructed from the current posterior with batch-standardized
+SmoothL1, including first and reset observations. This directly grounds the
+posterior and logs a constant-prediction baseline instead of relying on the
+failed prior cosine objective. The first collection on each new task is random;
+the new Actor-Critic does not inherit the preceding game's policy.
+
+```bash
+export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
+python scripts/run_moe_arrow_atari.py \
+  --method dino-fullbank \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+```
+
+This is a task-aware, storage-expanding reference and is currently untrained.
+Its first gate is MsPacman acquisition, not continual retention. See
+`docs/protocols/dino_fullbank_arrow_v2_atari.md` for the exact routing,
+resource accounting, and execution order.
+
+## Full-patch method: DINO-PatchBank-ARROW-v3
+
+`DINO-PatchBank-ARROW-50` removes the fixed `4 x 4 x 64` visual bottleneck.
+The frozen DINOv3 ViT-S/16 supplies every `16 x 16 x 384` patch coordinate to
+the task-routed DreamerV3 posterior, and the original 64-pixel reconstruction
+decoder is restored. There is no spatial pooling, channel projection, or DINO
+feature-prediction head. RSSM dynamics, reward/continue prediction, latent
+imagination, and MLP Actor-Critic training retain their existing algorithms.
+
+Replay retains only ARROW's unchanged float32 observations. Each sampled batch
+recomputes frozen DINO patches on the accelerator, rounds them through float16
+to preserve the fixed feature interface, and feeds them to the RSSM. There is
+no persistent feature sidecar. The observations use run-local file-backed mmap
+tensors because the target container cannot hold ARROW's 24-GiB image replay
+plus model working memory anonymously.
+
+```bash
+export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
+python scripts/run_moe_arrow_atari.py \
+  --method dino-patchbank \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+```
+
+See `docs/protocols/dino_patchbank_arrow_v3_atari.md` for the fixed protocol,
+paper-derived motivation, stopped seed-0 pilot, and claim limits. That pilot
+reached a raw MsPacman return of `511.25 +/- 123.89` at epoch 10 and was stopped
+after epoch 14 rather than being presented as a completed seed result.
+
+## Lightweight full-patch method: DINO-ConvBank-ARROW-v4
+
+`DINO-ConvBank-ARROW-50` keeps V3's frozen complete `16 x 16 x 384` DINO grid
+and original Dreamer pixel/KL/reward objectives, but replaces the direct
+98,304-coordinate posterior input with one shared learned adapter:
+
+```text
+Conv2d(384,64,kernel=3,stride=2,padding=1)
+  -> ChannelLayerNorm
+  -> SiLU
+  -> 8 x 8 x 64
+  -> flatten 4096
+```
+
+The adapter has 221,376 parameters and is shared across task routes. Each task
+still owns its posterior, recurrent dynamics, prior, decoder, reward/continue
+heads, and Actor-Critic. Under the fixed Atari RSSM shape, the posterior drops
+from 151,784,960 parameters per task in V3 to 7,081,472 in V4. Sharing the
+trainable adapter is intentionally not strict task isolation; later tasks can
+move the visual coordinates consumed by frozen old experts, so retention must
+be measured rather than assumed.
+
+```bash
+export DINOV3_MODEL_PATH=/absolute/path/to/dinov3-vits16-pretrain-lvd1689m
+python scripts/run_moe_arrow_atari.py \
+  --method dino-convbank \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+```
+
+The same fixed protocol can use native PyTorch DDP on two or four local CUDA
+devices:
+
+```bash
+python scripts/run_moe_arrow_atari.py \
+  --method dino-convbank \
+  --devices 2 \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+
+python scripts/run_moe_arrow_atari.py \
+  --method dino-convbank \
+  --devices 4 \
+  --seed 0 \
+  --task-prefix-length 1 \
+  --dry-run
+```
+
+The global world-model batch remains `T=32, N=16` and the global Actor-Critic
+context remains `T=4, N=128`. Their local sequence counts are `8/64` on two
+GPUs and `4/32` on four GPUs. Rank 0 makes the single global ARROW replay draw
+and scatters its sequence axis; all ranks run DINO and model training locally,
+then DDP averages gradients. Collection stays on rank 0, while evaluation tasks
+are partitioned across ranks. Each GPU must still fit a complete model and
+optimizer replica, and actual scaling must be measured rather than assumed.
+
+The method selects and requires the `bf16-amp` profile; the explicit flag is
+optional, while requesting `fp32-tf32` is rejected. It uses BF16 autocast,
+keeps parameters and Adam state in FP32, retains sensitive
+probability and target math in FP32, batches all 512 sampled frames into one
+DINO execution chunk, and avoids the old feature dtype round trip. Its replay
+stores the original `64 x 64` discrete pixels as uint8 mmap tensors, reducing
+observation storage from 24 GiB to 6 GiB, then restores float32 `[0,1]` values
+on the training device. Explicit FP32 execution is rejected. These execution
+and storage changes do not alter the optimization batch, interaction budget,
+update count, FIFO/LTDM capacity, or sampling decisions.
+
+This protocol remains experimental and has no validated multi-seed result. See
+`docs/protocols/dino_convbank_arrow_v4_atari.md` for the exact gradient path,
+resource accounting, routing semantics, and acquisition gates.
+
+## Task-2 snapshot acquisition diagnostic
+
+The Task-2 snapshot protocol starts from the completed Task-1 analysis
+snapshot and runs Boxing alone for the matched 90-epoch budget. The primary
+`kan_only` arm freezes the original shared core but leaves the complete KAN
+residual modules plastic. The `kan_plus_heads` arm additionally opens only
+small latent and behavior readouts. Replay, optimizer, RNG, and schedule state
+are reset, so this is a trainability diagnostic rather than a resumable
+continual run:
+
+```bash
+python scripts/run_karrow_task2_from_snapshot.py \
+  --snapshot /path/to/boundary_01_task_00_epoch_0089.pt \
+  --adaptation-mode kan_only \
+  --dry-run
+```
+
+See `docs/protocols/karrow_task2_snapshot_acquisition_atari.md` for the
+adaptation arms and reporting contract.
 
 ## Actor ablation: ARROW-KANActor-50
 

@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "cnn_fullbank_task1_acquisition_gate_evidence",
+  "run_id": "cnn_fullbank_arrow_v1_mspacman_t090_single_gpu_x4_double_sample_linear_lr_fixed_eval_fp32cont_bf16_uint8_seed0_speed_accuracy_pilot_v1_20260825_run1",
+  "project_git_commit": "e90c1801f25e0c33f30a96d913972a64cc404eee",
+  "branch": "codex/karrow",
+  "git_clean_and_synced_at_launch": true,
+  "run_complete": true,
+  "return_code": 0,
+  "finished_at_utc": "2026-08-25T10:31:58.528579+00:00",
+  "task": "ALE/MsPacman-v5",
+  "completed_epochs": 90,
+  "profile": {
+    "name": "single-gpu-x4-double-sample-linear-lr",
+    "classification": "single_gpu_extra_sample_large_batch_ablation",
+    "world_model_batch_sequences": 64,
+    "world_model_updates_per_epoch": 500,
+    "actor_context_sequences": 512,
+    "actor_critic_updates_per_epoch": 400,
+    "world_model_learning_rate": 0.0002,
+    "actor_critic_learning_rate": 0.0002,
+    "world_model_update_multiplier": 0.5,
+    "actor_critic_update_multiplier": 0.5,
+    "world_model_sampled_frame_use_multiplier": 2.0,
+    "actor_context_frame_use_multiplier": 2.0,
+    "compute_dtype": "bfloat16_autocast_with_float32_sensitive_paths"
+  },
+  "final_evaluation": {
+    "cohort": "heldout_final",
+    "periodic_validation_cohort_used": false,
+    "policy": "deterministic_argmax_and_latent_mode",
+    "rollouts": 16,
+    "raw_return_mean": 2595.625,
+    "raw_return_std": 491.7820750850929,
+    "mean_95_percent_t_interval": [
+      2333.5728298864146,
+      2857.6771701135854
+    ],
+    "threshold": 2000.0,
+    "operator": ">",
+    "passed": true
+  },
+  "fixed_periodic_validation": {
+    "best_completed_epochs": 80,
+    "best_raw_return_mean": 3684.375,
+    "best_raw_return_std": 1111.1816275366507,
+    "final_evaluation_data_used_for_selection": false
+  },
+  "arrow_alignment": {
+    "reference_matrix": "arrow_ar50_original_s0_reference_matrix_v1.json",
+    "original_arrow_task_completion_raw_return_mean": 1665.625,
+    "original_arrow_task_completion_raw_return_std": 383.4378820291495,
+    "candidate_delta": 930.0,
+    "candidate_taskwise_normalized_ratio": 1.5583489681050657,
+    "strict_evaluator_parity": false,
+    "reason": "The candidate uses BF16, uint8 mmap Replay, half as many Adam updates, and twice the optimization sample use. It passes the Task 1 gate for progression to a named two-task sequential pilot, not a fair superiority claim."
+  },
+  "speed": {
+    "non_evaluation_epoch_count": 81,
+    "non_evaluation_epoch_total_seconds_median": 96.004,
+    "non_evaluation_epoch_world_model_seconds_median": 54.984,
+    "non_evaluation_epoch_actor_seconds_median": 25.088,
+    "recorded_stage_total_seconds": 9075.671,
+    "peak_cuda_allocated_gib": 3.89,
+    "peak_cuda_reserved_gib": 4.36
+  },
+  "artifacts": {
+    "launch_manifest_sha256": "0cdbfc37a35f899abab3c99dc96668ef9f7b528e837ef174d1b3089db651bcac",
+    "resolved_config_sha256": "44fe5dcbfdee38646d02aa4eab6661bd0beccf70dc11246b885345381802f361",
+    "evaluation_seed_manifest_sha256": "5abd59223d399706d3aae275a0cd71c866079a7cf03b585ef2e2d4aa44211adc",
+    "final_evaluation_json_sha256": "e9962591e69838b16deef62d0dc845eb8d6edf6101fefa9db5bf21137a0250ea",
+    "run_status_json_sha256": "7c2dc4648c64f15ce4746d902f5c351783621f9742d1055e9c5f313bf22b1a8b",
+    "best_validation_index_sha256": "09ca2a0da4d436e31f7a524f051cafa4bf4032861fe7603b159e9ca2f6af3d62",
+    "best_validation_snapshot_sha256": "e8154b99703db92caeeb536c0432654d2718db62cdb2e8118e2f5814c0dbe533",
+    "task_boundary_index_sha256": "7a0ee4409d9f1b3cbf78b6604930fde75efd0364595cf703ed86645da6c3b858",
+    "task_boundary_snapshot_sha256": "e3fef571948008f9b0514df787f6ef86c5e90ea760bf3bfaf8e7224952eb34d6",
+    "heldout_snapshot_sha256": "e5353f25fa470765c09577a682e96e82273a05f3edea5417c46d6fea9338c586",
+    "save_wm_sha256": "25ac6a8d2004221f883299da7ff2b04e06152fb50bbc9c8bcf5aca2c446125dd",
+    "save_ac_sha256": "6b0494dd672c632c92ee3302bbdd71e8cd0426f0dcd86333c8f3daf441e1598d",
+    "save_ac_bank_sha256": "23cea5faeed5cd6dbb0ca144674d048c0a333aa544ab9e773b005ece59736175"
+  },
+  "snapshot_semantics": {
+    "inference_only": true,
+    "resumable": false,
+    "omitted_state": [
+      "optimizers",
+      "replay",
+      "RNG",
+      "environment schedule",
+      "step schedulers"
+    ]
+  }
+}

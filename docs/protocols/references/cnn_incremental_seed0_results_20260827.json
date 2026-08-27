@@ -1,0 +1,407 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "cnn_incremental_seed0_result_evidence",
+  "recorded_at_utc": "2026-08-27T13:01:37Z",
+  "repository_publication": {
+    "checkpoints_or_weights_committed": false,
+    "result_content_committed": [
+      "final heldout raw-return summaries",
+      "run completion and Git provenance",
+      "interaction and update budgets",
+      "parameter accounting",
+      "SHA256 checksums for source result JSON files"
+    ],
+    "excluded_from_repository": [
+      "model and Actor-Critic weight files",
+      "training checkpoints and inference snapshots",
+      "Replay mmap storage",
+      "TensorBoard event files",
+      "full training logs"
+    ]
+  },
+  "evaluation_semantics": {
+    "seed": 0,
+    "cohort": "heldout_final",
+    "periodic_validation_cohort_used": false,
+    "policy": "deterministic_argmax_and_latent_mode",
+    "rollouts_per_task": 16,
+    "reported_return": "raw environment return",
+    "task_identity_exposed_to_agent": true,
+    "evaluation_transitions_enter_replay": false
+  },
+  "claim_boundary": {
+    "classification": "single-seed pilot and smoke evidence",
+    "task_agnostic_claim_allowed": false,
+    "fair_superiority_claim_allowed": false,
+    "notes": [
+      "The FullBank pilot uses half the original ARROW optimizer updates and twice the sampled-frame use per task.",
+      "The snapshot-seeded methods restart Replay, optimizers, RNG, and schedule state at Boxing and are not equivalent resumes.",
+      "The two high-capacity LoRA runs use different Task-1 source snapshots, so their raw returns must not be treated as a controlled seed comparison.",
+      "The compact independent-Actor result is a two-epoch target-GPU smoke only."
+    ]
+  },
+  "runs": [
+    {
+      "result_id": "fullbank_three_task_pilot",
+      "run_id": "cnn_fullbank_arrow_v1_three_task_t270_single_gpu_x4_double_sample_linear_lr_sequential_first3_only_fixed_eval_fp32cont_bf16_uint8_seed0_cpu12_sequential_continual_pilot_v1_20260826_run1",
+      "classification": "single_seed_three_task_sequential_extra_sample_pilot",
+      "protocol": "CNN-FullBank-ARROW-v1-BF16AMP-Uint8Replay-SingleGPULargeBatchX4DoubleSampleLinearLR-FixedEvalAudit-ThreeTaskSingleGPUX4DoubleSamplePilotV1-Atari-TaskAware",
+      "project_git": {
+        "commit": "bcfd89abba16ae9d9f17a339b22c9d5a99883519",
+        "upstream": "origin/codex/karrow",
+        "dirty": false,
+        "ahead": 0,
+        "behind": 0
+      },
+      "started_at_utc": "2026-08-25T17:21:07.618980+00:00",
+      "finished_at_utc": "2026-08-26T01:00:42.173879+00:00",
+      "complete": true,
+      "return_code": 0,
+      "training_budget": {
+        "completed_epochs": 270,
+        "task_count": 3,
+        "raw_environment_frames": 17694720,
+        "world_model_updates": 135000,
+        "actor_critic_updates": 108000,
+        "world_model_sampled_frame_uses": 276480000,
+        "actor_context_frame_uses": 221184000
+      },
+      "parameter_accounting": {
+        "world_model_parameters": 58496559,
+        "actor_critic_topology": "per_task_actor_critic_bank",
+        "actor_critic_parameters": 5147955,
+        "aggregate_model_plus_actor_critic_parameters": 63644514,
+        "per_task_observation_encoder_parameters": 691104,
+        "aggregate_observation_encoder_parameters": 2073312
+      },
+      "final_evaluation": {
+        "after_completed_epochs": 270,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1341.875,
+            "raw_return_std": 143.6670956586789
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 80.0625,
+            "raw_return_std": 11.393357439754096
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 108675.00495910645,
+            "raw_return_std": 9953.234679668065
+          }
+        ]
+      },
+      "source_result_artifact_sha256": {
+        "final_evaluation_json": "1b459aaf651fb166981c9b163b4956ed513a9a3a66f8f232671b09dc527712fa",
+        "run_status_json": "a6b02074d510a86f5ea9655ca2a01142c21855a61e2ecc43294fd82b3f8eda2e",
+        "launch_json": "40e7ad519bee84c4e472a7afba299a75db0dcb80b60cfd28371b7bb60d4ea1aa",
+        "resolved_training_config_json": "0dea9796098b4800e94c5e78a065425474c436a710c7fceb3705fffa908da57d",
+        "model_parameter_accounting_json": "7e9564060158857ee03ffc2a57697e5f3b246c3aa7f7b1972e19f3a345bbe91d",
+        "actor_critic_parameter_accounting_json": "346c5f72bb956016663137d378410faefc96ebf6501dd9763e3af0d09c08cb05",
+        "evaluation_seed_manifest_json": "3736cfa01ff32141d9babb61bc675edd0a60fa6b95dbcc20958086483271f3f6"
+      }
+    },
+    {
+      "result_id": "high_capacity_lora_weak_task1_seed",
+      "run_id": "cnn_projector_rssm_lora_arrow_v1_task1seeded_three_task_t270_single_gpu_r128_128_32_bf16_uint8_seed0_cpu12_taskaware_pilot_v1_caa4142_20260826_run1",
+      "classification": "single_seed_snapshot_seeded_incremental_pilot",
+      "protocol": "CNN-Projector-RSSM-LoRA-ARROW-v1-Task1SnapshotSeeded-Atari-TaskAware",
+      "project_git": {
+        "commit": "caa414225cba68b31c5fc6e2d05ac08941e7e233",
+        "upstream": "origin/codex/cnn-projector-rssm-lora-incremental",
+        "dirty": false,
+        "ahead": 0,
+        "behind": 0
+      },
+      "source_task1_boundary_sha256": "7dd1bc66a684393bbc78f3793a96c9130e16b17f07a0f74bb6a5847f73f32ab1",
+      "source_snapshot_resumable": false,
+      "started_at_utc": "2026-08-26T14:58:54.526449+00:00",
+      "finished_at_utc": "2026-08-26T20:42:53.182032+00:00",
+      "complete": true,
+      "return_code": 0,
+      "training_budget": {
+        "source_completed_task1_epochs": 90,
+        "new_training_epochs": 180,
+        "new_raw_environment_frames": 11796480,
+        "new_world_model_updates": 90000,
+        "new_actor_critic_updates": 72000,
+        "replay_initial_state": "empty",
+        "source_replay_reused": false
+      },
+      "parameter_accounting": {
+        "rssm_lora_ranks": {
+          "recurrent": 128,
+          "representation": 128,
+          "transition": 32
+        },
+        "rssm_adapter_parameters_per_later_task": 2455808,
+        "projector_parameters_per_later_task": 34240,
+        "world_model_parameters": 41604207,
+        "actor_critic_topology": "per_task_actor_critic_bank",
+        "actor_critic_parameters": 5147955,
+        "aggregate_model_plus_actor_critic_parameters": 46752162
+      },
+      "final_evaluation": {
+        "after_completed_epochs": 270,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1341.875,
+            "raw_return_std": 143.6670956586789
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 79.6875,
+            "raw_return_std": 8.737267521943002
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 21275.001525878906,
+            "raw_return_std": 803.4809659568026
+          }
+        ]
+      },
+      "source_result_artifact_sha256": {
+        "final_evaluation_json": "ab4d72cf383bc22c24e73fb737b4f563bbbb0aaf1f0e4567d205a32d0582d150",
+        "run_status_json": "66156fcc384c12b1b79dfcafbad4ae90bc41e3e951f51f7e2bd1c91f8fde810e",
+        "launch_json": "550e6b45f1cf3d7f119ef87d8bbc6eee3569ea74be2eeef89c75409dbf925197",
+        "resolved_training_config_json": "dec56b40062cafdf0c1321105843e7964336b98be69c5ec9a04334cecff55039",
+        "model_parameter_accounting_json": "dd4efc524d90928582ccea62efc22bffc1244029f438a3f418e485f543f4bd23",
+        "actor_critic_parameter_accounting_json": "346c5f72bb956016663137d378410faefc96ebf6501dd9763e3af0d09c08cb05",
+        "evaluation_seed_manifest_json": "3736cfa01ff32141d9babb61bc675edd0a60fa6b95dbcc20958086483271f3f6"
+      }
+    },
+    {
+      "result_id": "high_capacity_lora_strong_task1_seed",
+      "run_id": "cnn_projector_rssm_lora_arrow_v1_task1strongseeded_three_task_t270_single_gpu_r128_128_32_bf16_uint8_seed0_cpu12_taskaware_plasticity_pilot_v1_f61feae_20260827_run1",
+      "classification": "single_seed_snapshot_seeded_incremental_pilot",
+      "protocol": "CNN-Projector-RSSM-LoRA-ARROW-v1-Task1SnapshotSeeded-Atari-TaskAware",
+      "project_git": {
+        "commit": "f61feaec40d58157c2359fa24ae4aaa88f5436c0",
+        "upstream": "origin/codex/cnn-compact-shared-actor",
+        "dirty": false,
+        "ahead": 0,
+        "behind": 0
+      },
+      "source_task1_boundary_sha256": "e3fef571948008f9b0514df787f6ef86c5e90ea760bf3bfaf8e7224952eb34d6",
+      "source_snapshot_resumable": false,
+      "started_at_utc": "2026-08-27T04:39:01.372905+00:00",
+      "finished_at_utc": "2026-08-27T10:33:12.974831+00:00",
+      "complete": true,
+      "return_code": 0,
+      "training_budget": {
+        "source_completed_task1_epochs": 90,
+        "new_training_epochs": 180,
+        "new_raw_environment_frames": 11796480,
+        "new_world_model_updates": 90000,
+        "new_actor_critic_updates": 72000,
+        "replay_initial_state": "empty",
+        "source_replay_reused": false
+      },
+      "parameter_accounting": {
+        "rssm_lora_ranks": {
+          "recurrent": 128,
+          "representation": 128,
+          "transition": 32
+        },
+        "rssm_adapter_parameters_per_later_task": 2455808,
+        "projector_parameters_per_later_task": 34240,
+        "world_model_parameters": 41604207,
+        "actor_critic_topology": "per_task_actor_critic_bank",
+        "actor_critic_parameters": 5147955,
+        "aggregate_model_plus_actor_critic_parameters": 46752162
+      },
+      "final_evaluation": {
+        "after_completed_epochs": 270,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2595.625,
+            "raw_return_std": 491.7820750850929
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 59.6875,
+            "raw_return_std": 12.25621653488547
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 15900.00057220459,
+            "raw_return_std": 624.337059334558
+          }
+        ]
+      },
+      "source_result_artifact_sha256": {
+        "final_evaluation_json": "3989586c5361c21ddc42ec440bcb66dc46f72c266f484df08821443bd45344a2",
+        "run_status_json": "9d08b1e9cf5ec006276a58e4ce92602f94aea156358cea7e209f86ee6fcf791f",
+        "launch_json": "5a5d70f18095675cdf283cb2d5ad5c727309f827a172760ffebce7c1ce1f0181",
+        "resolved_training_config_json": "dec56b40062cafdf0c1321105843e7964336b98be69c5ec9a04334cecff55039",
+        "model_parameter_accounting_json": "24bca4d3ceef20671eeabb13d6d680a96b3894d88065f4ed10d8fdea9cebfc94",
+        "actor_critic_parameter_accounting_json": "346c5f72bb956016663137d378410faefc96ebf6501dd9763e3af0d09c08cb05",
+        "evaluation_seed_manifest_json": "3736cfa01ff32141d9babb61bc675edd0a60fa6b95dbcc20958086483271f3f6"
+      }
+    },
+    {
+      "result_id": "compact_shared_actor_three_task_pilot",
+      "run_id": "cnn_compact_shared_actor_arrow_v1_task1seeded_three_task_t270_single_gpu_rep32_trans32_gruout32_bf16_uint8_seed0_cpu12_taskaware_pilot_v1_e25dc71_20260827_run1",
+      "classification": "single_seed_snapshot_seeded_incremental_pilot",
+      "protocol": "CNN-Projector-CompactRSSM-SharedActor-ARROW-v1-Task1SnapshotSeeded-Atari-TaskAware",
+      "project_git": {
+        "commit": "e25dc719bb7969ec8d12212dc747d04f23df2a0f",
+        "upstream": "origin/codex/cnn-compact-shared-actor",
+        "dirty": false,
+        "ahead": 0,
+        "behind": 0
+      },
+      "source_task1_boundary_sha256": "7dd1bc66a684393bbc78f3793a96c9130e16b17f07a0f74bb6a5847f73f32ab1",
+      "source_snapshot_resumable": false,
+      "started_at_utc": "2026-08-26T21:18:09.327295+00:00",
+      "finished_at_utc": "2026-08-27T03:09:24.126282+00:00",
+      "complete": true,
+      "return_code": 0,
+      "training_budget": {
+        "source_completed_task1_epochs": 90,
+        "new_training_epochs": 180,
+        "new_raw_environment_frames": 11796480,
+        "new_world_model_updates": 90000,
+        "new_actor_critic_updates": 72000,
+        "shared_actor_distillation_batches": 18000,
+        "shared_actor_distilled_states": 36864000,
+        "shared_actor_burnin_state_uses": 36864000,
+        "old_real_replay_samples": 0,
+        "additional_imagination_compute_matched_to_prior_method": false
+      },
+      "parameter_accounting": {
+        "later_task_rssm_route_parameters": {
+          "recurrent_output_bottleneck": 34336,
+          "representation_lora": 380416,
+          "transition_lora": 84480,
+          "total": 499232
+        },
+        "projector_parameters_per_later_task": 34240,
+        "world_model_parameters": 37691055,
+        "actor_critic_topology": "single_shared_actor_critic",
+        "actor_critic_parameters": 1715985,
+        "aggregate_model_plus_actor_critic_parameters": 39407040,
+        "persistent_actor_copies": 1,
+        "per_task_actor_growth": 0
+      },
+      "final_evaluation": {
+        "after_completed_epochs": 270,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1393.125,
+            "raw_return_std": 201.48569273027798
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 32.125,
+            "raw_return_std": 10.10491835691907
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 20400.0004359654,
+            "raw_return_std": 4241.6300211468245
+          }
+        ]
+      },
+      "source_result_artifact_sha256": {
+        "final_evaluation_json": "635e10bc242eae569c1b869e36530ccbf782fad31ea2b56a849462929997ea23",
+        "run_status_json": "5b17708f11a1b23131baad0b1af84de33920b8936144dee2bfe5c867dc42e8fd",
+        "launch_json": "0dd3f8ce3711afdffa7aaf72d2c891f6287810d7950be77667f3cfbc4ee318d5",
+        "resolved_training_config_json": "0177d9651136c065a9b1abaee7590463e6df921d9e8c5f5030c5d938352d3ee6",
+        "model_parameter_accounting_json": "aed3b5bc5fd24bce4e55bb9a45cfe89e8edac5d62d572728171142f29affac3a",
+        "actor_critic_parameter_accounting_json": "bcb929ad22af130b0c05b1fdf336b1a48fe715c2140871899a7d884416b9e581",
+        "evaluation_seed_manifest_json": "3736cfa01ff32141d9babb61bc675edd0a60fa6b95dbcc20958086483271f3f6"
+      }
+    },
+    {
+      "result_id": "compact_independent_actor_target_gpu_smoke",
+      "run_id": "cnn_projector_rssm_compact_lora_arrow_v2_task1strongseeded_smoke_t092_single_gpu_r32_32_16_bf16_uint8_seed0_cpu12_taskaware_c8a4f7c_20260827_run1",
+      "classification": "snapshot_seeded_incremental_smoke",
+      "protocol": "CNN-Projector-RSSM-CompactLoRA-ARROW-v2-Task1SnapshotSeeded-Atari-TaskAware",
+      "project_git": {
+        "commit": "c8a4f7ca5142614a77f5a269da99593f72f6fb23",
+        "upstream": "origin/codex/cnn-compact-shared-actor",
+        "dirty": false,
+        "ahead": 0,
+        "behind": 0
+      },
+      "source_task1_boundary_sha256": "e3fef571948008f9b0514df787f6ef86c5e90ea760bf3bfaf8e7224952eb34d6",
+      "source_snapshot_resumable": false,
+      "started_at_utc": "2026-08-27T12:35:09.630984+00:00",
+      "finished_at_utc": "2026-08-27T12:41:02.383272+00:00",
+      "complete": true,
+      "return_code": 0,
+      "training_budget": {
+        "source_completed_task1_epochs": 90,
+        "new_training_epochs": 2,
+        "new_raw_environment_frames": 131072,
+        "new_world_model_updates": 1000,
+        "new_actor_critic_updates": 800,
+        "replay_initial_state": "empty",
+        "source_replay_reused": false
+      },
+      "parameter_accounting": {
+        "rssm_lora_ranks": {
+          "recurrent": 32,
+          "representation": 32,
+          "transition": 16
+        },
+        "rssm_adapter_parameters_per_later_task": 643648,
+        "projector_parameters_per_later_task": 34240,
+        "world_model_parameters": 37979887,
+        "actor_critic_topology_at_epoch_92": "per_task_actor_critic_bank",
+        "initialized_actor_critic_task_ids": [
+          0,
+          1
+        ],
+        "actor_critic_parameters_at_epoch_92": 3431970,
+        "aggregate_model_plus_initialized_actor_critic_parameters_at_epoch_92": 41411857
+      },
+      "final_evaluation": {
+        "after_completed_epochs": 92,
+        "performance_claim_allowed": false,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2595.625,
+            "raw_return_std": 491.7820750850929
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": -41.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      "source_result_artifact_sha256": {
+        "final_evaluation_json": "3211884f1a2cba56414f6574be7e9614eb57d99553f937a982758a32a30572c6",
+        "run_status_json": "c9349c4b9b0555c2538980316a7398582b243a5578b40979dd1e72b853ddcafc",
+        "launch_json": "eeb089b68657b8a417083b05a51283c5776a24bcaaae311305e1f15aaeb6fc22",
+        "resolved_training_config_json": "6982da735411992f0aaba830c02ad311182e58c338c28fb15f1b82f24c410dfb",
+        "model_parameter_accounting_json": "a90e36d2353272184298e0bbd62eae45dd37851afdbb0d394d21695786700183",
+        "actor_critic_parameter_accounting_json": "874585701b45c32a36a2698c9904c67a36054593962ca8f1fb219cddfa274227",
+        "evaluation_seed_manifest_json": "3736cfa01ff32141d9babb61bc675edd0a60fa6b95dbcc20958086483271f3f6"
+      }
+    }
+  ]
+}

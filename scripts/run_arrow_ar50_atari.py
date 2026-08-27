@@ -313,20 +313,33 @@ def _verify_primary_config(config_path: Path, curriculum: str, seed: int) -> dic
 
 
 def _arrow_replay_storage_budget(config: dict) -> dict:
-    """Exact persistent tensor allocation in the vendored float32 replay."""
+    """Exact persistent tensor allocation for the configured replay dtypes."""
     slots_per_buffer = config["data_n_max"]
     sequence_length = config["data_t"]
     transitions_per_buffer = slots_per_buffer * sequence_length
     observation_elements = 3 * config["img_size"] * config["img_size"]
     auxiliary_elements = config["action_space"] + 3
-    bytes_per_element = 4
+    observation_dtype = config.get("replay_observation_dtype", "float32")
+    try:
+        observation_bytes_per_element = {
+            "float32": 4,
+            "uint8": 1,
+        }[observation_dtype]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown replay observation dtype: {observation_dtype!r}"
+        ) from exc
+    auxiliary_bytes_per_element = 4
     observation_bytes_per_buffer = (
-        transitions_per_buffer * observation_elements * bytes_per_element
+        transitions_per_buffer
+        * observation_elements
+        * observation_bytes_per_element
     )
     tensor_bytes_per_buffer = (
-        transitions_per_buffer
-        * (observation_elements + auxiliary_elements)
-        * bytes_per_element
+        observation_bytes_per_buffer
+        + transitions_per_buffer
+        * auxiliary_elements
+        * auxiliary_bytes_per_element
     )
     replay_devices = {
         replay["rb_type"]: replay["rb_device"] for replay in config["replay_buffers"]
@@ -347,8 +360,12 @@ def _arrow_replay_storage_budget(config: dict) -> dict:
         },
     }
     return {
-        "dtype": "float32",
-        "bytes_per_element": bytes_per_element,
+        "dtype": observation_dtype,
+        "bytes_per_element": observation_bytes_per_element,
+        "observation_dtype": observation_dtype,
+        "observation_bytes_per_element": observation_bytes_per_element,
+        "auxiliary_dtype": "float32",
+        "auxiliary_bytes_per_element": auxiliary_bytes_per_element,
         "transitions": 2 * transitions_per_buffer,
         "observation_bytes": 2 * observation_bytes_per_buffer,
         "allocated_tensor_bytes": 2 * tensor_bytes_per_buffer,

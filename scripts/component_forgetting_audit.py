@@ -224,11 +224,44 @@ def load_snapshot_specs(snapshot_dir: Path) -> list[SnapshotSpec]:
     return [*boundaries, finals[0]]
 
 
-def _model_bundle(spec: SnapshotSpec, device_name: str) -> ModelBundle:
+def _load_snapshot_state(module: Any, state: Mapping[str, Any]) -> None:
+    """Load snapshots made before optional KAN consolidation buffers existed."""
+    incompatible = module.load_state_dict(state, strict=False)
+    consolidation_names = {
+        "consolidation_importance",
+        "consolidation_anchor",
+        "consolidation_gradient_scale",
+        "consolidation_anchor_loss_scale",
+        "consolidation_boundaries",
+        "consolidation_active",
+    }
+    unsupported_missing = [
+        name
+        for name in incompatible.missing_keys
+        if name.rsplit(".", 1)[-1] not in consolidation_names
+    ]
+    if unsupported_missing or incompatible.unexpected_keys:
+        raise RuntimeError(
+            "Snapshot/model state mismatch: "
+            f"missing={unsupported_missing} unexpected={incompatible.unexpected_keys}"
+        )
+
+
+def _model_bundle(
+    spec: SnapshotSpec,
+    device_name: str,
+    dinov3_model_path: Path | None = None,
+) -> ModelBundle:
     torch = _torch()
     vendor = _vendor_modules()
     config = spec.payload["config"]
     device = torch.device(device_name)
+    configured_dinov3_path = config.get("dinov3_model_path")
+    resolved_dinov3_path = (
+        str(dinov3_model_path.expanduser().resolve())
+        if dinov3_model_path is not None
+        else configured_dinov3_path
+    )
     world_model = vendor.WorldModel(
         3,
         (32, 32),
@@ -242,8 +275,30 @@ def _model_bundle(spec: SnapshotSpec, device_name: str) -> ModelBundle:
         r2_barlow_loss_scale=float(config.get("r2_barlow_loss_scale", 0.05)),
         r2_redundancy_scale=float(config.get("r2_redundancy_scale", 5e-4)),
         r2_normalization_eps=float(config.get("r2_normalization_eps", 1e-8)),
+        observation_encoder=str(config.get("observation_encoder", "cnn")),
+        dinov3_model_path=resolved_dinov3_path,
+        dinov3_input_size=int(config.get("dinov3_input_size", 256)),
+        dinov3_max_batch_size=int(config.get("dinov3_max_batch_size", 128)),
+        dinov3_feature_loss_scale=float(config.get("dinov3_feature_loss_scale", 1.0)),
+        dinov3_feature_mode=str(config.get("dinov3_feature_mode", "cls")),
+        dinov3_patch_pool_size=int(config.get("dinov3_patch_pool_size", 4)),
+        dinov3_patch_feature_dim=int(config.get("dinov3_patch_feature_dim", 384)),
+        dinov3_patch_projection=str(config.get("dinov3_patch_projection", "none")),
+        dinov3_feature_loss_kind=str(config.get("dinov3_feature_loss_kind", "cosine")),
+        dinov3_feature_std_floor=float(config.get("dinov3_feature_std_floor", 0.05)),
+        residual_correction=str(config.get("residual_correction", "none")),
+        residual_bottleneck_features=int(config.get("residual_bottleneck_features", 64)),
+        residual_grid_size=int(config.get("residual_grid_size", 8)),
+        residual_input_min=float(config.get("residual_input_min", -2.0)),
+        residual_input_max=float(config.get("residual_input_max", 2.0)),
+        residual_rms_norm_epsilon=float(
+            config.get("residual_rms_norm_epsilon", 1e-4)
+        ),
+        residual_alpha=float(config.get("residual_alpha", 0.1)),
+        residual_input_mode=str(config.get("residual_input_mode", "base_output")),
+        residual_consolidation=str(config.get("residual_consolidation", "none")),
     ).to(device)
-    world_model.load_state_dict(spec.payload["world_model_state_dict"], strict=True)
+    _load_snapshot_state(world_model, spec.payload["world_model_state_dict"])
     actor_critic = vendor.ActorCritic(
         int(np.prod(world_model.ls)) + world_model.h_dim,
         world_model.a_dim,
@@ -257,8 +312,27 @@ def _model_bundle(spec: SnapshotSpec, device_name: str) -> ModelBundle:
         kan_normalize_recurrent_state=bool(
             config.get("actor_kan_normalize_recurrent_state", True)
         ),
+        fastkan_hidden_features=int(config.get("fastkan_hidden_features", 34)),
+        fastkan_hidden_layers=int(config.get("fastkan_hidden_layers", 3)),
+        fastkan_grid_size=int(config.get("fastkan_grid_size", 8)),
+        fastkan_input_min=float(config.get("fastkan_input_min", -2.0)),
+        fastkan_input_max=float(config.get("fastkan_input_max", 2.0)),
+        fastkan_rms_norm_epsilon=float(config.get("fastkan_rms_norm_epsilon", 1e-4)),
+        fastkan_actor_output_scale=float(config.get("fastkan_actor_output_scale", 0.01)),
+        fastkan_actor_unimix=float(config.get("fastkan_actor_unimix", 0.01)),
+        residual_correction=str(config.get("residual_correction", "none")),
+        residual_bottleneck_features=int(config.get("residual_bottleneck_features", 64)),
+        residual_grid_size=int(config.get("residual_grid_size", 8)),
+        residual_input_min=float(config.get("residual_input_min", -2.0)),
+        residual_input_max=float(config.get("residual_input_max", 2.0)),
+        residual_rms_norm_epsilon=float(
+            config.get("residual_rms_norm_epsilon", 1e-4)
+        ),
+        residual_alpha=float(config.get("residual_alpha", 0.1)),
+        residual_input_mode=str(config.get("residual_input_mode", "base_output")),
+        residual_consolidation=str(config.get("residual_consolidation", "none")),
     ).to(device)
-    actor_critic.load_state_dict(spec.payload["actor_critic_state_dict"], strict=True)
+    _load_snapshot_state(actor_critic, spec.payload["actor_critic_state_dict"])
     world_model.eval()
     actor_critic.eval()
     return ModelBundle(world_model, actor_critic, config, device, vendor)
@@ -304,6 +378,7 @@ def _episode_arrays(
     reset_seed: int,
     policy_seed: int,
     max_decisions: int,
+    collection_policy: str = "checkpoint_actor",
 ) -> tuple[dict[str, np.ndarray], bool]:
     """Collect one bounded episode segment and report whether it really ended.
 
@@ -315,6 +390,9 @@ def _episode_arrays(
     torch.manual_seed(policy_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(policy_seed)
+    if collection_policy not in {"checkpoint_actor", "uniform_random"}:
+        raise ValueError(f"Unknown collection policy: {collection_policy!r}")
+    random_action_rng = np.random.default_rng(policy_seed)
     environment = _make_atari_environment(task, int(model.config["env_repeat"]))
     try:
         observation, _ = environment.reset(seed=reset_seed)
@@ -352,8 +430,17 @@ def _episode_arrays(
                     reset_flag,
                     stochastic=True,
                 )
-                action_log_probs = model.actor_critic.actor(model.vendor.zh_to_ac_state(z, h))
-                action = int(torch.distributions.Categorical(logits=action_log_probs).sample().item())
+                if collection_policy == "checkpoint_actor":
+                    action_log_probs = model.actor_critic.actor(
+                        model.vendor.zh_to_ac_state(z, h)
+                    )
+                    action = int(
+                        torch.distributions.Categorical(
+                            logits=action_log_probs
+                        ).sample().item()
+                    )
+                else:
+                    action = int(random_action_rng.integers(action_space))
                 next_observation, raw_reward, terminated, truncated, _ = environment.step(action)
                 observation = _normalise_observation(next_observation)
                 finished = bool(terminated or truncated)
@@ -514,8 +601,9 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
     expected_tasks = len(boundaries)
     config = boundaries[0].payload["config"]
     tasks = config["esc"]["env_configs"]
-    if len(tasks) != expected_tasks:
-        raise ValueError("Snapshot task count does not match its config")
+    if len(tasks) < expected_tasks:
+        raise ValueError("Snapshot task count exceeds its configured schedule")
+    tasks = tasks[:expected_tasks]
 
     _seed_everything(args.collection_seed)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -523,7 +611,7 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
     for task_index, boundary in enumerate(boundaries):
         if boundary.task_index != task_index:
             raise ValueError("Boundary/task order changed while collecting audit data")
-        model = _model_bundle(boundary, args.device)
+        model = _model_bundle(boundary, args.device, args.dinov3_model_path)
         task = tasks[task_index]
         selector = np.random.default_rng(args.chunk_selection_seed + task_index)
         natural_candidates: list[dict[str, np.ndarray | int]] = []
@@ -539,6 +627,7 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
                 reset_seed=args.environment_seed + task_index * 100_000 + episode_id,
                 policy_seed=args.policy_seed + task_index * 100_000 + episode_id,
                 max_decisions=args.max_episode_decisions,
+                collection_policy=args.collection_policy,
             )
             segments_started += 1
             if completed:
@@ -640,7 +729,12 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
             "natural_chunks_per_task": args.chunks,
             "event_chunks_per_task": args.event_chunks,
             "horizons": list(args.horizons),
-            "model_collection_policy": "stochastic categorical posterior and actor sampling",
+            "model_collection_policy": (
+                "stochastic categorical posterior and actor sampling"
+                if args.collection_policy == "checkpoint_actor"
+                else "stochastic categorical posterior and uniform random actions"
+            ),
+            "collection_policy": args.collection_policy,
             "evaluation_transitions_enter_replay": False,
         },
         "datasets": datasets,
@@ -1351,6 +1445,11 @@ def _parser() -> argparse.ArgumentParser:
     collect.add_argument("--output-dir", type=Path, required=True)
     collect.add_argument("--label", default="dv3_fifo_pilot_p1")
     collect.add_argument("--device", default="cuda")
+    collect.add_argument(
+        "--dinov3-model-path",
+        type=Path,
+        help="Override the local DINOv3 directory recorded by the source run",
+    )
     collect.add_argument("--chunks", type=_positive_int, default=DEFAULT_DIAGNOSTIC_CHUNKS)
     collect.add_argument("--event-chunks", type=int, default=DEFAULT_EVENT_CHUNKS)
     collect.add_argument("--chunk-length", type=_positive_int, default=DEFAULT_CHUNK_LENGTH)
@@ -1359,6 +1458,12 @@ def _parser() -> argparse.ArgumentParser:
     collect.add_argument("--collection-seed", type=int, default=20260815)
     collect.add_argument("--environment-seed", type=int, default=410_000)
     collect.add_argument("--policy-seed", type=int, default=510_000)
+    collect.add_argument(
+        "--collection-policy",
+        choices=("checkpoint_actor", "uniform_random"),
+        default="checkpoint_actor",
+        help="Use matched random actions to isolate environment-driven task regions",
+    )
     collect.add_argument("--chunk-selection-seed", type=int, default=610_000)
     collect.add_argument("--max-episodes", type=_positive_int, default=2_000)
     collect.add_argument("--max-episode-decisions", type=_positive_int, default=20_000)
