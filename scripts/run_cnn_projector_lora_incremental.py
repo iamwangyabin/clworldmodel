@@ -33,6 +33,7 @@ EXPECTED_TASKS = (
     "ALE/CrazyClimber-v5",
 )
 LORA_RANKS = (128, 128, 32)
+CLASSIFICATIONS = ("smoke", "pilot")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -49,6 +50,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
     parser.add_argument("--replay-mmap-root", type=Path)
+    parser.add_argument(
+        "--classification",
+        choices=CLASSIFICATIONS,
+        default="pilot",
+        help="Label the run evidence as a smoke or pilot experiment.",
+    )
     parser.add_argument("--no-compile", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -222,7 +229,11 @@ def main() -> int:
         "schema_version": 1,
         "method": "CNN-Projector-RSSM-LoRA-ARROW",
         "protocol": PROTOCOL,
-        "classification": "single_seed_snapshot_seeded_incremental_pilot",
+        "classification": (
+            "snapshot_seeded_incremental_smoke"
+            if args.classification == "smoke"
+            else "single_seed_snapshot_seeded_incremental_pilot"
+        ),
         "status": "dry_run" if args.dry_run else "launching",
         "project_git": project_git,
         "upstream_arrow_commit": UPSTREAM_COMMIT,

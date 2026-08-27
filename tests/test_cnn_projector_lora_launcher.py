@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from run_cnn_projector_lora_incremental import (  # noqa: E402
     EXPECTED_TASKS,
     _incremental_config,
+    _parser,
 )
 
 
@@ -66,6 +67,15 @@ class CnnProjectorLoraLauncherTests(unittest.TestCase):
     def test_smoke_duration_does_not_retrain_task1(self) -> None:
         config = _incremental_config(self._source(), epochs_after_task1=1)
         self.assertEqual(config["epochs"], 91)
+
+    def test_run_classification_is_explicit(self) -> None:
+        smoke = _parser().parse_args(
+            ["--task1-boundary-snapshot", "task1.pt", "--classification", "smoke"]
+        )
+        pilot = _parser().parse_args(["--task1-boundary-snapshot", "task1.pt"])
+
+        self.assertEqual(smoke.classification, "smoke")
+        self.assertEqual(pilot.classification, "pilot")
 
     def test_curriculum_or_duration_changes_are_rejected(self) -> None:
         invalid = self._source()
