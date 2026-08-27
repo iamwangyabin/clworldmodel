@@ -611,18 +611,18 @@ class Config(Serialisable):
                 raise ValueError(
                     "CNN projector methods fix the projector bottleneck at 64"
                 )
-            expected_ranks = (
-                (0, 32, 32, 32)
-                if is_cnn_compact_shared_actor
-                else (128, 128, 32, 0)
-            )
             observed_ranks = (
                 self.task_lora_recurrent_rank,
                 self.task_lora_representation_rank,
                 self.task_lora_transition_rank,
                 self.task_recurrent_output_adapter_features,
             )
-            if observed_ranks != expected_ranks:
+            expected_ranks = (
+                ((0, 32, 32, 32),)
+                if is_cnn_compact_shared_actor
+                else ((128, 128, 32, 0), (32, 32, 16, 0))
+            )
+            if observed_ranks not in expected_ranks:
                 method_description = (
                     "The compact recurrent/representation protocol fixes "
                     "recurrent-LoRA/representation-LoRA/transition-LoRA/"
@@ -632,7 +632,8 @@ class Config(Serialisable):
                     "transition/output-adapter sizes"
                 )
                 raise ValueError(
-                    f"{method_description} at {expected_ranks}, got {observed_ranks}"
+                    f"{method_description} to a named profile in "
+                    f"{expected_ranks}, got {observed_ranks}"
                 )
         elif any(
             (

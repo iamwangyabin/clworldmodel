@@ -14,7 +14,8 @@ contains experiment-facing code.
 - `run_karrow_task2_from_snapshot.py`: isolated Task-2 acquisition diagnostic.
 - `run_cnn_projector_lora_incremental.py`: Task-1-snapshot-seeded true
   Boxing/CrazyClimber acquisition with a frozen CNN/RSSM core, per-task
-  projectors/RSSM LoRA, and independent Actor-Critics.
+  projectors/RSSM LoRA, and independent Actor-Critics. Named capacity and
+  compact `32/32/16` LoRA profiles keep the remaining protocol matched.
 - `run_cnn_compact_shared_actor_incremental.py`: Task-1-snapshot-seeded compact
   RSSM adaptation with smaller representation/prior LoRA, GRU-output-only
   correction, and one shared Actor protected by frozen-route imagination

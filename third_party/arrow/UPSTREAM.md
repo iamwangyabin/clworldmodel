@@ -320,6 +320,17 @@ documented here, covered by focused parity tests, and followed by regenerating
     makes no matched-compute or task-agnostic claim. Focused tests cover
     zero-effect recurrent adaptation, base sharing, strict config isolation,
     Actor KL targets, single-Actor launch contracts, and launch budgets.
+41. Add the fixed `32/32/16` recurrent/representation/transition LoRA profile
+    for the separately named
+    `CNN-Projector-RSSM-CompactLoRA-ARROW-v2-Task1SnapshotSeeded` ablation.
+    The strong Task-1 snapshot, zero-effect spatial projector, private
+    world-model heads, independent Actor-Critics, current-task ARROW Replay,
+    interaction and optimizer budgets, precision, and fixed evaluation cohorts
+    remain identical to the matched `128/128/32` pilot. Configuration rejects
+    unnamed intermediate ranks. Runtime accounting must report 643,648 FP32
+    RSSM adapter parameters per later task, a 73.8 percent reduction. Focused
+    tests cover exact profile selection, config isolation, and rejection of
+    unnamed rank tuples.
 
 ## Known issues at import
 

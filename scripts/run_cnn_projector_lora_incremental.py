@@ -11,6 +11,7 @@ import os
 import shlex
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,14 +27,55 @@ from run_arrow_ar50_atari import (
 )
 
 
-PROTOCOL = "CNN-Projector-RSSM-LoRA-ARROW-v1-Task1SnapshotSeeded-Atari-TaskAware"
 EXPECTED_TASKS = (
     "ALE/MsPacman-v5",
     "ALE/Boxing-v5",
     "ALE/CrazyClimber-v5",
 )
-LORA_RANKS = (128, 128, 32)
 CLASSIFICATIONS = ("smoke", "pilot")
+
+
+@dataclass(frozen=True)
+class LoraProfile:
+    method: str
+    protocol: str
+    ranks: tuple[int, int, int]
+    expected_parameters_per_later_task: int
+    hypothesis: str
+
+
+DEFAULT_LORA_PROFILE = "capacity-r128-r128-r32"
+COMPACT_LORA_PROFILE = "compact-r32-r32-r16"
+LORA_PROFILES = {
+    DEFAULT_LORA_PROFILE: LoraProfile(
+        method="CNN-Projector-RSSM-LoRA-ARROW",
+        protocol=(
+            "CNN-Projector-RSSM-LoRA-ARROW-v1-"
+            "Task1SnapshotSeeded-Atari-TaskAware"
+        ),
+        ranks=(128, 128, 32),
+        expected_parameters_per_later_task=2_455_808,
+        hypothesis=(
+            "High-capacity affine LoRA tests whether a frozen Task-1 RSSM can "
+            "acquire later tasks with independent policies."
+        ),
+    ),
+    COMPACT_LORA_PROFILE: LoraProfile(
+        method="CNN-Projector-RSSM-CompactLoRA-ARROW",
+        protocol=(
+            "CNN-Projector-RSSM-CompactLoRA-ARROW-v2-"
+            "Task1SnapshotSeeded-Atari-TaskAware"
+        ),
+        ranks=(32, 32, 16),
+        expected_parameters_per_later_task=643_648,
+        hypothesis=(
+            "Reducing recurrent/representation/transition LoRA to 32/32/16 "
+            "preserves later-task plasticity with 73.8 percent fewer persistent "
+            "RSSM adapter parameters than the matched 128/128/32 pilot."
+        ),
+    ),
+}
+LORA_RANKS = LORA_PROFILES[DEFAULT_LORA_PROFILE].ranks
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -55,6 +97,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=CLASSIFICATIONS,
         default="pilot",
         help="Label the run evidence as a smoke or pilot experiment.",
+    )
+    parser.add_argument(
+        "--lora-profile",
+        choices=tuple(LORA_PROFILES),
+        default=DEFAULT_LORA_PROFILE,
+        help="Named, fixed RSSM LoRA capacity profile.",
     )
     parser.add_argument("--no-compile", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -81,9 +129,20 @@ def _source_config_path(snapshot: Path, explicit: Path | None) -> Path:
     return inferred
 
 
-def _incremental_config(source: dict, *, epochs_after_task1: int) -> dict:
+def _incremental_config(
+    source: dict,
+    *,
+    epochs_after_task1: int,
+    lora_ranks: tuple[int, int, int] = LORA_RANKS,
+) -> dict:
     if epochs_after_task1 < 1:
         raise ValueError("--epochs-after-task1 must be positive")
+    supported_ranks = tuple(profile.ranks for profile in LORA_PROFILES.values())
+    if lora_ranks not in supported_ranks:
+        raise ValueError(
+            f"RSSM LoRA ranks must use a named profile in {supported_ranks}, "
+            f"got {lora_ranks}"
+        )
     config = copy.deepcopy(source)
     task_names = tuple(task["name"] for task in config["esc"]["env_configs"])
     if task_names != EXPECTED_TASKS:
@@ -104,9 +163,10 @@ def _incremental_config(source: dict, *, epochs_after_task1: int) -> dict:
             "task_banked_image_encoder": False,
             "task_projected_image_encoder": True,
             "task_projector_bottleneck_features": 64,
-            "task_lora_recurrent_rank": LORA_RANKS[0],
-            "task_lora_representation_rank": LORA_RANKS[1],
-            "task_lora_transition_rank": LORA_RANKS[2],
+            "task_lora_recurrent_rank": lora_ranks[0],
+            "task_lora_representation_rank": lora_ranks[1],
+            "task_lora_transition_rank": lora_ranks[2],
+            "task_recurrent_output_adapter_features": 0,
             "data_parallel_world_size": 1,
             "compute_dtype": "bfloat16",
             "replay_observation_dtype": "uint8",
@@ -154,8 +214,11 @@ def main() -> int:
 
     source_config_path = _source_config_path(snapshot, args.source_config)
     source = json.loads(source_config_path.read_text(encoding="utf-8"))
+    lora_profile = LORA_PROFILES[args.lora_profile]
     config = _incremental_config(
-        source, epochs_after_task1=args.epochs_after_task1
+        source,
+        epochs_after_task1=args.epochs_after_task1,
+        lora_ranks=lora_profile.ranks,
     )
     python = args.python.expanduser().resolve()
     output_dir = (
@@ -164,7 +227,8 @@ def main() -> int:
         else snapshot.parent.parent.parent
         / (
             "cnn_projector_rssm_lora_incremental_"
-            f"r{LORA_RANKS[0]}_{LORA_RANKS[1]}_{LORA_RANKS[2]}_"
+            f"r{lora_profile.ranks[0]}_{lora_profile.ranks[1]}_"
+            f"{lora_profile.ranks[2]}_"
             f"posttask1_e{args.epochs_after_task1}"
         )
     )
@@ -227,8 +291,10 @@ def main() -> int:
     }
     launch = {
         "schema_version": 1,
-        "method": "CNN-Projector-RSSM-LoRA-ARROW",
-        "protocol": PROTOCOL,
+        "method": lora_profile.method,
+        "protocol": lora_profile.protocol,
+        "lora_profile": args.lora_profile,
+        "hypothesis": lora_profile.hypothesis,
         "classification": (
             "snapshot_seeded_incremental_smoke"
             if args.classification == "smoke"
@@ -245,7 +311,13 @@ def main() -> int:
         "frozen_core": "completed Task-1 CNN encoder and RSSM route",
         "later_task_modules": {
             "per_task_projector": "residual 256x4x4 bottleneck-64 spatial projector",
-            "per_task_rssm_lora_ranks": list(LORA_RANKS),
+            "per_task_rssm_lora_ranks": list(lora_profile.ranks),
+            "expected_rssm_lora_parameters_per_later_task": (
+                lora_profile.expected_parameters_per_later_task
+            ),
+            "expected_rssm_lora_parameter_bytes_per_later_task": (
+                4 * lora_profile.expected_parameters_per_later_task
+            ),
             "per_task_actor_critic": "fresh deterministic weights and optimizer",
             "per_task_decoder_reward_continue_heads": "copied from Task 1 then trained",
         },

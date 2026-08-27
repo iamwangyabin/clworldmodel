@@ -24,7 +24,9 @@ except ModuleNotFoundError:  # pragma: no cover - minimal host environments omit
 if torch is not None:
     sys.path.insert(0, str(PROJECT_SRC))
     sys.path.insert(0, str(VENDORED_ATARI))
+    from clworldmodel.models.rssm_lora import install_affine_lora
     from config import Config
+    from rssm import Recurrent, Representation, Transition
     from wm import WorldModel
 
 
@@ -77,7 +79,7 @@ class CnnProjectorLoraIncrementalTests(unittest.TestCase):
             replay_config["rb_device"] = "cpu"
         return data
 
-    def test_config_is_explicit_and_rejects_one_shared_lora(self) -> None:
+    def test_config_accepts_only_the_two_named_independent_actor_profiles(self) -> None:
         config = Config.from_dict(self._method_config_data())
         self.assertTrue(config.uses_full_task_experts)
         self.assertTrue(config.task_projected_image_encoder)
@@ -91,10 +93,43 @@ class CnnProjectorLoraIncrementalTests(unittest.TestCase):
             (128, 128, 32),
         )
 
+        compact = self._method_config_data()
+        compact.update(
+            {
+                "task_lora_recurrent_rank": 32,
+                "task_lora_representation_rank": 32,
+                "task_lora_transition_rank": 16,
+            }
+        )
+        compact_config = Config.from_dict(compact)
+        self.assertEqual(
+            (
+                compact_config.task_lora_recurrent_rank,
+                compact_config.task_lora_representation_rank,
+                compact_config.task_lora_transition_rank,
+            ),
+            (32, 32, 16),
+        )
+
         invalid = self._method_config_data()
-        invalid["task_lora_recurrent_rank"] = 32
+        invalid["task_lora_recurrent_rank"] = 64
         with self.assertRaisesRegex(ValueError, "fixes recurrent/representation"):
             Config.from_dict(invalid)
+
+    def test_compact_profile_production_rssm_lora_parameter_count(self) -> None:
+        modules_and_ranks = (
+            (Recurrent((32, 32), 18, 512, 512, 2), 32),
+            (Representation((32, 32), 4096, 512, 512, 2), 32),
+            (Transition((32, 32), 512, 512, 2), 16),
+        )
+        reports = [
+            install_affine_lora(module, rank)
+            for module, rank in modules_and_ranks
+        ]
+        counts = [report["trainable_parameters"] for report in reports]
+
+        self.assertEqual(counts, [219_712, 380_416, 43_520])
+        self.assertEqual(sum(counts), 643_648)
 
     def test_task2_updates_only_projector_lora_and_private_heads(self) -> None:
         class WideEmbedder(nn.Module):

@@ -12,7 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from run_cnn_projector_lora_incremental import (  # noqa: E402
+    COMPACT_LORA_PROFILE,
+    DEFAULT_LORA_PROFILE,
     EXPECTED_TASKS,
+    LORA_PROFILES,
     _incremental_config,
     _parser,
 )
@@ -68,6 +71,48 @@ class CnnProjectorLoraLauncherTests(unittest.TestCase):
         config = _incremental_config(self._source(), epochs_after_task1=1)
         self.assertEqual(config["epochs"], 91)
 
+    def test_compact_profile_changes_only_the_named_lora_ranks(self) -> None:
+        source = self._source()
+        capacity = _incremental_config(source, epochs_after_task1=180)
+        compact = _incremental_config(
+            source,
+            epochs_after_task1=180,
+            lora_ranks=LORA_PROFILES[COMPACT_LORA_PROFILE].ranks,
+        )
+
+        changed = {
+            key
+            for key in capacity
+            if capacity.get(key) != compact.get(key)
+        }
+        self.assertEqual(
+            changed,
+            {
+                "task_lora_recurrent_rank",
+                "task_lora_representation_rank",
+                "task_lora_transition_rank",
+            },
+        )
+        self.assertEqual(
+            (
+                compact["task_lora_recurrent_rank"],
+                compact["task_lora_representation_rank"],
+                compact["task_lora_transition_rank"],
+            ),
+            (32, 32, 16),
+        )
+        profile = LORA_PROFILES[COMPACT_LORA_PROFILE]
+        self.assertEqual(profile.expected_parameters_per_later_task, 643_648)
+        self.assertEqual(4 * profile.expected_parameters_per_later_task, 2_574_592)
+
+    def test_unnamed_lora_ranks_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "named profile"):
+            _incremental_config(
+                self._source(),
+                epochs_after_task1=180,
+                lora_ranks=(16, 16, 8),
+            )
+
     def test_run_classification_is_explicit(self) -> None:
         smoke = _parser().parse_args(
             ["--task1-boundary-snapshot", "task1.pt", "--classification", "smoke"]
@@ -76,6 +121,17 @@ class CnnProjectorLoraLauncherTests(unittest.TestCase):
 
         self.assertEqual(smoke.classification, "smoke")
         self.assertEqual(pilot.classification, "pilot")
+        self.assertEqual(pilot.lora_profile, DEFAULT_LORA_PROFILE)
+
+        compact = _parser().parse_args(
+            [
+                "--task1-boundary-snapshot",
+                "task1.pt",
+                "--lora-profile",
+                COMPACT_LORA_PROFILE,
+            ]
+        )
+        self.assertEqual(compact.lora_profile, COMPACT_LORA_PROFILE)
 
     def test_curriculum_or_duration_changes_are_rejected(self) -> None:
         invalid = self._source()
