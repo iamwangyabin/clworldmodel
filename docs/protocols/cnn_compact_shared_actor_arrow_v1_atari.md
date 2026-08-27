@@ -76,3 +76,18 @@ never enters Replay or updates.
   parameter accounting, and SHA256 sidecars; and
 - `resumable=false` on snapshots that omit optimizer, Replay, RNG, and schedule
   position.
+
+## Completed Seed-0 Result
+
+The three-task pilot completed successfully at 270 epochs. On the held-out
+final cohort of 16 deterministic rollouts per task, raw return mean +/- standard
+deviation was MsPacman `1393.125 +/- 201.4857`, Boxing
+`32.125 +/- 10.1049`, and CrazyClimber `20400.0004 +/- 4241.6300`.
+
+Runtime accounting reported 37,691,055 world-model parameters and one
+1,715,985-parameter shared Actor-Critic, for 39,407,040 parameters in total.
+The result remains single-seed and task-aware, and the additional old-route
+imagination is not compute matched to the independent-Actor pilots. Curated
+metrics and provenance are in
+[`references/cnn_incremental_seed0_results_20260827.json`](references/cnn_incremental_seed0_results_20260827.json).
+No checkpoint, inference snapshot, or weight file is committed to Git.

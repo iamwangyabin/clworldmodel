@@ -340,6 +340,24 @@ python scripts/run_moe_arrow_atari.py \
   --dry-run
 ```
 
+#### Completed seed-0 result
+
+The restricted three-task pilot completed successfully on 2026-08-26 at 270
+epochs. Its held-out final cohort used 16 deterministic rollouts per task and
+reported raw return mean +/- standard deviation of:
+
+- MsPacman: `1341.875 +/- 143.6671`;
+- Boxing: `80.0625 +/- 11.3934`; and
+- CrazyClimber: `108675.0050 +/- 9953.2347`.
+
+Runtime accounting reported 58,496,559 world-model parameters and 5,147,955
+parameters across the three Actor-Critic experts. This remains a task-aware,
+single-seed, extra-sample pilot under the claim boundary above. The curated
+result, provenance, budgets, parameter counts, and source-result checksums are
+recorded in
+[`references/cnn_incremental_seed0_results_20260827.json`](references/cnn_incremental_seed0_results_20260827.json).
+No checkpoint, inference snapshot, or weight file is committed to Git.
+
 ### Six-task extra-compute pilot
 
 The first six-task continuation is explicitly

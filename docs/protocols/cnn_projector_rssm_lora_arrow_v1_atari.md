@@ -67,3 +67,23 @@ operations; uint8 mmap Replay; 90 epochs each for Boxing and CrazyClimber.
   manifests, TensorBoard events, parameter accounting, and checksums; and
 - explicit `resumable=false` labeling for inference snapshots that omit Replay,
   optimizers, RNG, and scheduler/task position.
+
+## Completed Seed-0 Pilots
+
+Two three-task high-capacity (`128/128/32`) runs completed successfully. The
+held-out final cohort used 16 deterministic rollouts per task:
+
+- Initial Task-1 source (`7dd1bc66...`): MsPacman
+  `1341.875 +/- 143.6671`, Boxing `79.6875 +/- 8.7373`, and CrazyClimber
+  `21275.0015 +/- 803.4810`.
+- Strong Task-1 source (`e3fef571...`): MsPacman
+  `2595.625 +/- 491.7821`, Boxing `59.6875 +/- 12.2562`, and CrazyClimber
+  `15900.0006 +/- 624.3371`.
+
+Each completed model contained 41,604,207 world-model parameters and 5,147,955
+parameters in its three-entry Actor-Critic bank. The source snapshots differ,
+so these runs are not a controlled comparison of Task-1 acquisition quality.
+They are single-seed, task-aware plasticity evidence only. The lightweight
+result record is
+[`references/cnn_incremental_seed0_results_20260827.json`](references/cnn_incremental_seed0_results_20260827.json);
+no checkpoint, inference snapshot, or weight file is committed to Git.

@@ -70,3 +70,19 @@ task; periodic-cohort retention must not be mixed with held-out-final values.
   and
 - explicit `resumable=false` labels for snapshots omitting optimizers, Replay,
   RNG, and scheduler/task position.
+
+## Completed Target-GPU Smoke
+
+The seed-0 `32/32/16` compact independent-Actor smoke completed successfully
+after two Boxing epochs (92 total epochs including the imported Task-1
+boundary), with 1,000 new world-model and 800 new Actor-Critic updates. Runtime
+accounting verified 643,648 RSSM adapter parameters per later task, matching the
+predeclared compact profile.
+
+The held-out smoke evaluation reported MsPacman
+`2595.625 +/- 491.7821` and Boxing `-41.0 +/- 0.0` over 16 deterministic
+rollouts per task. These values establish execution and artifact correctness
+only; they are not a performance result after two training epochs. The curated
+smoke record is
+[`references/cnn_incremental_seed0_results_20260827.json`](references/cnn_incremental_seed0_results_20260827.json).
+No checkpoint, inference snapshot, or weight file is committed to Git.
