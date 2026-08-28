@@ -268,6 +268,30 @@ BATCH_PROFILES = {
         learning_rate_rule="unchanged_from_fixed_batch",
         optimizer_update_multiplier=1.0,
     ),
+    "x4-double-sample-linear-lr": BatchProfile(
+        scale=4,
+        protocol_suffix="LargeBatchX4DoubleSampleLinearLR",
+        output_suffix="large_batch_x4_double_sample_linear_lr",
+        config_overrides={
+            "mb_n_size": 64,
+            "pretrain_mb_n_size": 64,
+            "steps_per_batch": 500,
+            "pretrain_steps": 15_000,
+            "ac_train_sync": 512,
+            "ac_train_steps": 400,
+            "wm_lr": 2e-4,
+            "ac_lr": 2e-4,
+        },
+        hypothesis=(
+            "Distributing the successful single-GPU x4 double-sample global "
+            "batches across four ranks preserves environment interaction, "
+            "optimizer updates, sampled-frame use, and learning rates while "
+            "reducing per-rank optimization work."
+        ),
+        classification="execution_matched_ddp4_large_batch_profile",
+        learning_rate_rule="matched_to_single_gpu_x4_double_sample",
+        optimizer_update_multiplier=0.5,
+    ),
     "single-gpu-x4-linear-lr": BatchProfile(
         scale=4,
         protocol_suffix="SingleGPULargeBatchX4LinearLR",
@@ -1124,6 +1148,7 @@ def main(*, default_method: str = "moe") -> int:
         task1_large_batch_reference = (
             args.batch_profile
             in {
+                "x4-double-sample-linear-lr",
                 "single-gpu-x4-linear-lr",
                 "single-gpu-x4-double-sample-linear-lr",
             }

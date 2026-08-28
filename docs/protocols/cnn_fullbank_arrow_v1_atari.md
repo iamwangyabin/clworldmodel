@@ -150,6 +150,14 @@ and numerically sensitive probability, loss, and return operations. An
 all-BF16 continuation path is not part of this profile because the preceding
 continuation audit demonstrated saturation at confident logits.
 
+`x4-double-sample-linear-lr` is the four-device execution-matched counterpart
+of that profile. The global world-model and actor-context batches remain
+`64` and `512`, split into per-rank batches of `16` and `128`. It retains the
+same 500 world-model updates, 400 Actor-Critic updates, `2e-4` learning rates,
+environment interaction, and sampled-frame budgets per epoch. DDP therefore
+changes execution placement only; it does not claim bitwise equivalence because
+CUDA kernels are not restricted to deterministic-only implementations.
+
 ### Late actor-stability pilot
 
 The first `x4-full-updates` seed-0 Task 1 pilot reached a periodic MsPacman raw
