@@ -63,6 +63,11 @@ def _compile_environment_override(environment: dict[str, str]) -> dict[str, str]
     }
 
 
+def _absolute_path_preserving_symlinks(path: Path) -> Path:
+    """Resolve relative components without escaping a virtualenv interpreter."""
+    return Path(os.path.abspath(path.expanduser()))
+
+
 def _parser(
     default_method_profile: str = "mechanism-bank",
 ) -> argparse.ArgumentParser:
@@ -222,7 +227,7 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
         reuse_enabled=reuse_enabled,
         method_profile=args.method_profile,
     )
-    python = args.python.expanduser().resolve()
+    python = _absolute_path_preserving_symlinks(args.python)
     output_dir = (
         args.output_dir.expanduser().resolve()
         if args.output_dir is not None

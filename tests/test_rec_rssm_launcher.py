@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from run_cnn_mechanism_bank_incremental import (  # noqa: E402
     REC_REUSE_PROBE_EPOCHS,
     REC_ROUTE_LR_SCALE,
     REC_ROUTE_PARAMETERS_FOR_TASK3,
+    _absolute_path_preserving_symlinks,
     _incremental_config,
     _parser,
 )
@@ -119,6 +121,20 @@ class RecRssmLauncherTests(unittest.TestCase):
         )
         self.assertEqual(args.method_profile, "rec-rssm")
         self.assertEqual(args.reuse_mode, "reuse")
+
+    def test_launcher_preserves_virtualenv_interpreter_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            base_python = root / "base-python"
+            base_python.touch()
+            venv_python = root / ".venv" / "bin" / "python"
+            venv_python.parent.mkdir(parents=True)
+            venv_python.symlink_to(base_python)
+
+            selected = _absolute_path_preserving_symlinks(venv_python)
+
+        self.assertEqual(selected, venv_python)
+        self.assertNotEqual(selected, base_python)
 
 
 if __name__ == "__main__":
