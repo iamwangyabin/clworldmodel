@@ -117,6 +117,39 @@ class RecRssmTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fixes atom/probe"):
             Config.from_dict(invalid)
 
+    def test_expanded_config_requires_named_capacity_schedule_and_duration(
+        self,
+    ) -> None:
+        data = self._method_config_data()
+        data.update(
+            {
+                "epochs": 330,
+                "task_mechanism_capacity_profile": "expanded_640",
+                "task_mechanism_recurrent_width": 640,
+                "task_mechanism_representation_width": 640,
+                "task_mechanism_transition_width": 320,
+                "ac_schedule": "task_cosine_decay",
+                "ac_lr": 2e-4,
+                "ac_decay_start_task_epoch": 60,
+                "ac_decay_end_task_epoch": 120,
+                "ac_final_lr": 5e-5,
+                "ac_entropy_scale": 3e-4,
+                "ac_final_entropy_scale": 3e-4,
+            }
+        )
+        data["esc"]["kwargs"] = {"task_durations": [90, 120, 120]}
+
+        config = Config.from_dict(data)
+
+        self.assertEqual(config.task_mechanism_capacity_profile, "expanded_640")
+        self.assertEqual(config.esc.kwargs["task_durations"], [90, 120, 120])
+
+        invalid = data.copy()
+        invalid["esc"] = data["esc"].copy()
+        invalid["esc"]["kwargs"] = {"task_durations": [90, 90, 150]}
+        with self.assertRaisesRegex(ValueError, "finish within"):
+            Config.from_dict(invalid)
+
     def test_lossless_atom_sum_preserves_full_mechanism(self) -> None:
         torch.manual_seed(7)
         mechanism = ResidualMechanism(
@@ -137,6 +170,44 @@ class RecRssmTests(unittest.TestCase):
         self.assertEqual(atoms.shape, (2, 3, 5, 4, 7))
         torch.testing.assert_close(
             atoms.sum(dim=-2), full, rtol=1e-12, atol=1e-12
+        )
+
+    def test_expanded_production_mechanism_parameter_budget_is_exact(self) -> None:
+        banks = (
+            MechanismBank(
+                num_tasks=3,
+                in_features=512,
+                out_features=512,
+                hidden_features=640,
+                num_atoms=4,
+            ),
+            MechanismBank(
+                num_tasks=3,
+                in_features=4096 + 512,
+                out_features=32 * 32,
+                hidden_features=640,
+                num_atoms=4,
+            ),
+            MechanismBank(
+                num_tasks=3,
+                in_features=512,
+                out_features=32 * 32,
+                hidden_features=320,
+                num_atoms=4,
+            ),
+        )
+        per_bank = [
+            bank.parameter_report()["mechanism_parameters_per_later_task"][0]
+            for bank in banks
+        ]
+        self.assertEqual(per_bank, [657_536, 3_615_360, 493_888])
+        self.assertEqual(sum(per_bank), 4_766_784)
+        self.assertEqual(
+            sum(
+                bank.parameter_report()["route_parameters_per_later_task"][1]
+                for bank in banks
+            ),
+            12,
         )
 
     def test_scalar_gate_checkpoint_migrates_to_four_identical_atom_gates(self) -> None:

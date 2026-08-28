@@ -39,9 +39,14 @@ PROTOCOL = (
 REC_PROTOCOL = (
     "REC-RSSM-ARROW-v1-Task1SnapshotSeeded-Atari-TaskAware"
 )
+REC_EXPANDED_PROTOCOL = (
+    "REC-RSSM-ARROW-v2-Task1SnapshotSeeded-Atari-TaskAware-Expanded120"
+)
 MECHANISM_WIDTHS = (512, 512, 256)
+REC_EXPANDED_MECHANISM_WIDTHS = (640, 640, 320)
 MECHANISM_RESIDUAL_SCALE = 0.1
 MECHANISM_PARAMETERS_PER_LATER_TASK = 3_816_192
+REC_EXPANDED_PARAMETERS_PER_LATER_TASK = 4_766_784
 REC_NUM_ATOMS = 4
 REC_REUSE_PROBE_EPOCHS = 1
 REC_ROUTE_LR_SCALE = 5.0
@@ -49,6 +54,13 @@ REC_CONSOLIDATION_BATCHES = 8
 REC_MIN_CONTRIBUTION = 0.01
 REC_MAX_VALIDATION_DROP = 0.05
 REC_ROUTE_PARAMETERS_FOR_TASK3 = 12
+REC_CAPACITY_PROFILES = ("matched-v1", "expanded120-v2")
+REC_EXPANDED_TASK_DURATIONS = (90, 120, 120)
+REC_EXPANDED_POST_TASK_EPOCHS = sum(REC_EXPANDED_TASK_DURATIONS[1:])
+REC_EXPANDED_SMOKE_TASK_DURATIONS = (90, 1, 2)
+REC_EXPANDED_SMOKE_POST_TASK_EPOCHS = sum(
+    REC_EXPANDED_SMOKE_TASK_DURATIONS[1:]
+)
 REUSE_MODES = ("reuse", "no-reuse")
 METHOD_PROFILES = ("mechanism-bank", "rec-rssm")
 COMPILE_ENVIRONMENT_KEYS = ("TRITON_LIBCUDA_PATH",)
@@ -95,6 +107,11 @@ def _parser(
         choices=METHOD_PROFILES,
         default=default_method_profile,
     )
+    parser.add_argument(
+        "--rec-capacity-profile",
+        choices=REC_CAPACITY_PROFILES,
+        default="matched-v1",
+    )
     parser.add_argument("--no-compile", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -106,14 +123,24 @@ def _incremental_config(
     epochs_after_task1: int,
     reuse_enabled: bool = True,
     method_profile: str = "mechanism-bank",
+    rec_capacity_profile: str = "matched-v1",
+    expanded_smoke: bool = False,
 ) -> dict:
     if epochs_after_task1 < 1:
         raise ValueError("--epochs-after-task1 must be positive")
     if method_profile not in METHOD_PROFILES:
         raise ValueError(f"Unknown method profile: {method_profile}")
+    if rec_capacity_profile not in REC_CAPACITY_PROFILES:
+        raise ValueError(
+            f"Unknown REC-RSSM capacity profile: {rec_capacity_profile}"
+        )
     if method_profile == "rec-rssm" and not reuse_enabled:
         raise ValueError("REC-RSSM requires atom reuse")
     is_rec_rssm = method_profile == "rec-rssm"
+    if not is_rec_rssm and rec_capacity_profile != "matched-v1":
+        raise ValueError("REC-RSSM capacity profiles require --method-profile rec-rssm")
+    if expanded_smoke and rec_capacity_profile != "expanded120-v2":
+        raise ValueError("Expanded smoke scheduling requires expanded120-v2")
     config = copy.deepcopy(source)
     task_names = tuple(task["name"] for task in config["esc"]["env_configs"])
     if task_names != EXPECTED_TASKS:
@@ -124,9 +151,38 @@ def _incremental_config(
     if task_duration != 90:
         raise ValueError("The first pilot fixes each task at 90 epochs")
 
+    expanded_rec = is_rec_rssm and rec_capacity_profile == "expanded120-v2"
+    expected_post_task_epochs = (
+        REC_EXPANDED_SMOKE_POST_TASK_EPOCHS
+        if expanded_smoke
+        else REC_EXPANDED_POST_TASK_EPOCHS
+    )
+    if expanded_rec and epochs_after_task1 != expected_post_task_epochs:
+        raise ValueError(
+            "expanded120-v2 requires exactly "
+            f"{expected_post_task_epochs} post-Task-1 epochs for this classification"
+        )
+    if expanded_smoke:
+        task_durations = REC_EXPANDED_SMOKE_TASK_DURATIONS
+    elif expanded_rec:
+        task_durations = REC_EXPANDED_TASK_DURATIONS
+    else:
+        task_durations = (task_duration,) * len(EXPECTED_TASKS)
+    mechanism_widths = (
+        REC_EXPANDED_MECHANISM_WIDTHS if expanded_rec else MECHANISM_WIDTHS
+    )
+    if expanded_rec:
+        schedule_kwargs = config["esc"]["kwargs"]
+        schedule_kwargs.pop("swap_sched", None)
+        schedule_kwargs["task_durations"] = list(task_durations)
+
     config.update(
         {
-            "epochs": task_duration + epochs_after_task1,
+            "epochs": (
+                sum(task_durations)
+                if expanded_rec
+                else task_duration + epochs_after_task1
+            ),
             "continual_method": (
                 "rec_rssm_arrow" if is_rec_rssm else "cnn_mechanism_bank_arrow"
             ),
@@ -143,9 +199,12 @@ def _incremental_config(
             "task_recurrent_output_adapter_features": 0,
             "task_mechanism_bank": True,
             "task_mechanism_reuse": bool(reuse_enabled),
-            "task_mechanism_recurrent_width": MECHANISM_WIDTHS[0],
-            "task_mechanism_representation_width": MECHANISM_WIDTHS[1],
-            "task_mechanism_transition_width": MECHANISM_WIDTHS[2],
+            "task_mechanism_capacity_profile": (
+                "expanded_640" if expanded_rec else "matched_512"
+            ),
+            "task_mechanism_recurrent_width": mechanism_widths[0],
+            "task_mechanism_representation_width": mechanism_widths[1],
+            "task_mechanism_transition_width": mechanism_widths[2],
             "task_mechanism_residual_scale": MECHANISM_RESIDUAL_SCALE,
             "task_mechanism_num_atoms": REC_NUM_ATOMS if is_rec_rssm else 1,
             "task_mechanism_reuse_probe_epochs": (
@@ -175,6 +234,20 @@ def _incremental_config(
             "independent_expert_original_task_index": None,
         }
     )
+    if expanded_rec and not expanded_smoke:
+        config.update(
+            {
+                "ac_schedule": "task_cosine_decay",
+                "ac_lr": 2e-4,
+                "ac_decay_start_task_epoch": 60,
+                "ac_decay_end_task_epoch": 120,
+                "ac_final_lr": 5e-5,
+                "ac_entropy_scale": 3e-4,
+                "ac_final_entropy_scale": 3e-4,
+            }
+        )
+    elif expanded_smoke:
+        config["ac_schedule"] = "constant"
     for replay_config in config["replay_buffers"]:
         replay_config["rb_device"] = "cpu"
     return config
@@ -186,6 +259,7 @@ def _default_output_dir(
     epochs_after_task1: int,
     reuse_enabled: bool,
     method_profile: str = "mechanism-bank",
+    rec_capacity_profile: str = "matched-v1",
 ) -> Path:
     reuse_label = (
         "rec_rssm"
@@ -194,9 +268,17 @@ def _default_output_dir(
         if reuse_enabled
         else "no_reuse"
     )
+    profile_label = (
+        f"_{rec_capacity_profile.replace('-', '_')}"
+        if method_profile == "rec-rssm" and rec_capacity_profile != "matched-v1"
+        else ""
+    )
     return (
         snapshot.parent.parent.parent
-        / f"cnn_mechanism_bank_rssm_{reuse_label}_posttask1_e{epochs_after_task1}"
+        / (
+            f"cnn_mechanism_bank_rssm_{reuse_label}{profile_label}_"
+            f"posttask1_e{epochs_after_task1}"
+        )
     )
 
 
@@ -219,6 +301,10 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
     if args.method_profile == "rec-rssm" and not reuse_enabled:
         raise ValueError("REC-RSSM does not define a no-reuse launch mode")
     is_rec_rssm = args.method_profile == "rec-rssm"
+    expanded_smoke = (
+        args.classification == "smoke"
+        and args.rec_capacity_profile == "expanded120-v2"
+    )
     source_config_path = _source_config_path(snapshot, args.source_config)
     source = json.loads(source_config_path.read_text(encoding="utf-8"))
     config = _incremental_config(
@@ -226,7 +312,14 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
         epochs_after_task1=args.epochs_after_task1,
         reuse_enabled=reuse_enabled,
         method_profile=args.method_profile,
+        rec_capacity_profile=args.rec_capacity_profile,
+        expanded_smoke=expanded_smoke,
     )
+    resolved_task_durations = config["esc"]["kwargs"].get("task_durations")
+    if resolved_task_durations is None:
+        resolved_task_durations = [
+            int(config["esc"]["kwargs"]["swap_sched"])
+        ] * len(config["esc"]["env_configs"])
     python = _absolute_path_preserving_symlinks(args.python)
     output_dir = (
         args.output_dir.expanduser().resolve()
@@ -236,6 +329,7 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
             epochs_after_task1=args.epochs_after_task1,
             reuse_enabled=reuse_enabled,
             method_profile=args.method_profile,
+            rec_capacity_profile=args.rec_capacity_profile,
         )
     )
     config_path = output_dir / "resolved_training_config.json"
@@ -280,12 +374,22 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
     if not args.no_compile and not is_rec_rssm:
         command.append("--compile-world-model")
 
+    expanded_rec = is_rec_rssm and args.rec_capacity_profile == "expanded120-v2"
+    mechanism_widths = (
+        REC_EXPANDED_MECHANISM_WIDTHS if expanded_rec else MECHANISM_WIDTHS
+    )
+    mechanism_parameters = (
+        REC_EXPANDED_PARAMETERS_PER_LATER_TASK
+        if expanded_rec
+        else MECHANISM_PARAMETERS_PER_LATER_TASK
+    )
+    rec_protocol = REC_EXPANDED_PROTOCOL if expanded_rec else REC_PROTOCOL
     post_task_epochs = args.epochs_after_task1
     decisions_per_epoch = int(config["n_sync"]) * int(config["gen_seq_len"])
     raw_frames_per_epoch = decisions_per_epoch * int(config["env_repeat"])
     later_task_parameters = {
-        "task_1": MECHANISM_PARAMETERS_PER_LATER_TASK,
-        "task_2": MECHANISM_PARAMETERS_PER_LATER_TASK
+        "task_1": mechanism_parameters,
+        "task_2": mechanism_parameters
         + (
             REC_ROUTE_PARAMETERS_FOR_TASK3
             if is_rec_rssm
@@ -297,7 +401,10 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
         "method": (
             "REC-RSSM" if is_rec_rssm else "CNN-MechanismBank-RSSM-ARROW"
         ),
-        "protocol": REC_PROTOCOL if is_rec_rssm else PROTOCOL,
+        "protocol": rec_protocol if is_rec_rssm else PROTOCOL,
+        "rec_capacity_profile": (
+            args.rec_capacity_profile if is_rec_rssm else None
+        ),
         "ablation": (
             "reuse_expand_consolidate"
             if is_rec_rssm
@@ -306,8 +413,14 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
             else "no_reuse"
         ),
         "hypothesis": (
-            "Lossless mechanism atoms permit reuse-first probing while a full "
-            "new mechanism preserves the established plasticity floor."
+            (
+                "Moderately wider lossless mechanisms and a predeclared late-task "
+                "actor learning-rate decay can improve and stabilize acquisition "
+                "under longer Task-2/3 training."
+                if expanded_rec
+                else "Lossless mechanism atoms permit reuse-first probing while a "
+                "full new mechanism preserves the established plasticity floor."
+            )
             if is_rec_rssm
             else "A full new residual mechanism preserves later-task plasticity "
             "while zero-initialized tanh gates can reuse frozen older mechanisms."
@@ -328,7 +441,9 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
         "frozen_core": "completed Task-1 shared CNN and base RSSM",
         "later_task_modules": {
             "per_task_projector": "residual 256x4x4 bottleneck-64 spatial projector",
-            "mechanism_widths_recurrent_posterior_prior": list(MECHANISM_WIDTHS),
+            "mechanism_widths_recurrent_posterior_prior": list(
+                mechanism_widths
+            ),
             "mechanism_residual_scale": MECHANISM_RESIDUAL_SCALE,
             "reuse_gates": (
                 "independent per-old-task per-atom tanh gates initialized to zero"
@@ -338,7 +453,9 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
             "mechanism_atoms": (
                 {
                     "count": REC_NUM_ATOMS,
-                    "widths_recurrent_posterior_prior": [128, 128, 64],
+                    "widths_recurrent_posterior_prior": [
+                        width // REC_NUM_ATOMS for width in mechanism_widths
+                    ],
                     "lossless_sum": True,
                 }
                 if is_rec_rssm
@@ -375,6 +492,9 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
             "source_replay_reused": False,
             "old_task_update_fraction": 0.0,
             "current_task_update_fraction": 1.0,
+            "task_duration_epochs": (
+                [int(duration) for duration in resolved_task_durations]
+            ),
         },
         "resolved_training_config": str(config_path),
         "output_dir": str(output_dir),
@@ -396,6 +516,21 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
                 "reuse_probe_epochs": REC_REUSE_PROBE_EPOCHS,
                 "reuse_probe_first_task": 2,
                 "expand": "full current mechanism plus frozen old atom gates",
+                "actor_schedule": {
+                    "kind": config.get("ac_schedule", "constant"),
+                    "initial_learning_rate": config.get("ac_lr"),
+                    "decay_start_task_epoch": config.get(
+                        "ac_decay_start_task_epoch"
+                    ),
+                    "decay_end_task_epoch": config.get(
+                        "ac_decay_end_task_epoch"
+                    ),
+                    "final_learning_rate": config.get("ac_final_lr"),
+                    "initial_entropy_scale": config.get("ac_entropy_scale"),
+                    "final_entropy_scale": config.get(
+                        "ac_final_entropy_scale"
+                    ),
+                },
                 "route_lr_scale": REC_ROUTE_LR_SCALE,
                 "boundary_consolidation": {
                     "replay_batches": REC_CONSOLIDATION_BATCHES,
@@ -454,11 +589,13 @@ def main(default_method_profile: str = "mechanism-bank") -> int:
         "actor_critic_parameter_accounting.json",
         "task1_seed_initialization.json",
     ]
-    if is_rec_rssm and args.epochs_after_task1 >= 90:
+    if is_rec_rssm and args.epochs_after_task1 >= int(resolved_task_durations[1]):
         required_outputs.append(
             "rec_rssm_consolidation/task_01_boundary.json"
         )
-    if is_rec_rssm and args.epochs_after_task1 >= 180:
+    if is_rec_rssm and args.epochs_after_task1 >= sum(
+        int(duration) for duration in resolved_task_durations[1:]
+    ):
         required_outputs.append(
             "rec_rssm_consolidation/task_02_boundary.json"
         )

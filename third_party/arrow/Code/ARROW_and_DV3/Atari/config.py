@@ -62,6 +62,7 @@ ActorNetwork = Literal[
 ]
 ActorCriticOptimizer = Literal["adam", "laprop"]
 ActorCriticSchedule = Literal["constant", "task_cosine_decay"]
+TaskMechanismCapacityProfile = Literal["matched_512", "expanded_640"]
 EvaluationSeedProtocol = Literal[
     "advancing",
     "fixed_validation_heldout_final",
@@ -304,6 +305,7 @@ class Config(Serialisable):
     task_recurrent_output_adapter_features: int = 0
     task_mechanism_bank: bool = False
     task_mechanism_reuse: bool = True
+    task_mechanism_capacity_profile: TaskMechanismCapacityProfile = "matched_512"
     task_mechanism_recurrent_width: int = 512
     task_mechanism_representation_width: int = 512
     task_mechanism_transition_width: int = 256
@@ -379,6 +381,38 @@ class Config(Serialisable):
         assert self.n_sync * self.gen_seq_len == self.data_n * self.data_t
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
+        sequential_task_durations: tuple[int, ...] | None = None
+        if self.esc.env_schedule_type is SequentialEnvironments:
+            task_durations = self.esc.kwargs.get("task_durations")
+            swap_sched = self.esc.kwargs.get("swap_sched")
+            if task_durations is not None and swap_sched is not None:
+                raise ValueError(
+                    "Sequential scheduling accepts swap_sched or task_durations, "
+                    "not both"
+                )
+            if task_durations is None:
+                if not isinstance(swap_sched, int) or swap_sched < 1:
+                    raise ValueError(
+                        "Sequential scheduling requires a positive swap_sched"
+                    )
+                sequential_task_durations = (swap_sched,) * len(
+                    self.esc.env_configs
+                )
+            else:
+                if not isinstance(task_durations, list) or len(
+                    task_durations
+                ) != len(self.esc.env_configs):
+                    raise ValueError(
+                        "task_durations must be a list matching the environment count"
+                    )
+                if any(
+                    not isinstance(duration, int) or duration < 1
+                    for duration in task_durations
+                ):
+                    raise ValueError(
+                        "task_durations must contain positive integers"
+                    )
+                sequential_task_durations = tuple(task_durations)
         if self.continual_method not in {
             "none",
             "moe_arrow",
@@ -405,6 +439,14 @@ class Config(Serialisable):
         )
         is_rec_rssm = self.continual_method == "rec_rssm_arrow"
         uses_mechanism_bank = is_cnn_mechanism_bank or is_rec_rssm
+        if self.task_mechanism_capacity_profile not in {
+            "matched_512",
+            "expanded_640",
+        }:
+            raise ValueError(
+                "Unknown mechanism capacity profile: "
+                f"{self.task_mechanism_capacity_profile!r}"
+            )
         if not isinstance(self.task_mechanism_bank, bool) or not isinstance(
             self.task_mechanism_reuse, bool
         ):
@@ -676,7 +718,11 @@ class Config(Serialisable):
                     raise ValueError(
                         "CNN-MechanismBank disables every RSSM LoRA/output-adapter path"
                     )
-                expected_mechanism_settings = (True, 512, 512, 256, 0.1)
+                expected_mechanism_settings = (
+                    (True, 640, 640, 320, 0.1)
+                    if self.task_mechanism_capacity_profile == "expanded_640"
+                    else (True, 512, 512, 256, 0.1)
+                )
                 observed_mechanism_settings = (
                     self.task_mechanism_bank,
                     self.task_mechanism_recurrent_width,
@@ -689,6 +735,13 @@ class Config(Serialisable):
                         "CNN-MechanismBank fixes bank/recurrent/posterior/prior/scale "
                         f"settings to {expected_mechanism_settings}, got "
                         f"{observed_mechanism_settings}"
+                    )
+                if (
+                    self.task_mechanism_capacity_profile == "expanded_640"
+                    and not is_rec_rssm
+                ):
+                    raise ValueError(
+                        "expanded_640 is validated only for REC-RSSM"
                     )
                 atom_settings = (
                     self.task_mechanism_num_atoms,
@@ -1286,16 +1339,31 @@ class Config(Serialisable):
                     "Actor-critic final entropy scale must lie in "
                     "[0, ac_entropy_scale]"
                 )
-            if not is_cnn_fullbank or self.dino_fullbank_current_task_fraction != 1.0:
-                raise ValueError(
-                    "task_cosine_decay is validated only for current-only "
-                    "CNN-FullBank actor training"
+            current_only_actor_training = (
+                is_cnn_fullbank
+                or (
+                    is_rec_rssm
+                    and self.task_mechanism_capacity_profile == "expanded_640"
                 )
-            swap_sched = self.esc.kwargs.get("swap_sched")
+            )
             if (
-                self.esc.env_schedule_type is not SequentialEnvironments
-                or not isinstance(swap_sched, int)
-                or swap_sched < self.ac_decay_end_task_epoch
+                not current_only_actor_training
+                or self.dino_fullbank_current_task_fraction != 1.0
+            ):
+                raise ValueError(
+                    "task_cosine_decay is validated only for named current-only "
+                    "actor training profiles"
+                )
+            actor_schedule_durations = sequential_task_durations
+            if (
+                actor_schedule_durations is not None
+                and is_rec_rssm
+                and self.task_mechanism_capacity_profile == "expanded_640"
+            ):
+                actor_schedule_durations = actor_schedule_durations[1:]
+            if (
+                not actor_schedule_durations
+                or min(actor_schedule_durations) < self.ac_decay_end_task_epoch
             ):
                 raise ValueError(
                     "task_cosine_decay must finish within each sequential task"

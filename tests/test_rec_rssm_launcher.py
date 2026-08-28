@@ -16,6 +16,13 @@ from run_cnn_mechanism_bank_incremental import (  # noqa: E402
     EXPECTED_TASKS,
     MECHANISM_PARAMETERS_PER_LATER_TASK,
     REC_CONSOLIDATION_BATCHES,
+    REC_EXPANDED_MECHANISM_WIDTHS,
+    REC_EXPANDED_PARAMETERS_PER_LATER_TASK,
+    REC_EXPANDED_POST_TASK_EPOCHS,
+    REC_EXPANDED_PROTOCOL,
+    REC_EXPANDED_SMOKE_POST_TASK_EPOCHS,
+    REC_EXPANDED_SMOKE_TASK_DURATIONS,
+    REC_EXPANDED_TASK_DURATIONS,
     REC_MAX_VALIDATION_DROP,
     REC_MIN_CONTRIBUTION,
     REC_NUM_ATOMS,
@@ -65,6 +72,7 @@ class RecRssmLauncherTests(unittest.TestCase):
 
         self.assertEqual(source, original)
         self.assertEqual(config["continual_method"], "rec_rssm_arrow")
+        self.assertEqual(config["task_mechanism_capacity_profile"], "matched_512")
         self.assertEqual(config["epochs"], 270)
         self.assertEqual(config["task_mechanism_num_atoms"], REC_NUM_ATOMS)
         self.assertEqual(
@@ -99,6 +107,73 @@ class RecRssmLauncherTests(unittest.TestCase):
             REC_PROTOCOL,
             "REC-RSSM-ARROW-v1-Task1SnapshotSeeded-Atari-TaskAware",
         )
+
+    def test_expanded_profile_fixes_capacity_duration_and_actor_decay(self) -> None:
+        config = _incremental_config(
+            self._source(),
+            epochs_after_task1=REC_EXPANDED_POST_TASK_EPOCHS,
+            method_profile="rec-rssm",
+            rec_capacity_profile="expanded120-v2",
+        )
+
+        self.assertEqual(config["epochs"], 330)
+        self.assertEqual(
+            config["esc"]["kwargs"]["task_durations"],
+            list(REC_EXPANDED_TASK_DURATIONS),
+        )
+        self.assertNotIn("swap_sched", config["esc"]["kwargs"])
+        self.assertEqual(config["task_mechanism_capacity_profile"], "expanded_640")
+        self.assertEqual(
+            (
+                config["task_mechanism_recurrent_width"],
+                config["task_mechanism_representation_width"],
+                config["task_mechanism_transition_width"],
+            ),
+            REC_EXPANDED_MECHANISM_WIDTHS,
+        )
+        self.assertEqual(
+            tuple(
+                width // REC_NUM_ATOMS for width in REC_EXPANDED_MECHANISM_WIDTHS
+            ),
+            (160, 160, 80),
+        )
+        self.assertEqual(REC_EXPANDED_PARAMETERS_PER_LATER_TASK, 4_766_784)
+        self.assertEqual(config["ac_schedule"], "task_cosine_decay")
+        self.assertEqual(config["ac_decay_start_task_epoch"], 60)
+        self.assertEqual(config["ac_decay_end_task_epoch"], 120)
+        self.assertEqual(config["ac_final_lr"], 5e-5)
+        self.assertEqual(config["ac_final_entropy_scale"], 3e-4)
+        self.assertEqual(
+            REC_EXPANDED_PROTOCOL,
+            "REC-RSSM-ARROW-v2-Task1SnapshotSeeded-Atari-TaskAware-Expanded120",
+        )
+
+    def test_expanded_profile_rejects_unmatched_budget(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly 240"):
+            _incremental_config(
+                self._source(),
+                epochs_after_task1=180,
+                method_profile="rec-rssm",
+                rec_capacity_profile="expanded120-v2",
+            )
+
+    def test_expanded_smoke_crosses_probe_and_full_phase_in_three_epochs(
+        self,
+    ) -> None:
+        config = _incremental_config(
+            self._source(),
+            epochs_after_task1=REC_EXPANDED_SMOKE_POST_TASK_EPOCHS,
+            method_profile="rec-rssm",
+            rec_capacity_profile="expanded120-v2",
+            expanded_smoke=True,
+        )
+
+        self.assertEqual(
+            config["esc"]["kwargs"]["task_durations"],
+            list(REC_EXPANDED_SMOKE_TASK_DURATIONS),
+        )
+        self.assertEqual(config["epochs"], 93)
+        self.assertEqual(config["ac_schedule"], "constant")
 
     def test_rec_profile_rejects_no_reuse_and_unnamed_settings(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires atom reuse"):

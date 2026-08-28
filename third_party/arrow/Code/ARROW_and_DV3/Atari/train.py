@@ -322,10 +322,7 @@ def _actor_critic_schedule_values(
         raise ValueError("Epoch must be non-negative")
     if config.ac_schedule == "constant":
         return config.ac_lr, config.ac_entropy_scale, epoch + 1
-    swap_sched = config.esc.kwargs.get("swap_sched")
-    if not isinstance(swap_sched, int) or swap_sched < 1:
-        raise ValueError("Actor scheduling requires a positive task duration")
-    task_epoch = epoch % swap_sched + 1
+    _, task_epoch = _sequential_task_position(config, epoch)
     if config.ac_schedule != "task_cosine_decay":
         raise ValueError(f"Unknown actor-critic schedule: {config.ac_schedule!r}")
 
@@ -338,6 +335,57 @@ def _actor_critic_schedule_values(
         config.ac_entropy_scale - config.ac_final_entropy_scale
     ) * remaining
     return learning_rate, entropy_scale, task_epoch
+
+
+def _sequential_task_durations(config: Config) -> tuple[int, ...]:
+    """Return validated per-task durations for a sequential schedule."""
+    kwargs = config.esc.kwargs
+    task_durations = kwargs.get("task_durations")
+    swap_sched = kwargs.get("swap_sched")
+    if task_durations is not None and swap_sched is not None:
+        raise ValueError(
+            "Sequential scheduling accepts swap_sched or task_durations, not both"
+        )
+    task_count = len(getattr(config.esc, "env_configs", ()))
+    if task_durations is None:
+        if not isinstance(swap_sched, int) or swap_sched < 1:
+            raise ValueError("Sequential scheduling requires positive task durations")
+        return (swap_sched,) * max(1, task_count)
+    if not isinstance(task_durations, (list, tuple)):
+        raise ValueError("task_durations must be a list of positive integers")
+    durations = tuple(task_durations)
+    if task_count and len(durations) != task_count:
+        raise ValueError("task_durations must match the environment count")
+    if not durations or any(
+        not isinstance(duration, int) or duration < 1 for duration in durations
+    ):
+        raise ValueError("task_durations must contain positive integers")
+    return durations
+
+
+def _sequential_task_position(config: Config, epoch: int) -> tuple[int, int]:
+    """Return the task index and one-based local epoch for a global epoch."""
+    if epoch < 0:
+        raise ValueError("Epoch must be non-negative")
+    durations = _sequential_task_durations(config)
+    schedule_epoch = epoch % sum(durations)
+    task_start = 0
+    for task_index, duration in enumerate(durations):
+        task_end = task_start + duration
+        if schedule_epoch < task_end:
+            return task_index, schedule_epoch - task_start + 1
+        task_start = task_end
+    raise AssertionError("Validated sequential schedule did not contain the epoch")
+
+
+def _sequential_seen_task_count(config: Config, completed_epochs: int) -> int:
+    if completed_epochs < 0:
+        raise ValueError("Completed epochs must be non-negative")
+    durations = _sequential_task_durations(config)
+    if completed_epochs >= sum(durations):
+        return len(durations)
+    task_index, _ = _sequential_task_position(config, completed_epochs)
+    return task_index + 1
 
 
 def _raw_return_statistics(
@@ -360,16 +408,14 @@ def _raw_return_statistics(
 def _task_boundary_metadata(config: Config, epoch: int) -> Optional[dict]:
     if config.esc.env_schedule_type is not SequentialEnvironments:
         return None
-    swap_sched = config.esc.kwargs.get("swap_sched")
-    if not isinstance(swap_sched, int) or swap_sched < 1:
-        raise ValueError("Sequential environment schedule requires positive swap_sched")
-
+    durations = _sequential_task_durations(config)
     completed_epochs = epoch + 1
-    if completed_epochs % swap_sched != 0:
+    boundaries = np.cumsum(durations).tolist()
+    if completed_epochs not in boundaries:
         return None
 
-    boundary_index = completed_epochs // swap_sched
-    task_index = (boundary_index - 1) % len(config.esc.env_configs)
+    task_index = boundaries.index(completed_epochs)
+    boundary_index = task_index + 1
     task = config.esc.env_configs[task_index]
     return {
         "boundary_index": boundary_index,
@@ -1112,10 +1158,9 @@ def _consolidate_kan_from_replay(
         min_plasticity=config.residual_consolidation_min_plasticity,
         anchor_loss_scale=config.residual_consolidation_anchor_loss_scale,
     )
-    swap_sched = int(config.esc.kwargs["swap_sched"])
-    boundary_index = epoch // swap_sched
-    completed_task_index = (boundary_index - 1) % len(config.esc.env_configs)
-    upcoming_task_index = boundary_index % len(config.esc.env_configs)
+    completed_task_index, _ = _sequential_task_position(config, epoch - 1)
+    upcoming_task_index, _ = _sequential_task_position(config, epoch)
+    boundary_index = completed_task_index + 1
     artifact = {
         "schema_version": 1,
         "artifact_kind": "replay_functional_kan_consolidation",
@@ -2235,11 +2280,11 @@ if __name__ == "__main__":
                 "Task-1 incremental training must be seeded by CNN-FullBank"
             )
         training_start_epoch = int(task1_seed_payload["completed_epochs"])
-        swap_sched = int(config.esc.kwargs["swap_sched"])
-        if training_start_epoch != swap_sched:
+        first_task_duration = _sequential_task_durations(config)[0]
+        if training_start_epoch != first_task_duration:
             raise ValueError(
                 "Task-1 snapshot completion must equal one task duration: "
-                f"{training_start_epoch} != {swap_sched}"
+                f"{training_start_epoch} != {first_task_duration}"
             )
         if config.epochs <= training_start_epoch:
             raise ValueError(
@@ -2727,9 +2772,20 @@ if __name__ == "__main__":
         if len(config.esc.env_configs) == 1: 
             task_kind = "single"
         else:
-            if config.esc.env_configs[0].name == "ALE/MsPacman-v5" and config.esc.kwargs["swap_sched"] == 90:
+            first_task_duration = (
+                _sequential_task_durations(config)[0]
+                if config.esc.env_schedule_type is SequentialEnvironments
+                else None
+            )
+            if (
+                config.esc.env_configs[0].name == "ALE/MsPacman-v5"
+                and first_task_duration == 90
+            ):
                 task_kind = "cl_original"
-            elif config.esc.env_configs[0].name == "ALE/Enduro-v5" and config.esc.kwargs["swap_sched"] == 90:
+            elif (
+                config.esc.env_configs[0].name == "ALE/Enduro-v5"
+                and first_task_duration == 90
+            ):
                 task_kind = "cl_reversed"
             else:
                 task_kind = "cl_two_cycle"
@@ -2917,8 +2973,8 @@ if __name__ == "__main__":
             current_task_id = envs.current_task_index()
             mechanism_phase = "full"
             if config.continual_method == "rec_rssm_arrow":
-                swap_sched = int(config.esc.kwargs["swap_sched"])
-                task_local_epoch = epoch % swap_sched
+                _, task_epoch = _sequential_task_position(config, epoch)
+                task_local_epoch = task_epoch - 1
                 if (
                     current_task_id >= 2
                     and task_local_epoch < config.task_mechanism_reuse_probe_epochs
@@ -3023,7 +3079,7 @@ if __name__ == "__main__":
             )
             print(
                 "Consolidated replay-important KAN coefficients at task boundary "
-                f"{epoch // int(config.esc.kwargs['swap_sched'])}: "
+                f"{_sequential_task_position(config, epoch)[0]}: "
                 f"modules={len(diagnostics)}"
             )
         if (
@@ -3219,9 +3275,9 @@ if __name__ == "__main__":
                         raw_stds=eval_raw_std,
                         cohort="periodic_validation",
                     )
-                    swap_sched = int(config.esc.kwargs["swap_sched"])
                     seen_task_count = min(
-                        len(eval_raw_mean), epoch // swap_sched + 1
+                        len(eval_raw_mean),
+                        _sequential_seen_task_count(config, epoch),
                     )
                     seen_task_raw_mean = float(
                         np.mean(eval_raw_mean[:seen_task_count])
@@ -3865,9 +3921,9 @@ if __name__ == "__main__":
         eval_funcs = envs.eval_funcs()
         task_configs = config.esc.env_configs
         if config.esc.env_schedule_type is SequentialEnvironments:
-            swap_sched = config.esc.kwargs["swap_sched"]
             seen_tasks = min(
-                len(task_configs), (config.epochs + swap_sched - 1) // swap_sched
+                len(task_configs),
+                _sequential_seen_task_count(config, config.epochs),
             )
             eval_funcs = eval_funcs[:seen_tasks]
             task_configs = task_configs[:seen_tasks]

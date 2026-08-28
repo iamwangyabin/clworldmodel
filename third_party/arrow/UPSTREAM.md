@@ -368,6 +368,21 @@ documented here, covered by focused parity tests, and followed by regenerating
     lossless atom sums, state migration, recurrent/posterior/prior parity,
     phase-specific gradients, optimizer ownership, hard masks, fixed
     configuration, and launcher budgets.
+44. Add the separately named
+    `REC-RSSM-ARROW-v2-Task1SnapshotSeeded-Atari-TaskAware-Expanded120`
+    follow-up profile.
+    Sequential Atari schedules may now declare one positive duration per task;
+    the legacy scalar `swap_sched` remains unchanged for every existing
+    profile. The v2 schedule keeps the 90-epoch Task-1 source boundary and uses
+    120 epochs for Boxing and CrazyClimber. REC mechanisms widen to
+    `640/640/320` with four lossless `160/160/80` atoms. A task-age-only Actor
+    learning-rate schedule stays at `2e-4` through local epoch 60 and then
+    cosine decays to `5e-5` by epoch 120 without changing entropy scale. Strict
+    configuration rejects mixed scalar/list schedules, unnamed widths,
+    mismatched duration or total-epoch budgets, and schedule drift. The v1
+    path and all upstream defaults remain unchanged. Focused tests cover
+    variable schedule boundaries, task-local Actor age, exact capacity and
+    parameter ledgers, and launcher budgets.
 
 ## Known issues at import
 

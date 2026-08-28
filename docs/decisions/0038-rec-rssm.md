@@ -80,3 +80,15 @@ smoke must additionally verify finite optimized losses, nonzero route and
 current-mechanism gradients in their respective phases, exact frozen Task-1 and
 old-mechanism tensors, replay/evaluation isolation, deterministic 16-rollout
 migration parity, and normal process exit.
+
+## Expanded120 Follow-Up
+
+The v1 pilot later exhibited substantial within-Boxing policy variation after
+reaching a stronger intermediate checkpoint. The separately named v2
+Expanded120 pilot therefore increases mechanism hidden widths to `640/640/320`,
+extends only the two snapshot-seeded later tasks to 120 epochs each, and uses a
+task-age-only Actor-Critic cosine learning-rate decay from local epoch 60 to
+120. It does not modify or supersede the running v1 protocol. Its additional
+capacity, frames, updates, and compute are explicit, so its results cannot be
+described as matched evidence. The protocol is specified in
+`docs/protocols/rec_rssm_arrow_v2_expanded120_atari.md`.
