@@ -348,6 +348,23 @@ documented here, covered by focused parity tests, and followed by regenerating
     cover exact zero effect, one-time normalization of composed logits, strict
     configuration isolation, gradient allowlists, frozen old tensors, nonzero
     zero-gate gradients, parameter accounting, and launcher semantics.
+43. Add the separately named, task-aware
+    `REC-RSSM-ARROW-v1-Task1SnapshotSeeded` path. It losslessly partitions each
+    fixed-width mechanism hidden axis into four contiguous atoms while retaining
+    the full coefficient-one current mechanism. Later tasks receive independent
+    per-old-task, per-atom tanh gates and persistent hard masks. CrazyClimber's
+    first local epoch freezes its new zero-effect mechanisms for a reuse-only
+    probe, after which full expansion resumes under the original Dreamer loss.
+    Boundary consolidation uses eight frozen replay batches for atom ablation
+    and routed-output contribution, followed by a same-cohort deterministic
+    16-rollout validation with whole-route rollback. A separate persisted mask
+    labels atoms as shared only after that validation accepts them. It changes
+    no mechanism weight, performs no optimization or environment interaction,
+    and adds no teacher, distillation, sparsity, or orthogonality objective.
+    Legacy scalar gates repeat across all atoms. Defaults and the whole-gate
+    mechanism method remain unchanged. Focused tests cover lossless atom sums, state migration,
+    recurrent/posterior/prior parity, phase-specific gradients, hard masks,
+    fixed configuration, and launcher budgets.
 
 ## Known issues at import
 

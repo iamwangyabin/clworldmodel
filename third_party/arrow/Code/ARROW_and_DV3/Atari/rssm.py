@@ -120,6 +120,7 @@ class Rssm(nn.Module):
         task_mechanism_representation_width: int = 512,
         task_mechanism_transition_width: int = 256,
         task_mechanism_residual_scale: float = 0.1,
+        task_mechanism_num_atoms: int = 1,
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
         residual_grid_size: int = 8,
@@ -184,6 +185,14 @@ class Rssm(nn.Module):
             raise ValueError("RSSM mechanism-bank widths must be positive")
         if task_mechanism_bank and task_mechanism_residual_scale <= 0:
             raise ValueError("RSSM mechanism residual scale must be positive")
+        if task_mechanism_bank and task_mechanism_num_atoms < 1:
+            raise ValueError("RSSM mechanism atom count must be positive")
+        if task_mechanism_bank and any(
+            width % task_mechanism_num_atoms for width in mechanism_widths
+        ):
+            raise ValueError(
+                "RSSM mechanism widths must be divisible by the atom count"
+            )
         if task_mechanism_bank and not full_task_experts:
             raise ValueError("RSSM mechanism banks require complete task experts")
         if task_mechanism_bank and not task_projected_image_encoder:
@@ -235,6 +244,7 @@ class Rssm(nn.Module):
         )
         self.task_mechanism_transition_width = task_mechanism_transition_width
         self.task_mechanism_residual_scale = task_mechanism_residual_scale
+        self.task_mechanism_num_atoms = task_mechanism_num_atoms
 
         self.recurrent = Recurrent(
             ls,
@@ -393,6 +403,7 @@ class Rssm(nn.Module):
                     hidden_features=task_mechanism_recurrent_width,
                     residual_scale=task_mechanism_residual_scale,
                     reuse_enabled=task_mechanism_reuse,
+                    num_atoms=task_mechanism_num_atoms,
                 )
                 self.representation_mechanism_bank = MechanismBank(
                     num_tasks=num_task_experts,
@@ -401,6 +412,7 @@ class Rssm(nn.Module):
                     hidden_features=task_mechanism_representation_width,
                     residual_scale=task_mechanism_residual_scale,
                     reuse_enabled=task_mechanism_reuse,
+                    num_atoms=task_mechanism_num_atoms,
                 )
                 self.transition_mechanism_bank = MechanismBank(
                     num_tasks=num_task_experts,
@@ -409,6 +421,7 @@ class Rssm(nn.Module):
                     hidden_features=task_mechanism_transition_width,
                     residual_scale=task_mechanism_residual_scale,
                     reuse_enabled=task_mechanism_reuse,
+                    num_atoms=task_mechanism_num_atoms,
                 )
             self.task_mechanism_reports = {
                 "recurrent": self.recurrent_mechanism_bank.parameter_report(),

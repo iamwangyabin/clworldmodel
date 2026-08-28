@@ -33,6 +33,7 @@ ContinualMethod = Literal[
     "cnn_projector_lora_arrow",
     "cnn_compact_shared_actor_arrow",
     "cnn_mechanism_bank_arrow",
+    "rec_rssm_arrow",
     "dino_fullbank_arrow",
     "dino_patchbank_arrow",
     "dino_convbank_arrow",
@@ -307,6 +308,12 @@ class Config(Serialisable):
     task_mechanism_representation_width: int = 512
     task_mechanism_transition_width: int = 256
     task_mechanism_residual_scale: float = 0.1
+    task_mechanism_num_atoms: int = 1
+    task_mechanism_reuse_probe_epochs: int = 0
+    task_mechanism_route_lr_scale: float = 1.0
+    task_mechanism_consolidation_batches: int = 8
+    task_mechanism_min_contribution: float = 0.01
+    task_mechanism_max_validation_drop: float = 0.05
     shared_actor_imagination_distillation: bool = False
     shared_actor_distill_scale: float = 0.0
     shared_actor_distill_interval: int = 1
@@ -379,6 +386,7 @@ class Config(Serialisable):
             "cnn_projector_lora_arrow",
             "cnn_compact_shared_actor_arrow",
             "cnn_mechanism_bank_arrow",
+            "rec_rssm_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -395,10 +403,30 @@ class Config(Serialisable):
         is_cnn_mechanism_bank = (
             self.continual_method == "cnn_mechanism_bank_arrow"
         )
+        is_rec_rssm = self.continual_method == "rec_rssm_arrow"
+        uses_mechanism_bank = is_cnn_mechanism_bank or is_rec_rssm
         if not isinstance(self.task_mechanism_bank, bool) or not isinstance(
             self.task_mechanism_reuse, bool
         ):
             raise ValueError("Mechanism-bank enable/reuse settings must be booleans")
+        if not isinstance(self.task_mechanism_num_atoms, int) or (
+            self.task_mechanism_num_atoms < 1
+        ):
+            raise ValueError("task_mechanism_num_atoms must be a positive integer")
+        if not isinstance(self.task_mechanism_reuse_probe_epochs, int) or (
+            self.task_mechanism_reuse_probe_epochs < 0
+        ):
+            raise ValueError(
+                "task_mechanism_reuse_probe_epochs must be a non-negative integer"
+            )
+        if self.task_mechanism_route_lr_scale <= 0:
+            raise ValueError("task_mechanism_route_lr_scale must be positive")
+        if self.task_mechanism_consolidation_batches < 1:
+            raise ValueError("task_mechanism_consolidation_batches must be positive")
+        if not 0 <= self.task_mechanism_min_contribution < 1:
+            raise ValueError("task_mechanism_min_contribution must lie in [0, 1)")
+        if not 0 <= self.task_mechanism_max_validation_drop < 1:
+            raise ValueError("task_mechanism_max_validation_drop must lie in [0, 1)")
         is_dino_fullbank = self.continual_method == "dino_fullbank_arrow"
         is_dino_patchbank = self.continual_method == "dino_patchbank_arrow"
         is_dino_convbank = self.continual_method == "dino_convbank_arrow"
@@ -408,7 +436,7 @@ class Config(Serialisable):
             or is_cnn_fullbank
             or is_cnn_projector_lora
             or is_cnn_compact_shared_actor
-            or is_cnn_mechanism_bank
+            or uses_mechanism_bank
             or is_dino_fullbank
             or is_dino_pixelbank
         )
@@ -476,7 +504,7 @@ class Config(Serialisable):
             is_cnn_fullbank
             or is_cnn_projector_lora
             or is_cnn_compact_shared_actor
-            or is_cnn_mechanism_bank
+            or uses_mechanism_bank
         ):
             if self.compute_dtype != "bfloat16":
                 raise ValueError("The CNN task-bank protocol requires bfloat16 compute")
@@ -581,7 +609,7 @@ class Config(Serialisable):
                 if is_cnn_fullbank
                 or is_cnn_projector_lora
                 or is_cnn_compact_shared_actor
-                or is_cnn_mechanism_bank
+                or uses_mechanism_bank
                 or is_dino_pixelbank
                 else "dinov3_posterior_feature"
             )
@@ -621,7 +649,7 @@ class Config(Serialisable):
         uses_cnn_projector = (
             is_cnn_projector_lora
             or is_cnn_compact_shared_actor
-            or is_cnn_mechanism_bank
+            or uses_mechanism_bank
         )
         if self.task_projected_image_encoder != uses_cnn_projector:
             raise ValueError(
@@ -643,7 +671,7 @@ class Config(Serialisable):
                 self.task_lora_transition_rank,
                 self.task_recurrent_output_adapter_features,
             )
-            if is_cnn_mechanism_bank:
+            if uses_mechanism_bank:
                 if observed_ranks != (0, 0, 0, 0):
                     raise ValueError(
                         "CNN-MechanismBank disables every RSSM LoRA/output-adapter path"
@@ -662,6 +690,27 @@ class Config(Serialisable):
                         f"settings to {expected_mechanism_settings}, got "
                         f"{observed_mechanism_settings}"
                     )
+                atom_settings = (
+                    self.task_mechanism_num_atoms,
+                    self.task_mechanism_reuse_probe_epochs,
+                    self.task_mechanism_route_lr_scale,
+                    self.task_mechanism_consolidation_batches,
+                    self.task_mechanism_min_contribution,
+                    self.task_mechanism_max_validation_drop,
+                )
+                expected_atom_settings = (
+                    (4, 1, 5.0, 8, 0.01, 0.05)
+                    if is_rec_rssm
+                    else (1, 0, 1.0, 8, 0.01, 0.05)
+                )
+                if atom_settings != expected_atom_settings:
+                    raise ValueError(
+                        "The named mechanism protocol fixes atom/probe/route-LR/"
+                        "consolidation settings to "
+                        f"{expected_atom_settings}, got {atom_settings}"
+                    )
+                if is_rec_rssm and not self.task_mechanism_reuse:
+                    raise ValueError("REC-RSSM requires atom reuse")
                 if self.fresh_ac is not False or self.actor_network != "mlp":
                     raise ValueError(
                         "CNN-MechanismBank requires independent fresh MLP actor-critics"
@@ -694,14 +743,29 @@ class Config(Serialisable):
             )
         ):
             raise ValueError("RSSM adapters require a named CNN projector method")
-        if self.task_mechanism_bank != is_cnn_mechanism_bank:
+        if self.task_mechanism_bank != uses_mechanism_bank:
             raise ValueError(
-                "task_mechanism_bank is required only by CNN-MechanismBank-ARROW"
+                "task_mechanism_bank is required only by named mechanism methods"
             )
-        if not is_cnn_mechanism_bank and not self.task_mechanism_reuse:
+        if not uses_mechanism_bank and not self.task_mechanism_reuse:
             raise ValueError(
                 "Disabling mechanism reuse requires CNN-MechanismBank-ARROW"
             )
+        if not uses_mechanism_bank:
+            observed_atom_settings = (
+                self.task_mechanism_num_atoms,
+                self.task_mechanism_reuse_probe_epochs,
+                self.task_mechanism_route_lr_scale,
+                self.task_mechanism_consolidation_batches,
+                self.task_mechanism_min_contribution,
+                self.task_mechanism_max_validation_drop,
+            )
+            default_atom_settings = (1, 0, 1.0, 8, 0.01, 0.05)
+            if observed_atom_settings != default_atom_settings:
+                raise ValueError(
+                    "REC-RSSM atom/probe/consolidation settings require a "
+                    "named mechanism method"
+                )
         shared_actor_defaults = (False, 0.0, 1, 1, 0, 1)
         shared_actor_values = (
             self.shared_actor_imagination_distillation,
@@ -1034,7 +1098,7 @@ class Config(Serialisable):
             )
         if (
             self.shared_core_mode == "task1_frozen_mechanism_bank"
-            and not is_cnn_mechanism_bank
+            and not uses_mechanism_bank
         ):
             raise ValueError(
                 "shared_core_mode='task1_frozen_mechanism_bank' is reserved for "
@@ -1333,6 +1397,7 @@ class Config(Serialisable):
             "cnn_projector_lora_arrow",
             "cnn_compact_shared_actor_arrow",
             "cnn_mechanism_bank_arrow",
+            "rec_rssm_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1345,6 +1410,7 @@ class Config(Serialisable):
             "cnn_projector_lora_arrow",
             "cnn_compact_shared_actor_arrow",
             "cnn_mechanism_bank_arrow",
+            "rec_rssm_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1359,6 +1425,7 @@ class Config(Serialisable):
             "cnn_projector_lora_arrow",
             "cnn_compact_shared_actor_arrow",
             "cnn_mechanism_bank_arrow",
+            "rec_rssm_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",

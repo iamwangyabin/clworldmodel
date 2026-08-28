@@ -154,6 +154,7 @@ class WorldModel(nn.Module):
         task_mechanism_representation_width: int = 512,
         task_mechanism_transition_width: int = 256,
         task_mechanism_residual_scale: float = 0.1,
+        task_mechanism_num_atoms: int = 1,
         image_embedder: Optional[nn.Module] = None,
         compute_dtype: str = "float32",
     ) -> None:
@@ -247,6 +248,7 @@ class WorldModel(nn.Module):
             ),
             task_mechanism_transition_width=task_mechanism_transition_width,
             task_mechanism_residual_scale=task_mechanism_residual_scale,
+            task_mechanism_num_atoms=task_mechanism_num_atoms,
             residual_correction=residual_correction,
             residual_bottleneck_features=residual_bottleneck_features,
             residual_grid_size=residual_grid_size,
@@ -508,7 +510,9 @@ class WorldModel(nn.Module):
         self.task_expert_initialized[target_index] = True
         return True
 
-    def activate_task_expert(self, task_id: int) -> None:
+    def activate_task_expert(
+        self, task_id: int, mechanism_phase: str = "full"
+    ) -> None:
         """Make exactly one complete task expert plastic and freeze all others."""
         if not self.full_task_experts:
             raise ValueError("Complete task activation requires full_task_experts=True")
@@ -536,9 +540,15 @@ class WorldModel(nn.Module):
             self.rssm.representation.requires_grad_(base_is_active)
             self.rssm.transition.requires_grad_(base_is_active)
             self.zh_transform.requires_grad_(base_is_active)
-            self.rssm.recurrent_mechanism_bank.activate_task(task_index)
-            self.rssm.representation_mechanism_bank.activate_task(task_index)
-            self.rssm.transition_mechanism_bank.activate_task(task_index)
+            self.rssm.recurrent_mechanism_bank.activate_task(
+                task_index, phase=mechanism_phase
+            )
+            self.rssm.representation_mechanism_bank.activate_task(
+                task_index, phase=mechanism_phase
+            )
+            self.rssm.transition_mechanism_bank.activate_task(
+                task_index, phase=mechanism_phase
+            )
         elif (
             self.rssm.task_lora_enabled
             or self.rssm.task_recurrent_output_adapter_enabled

@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -1163,6 +1163,391 @@ def _consolidate_kan_from_replay(
     return diagnostics
 
 
+def _rec_mechanism_banks(wm: WorldModel) -> dict[str, Any]:
+    if not wm.rssm.task_mechanism_bank_enabled:
+        raise ValueError("REC-RSSM consolidation requires mechanism banks")
+    return {
+        "recurrent": wm.rssm.recurrent_mechanism_bank,
+        "posterior": wm.rssm.representation_mechanism_bank,
+        "prior": wm.rssm.transition_mechanism_bank,
+    }
+
+
+def _rec_optimizer_parameter_groups(
+    wm: WorldModel, *, wm_lr: float, route_lr_scale: float
+) -> list[dict[str, Any]]:
+    """Keep every future mechanism in Adam while assigning routes their own LR."""
+    route_parameters = [
+        parameter
+        for bank in _rec_mechanism_banks(wm).values()
+        for route in bank.routes
+        for parameter in route.parameters()
+    ]
+    route_parameter_ids = {id(parameter) for parameter in route_parameters}
+    if len(route_parameter_ids) != len(route_parameters):
+        raise RuntimeError("REC-RSSM route parameters must not be shared")
+    normal_parameters = [
+        parameter
+        for parameter in wm.parameters()
+        if id(parameter) not in route_parameter_ids
+    ]
+    if not normal_parameters or not route_parameters:
+        raise RuntimeError("REC-RSSM optimizer requires normal and route parameters")
+    return [
+        {"params": normal_parameters, "lr": wm_lr},
+        {"params": route_parameters, "lr": wm_lr * route_lr_scale},
+    ]
+
+
+def _restore_torch_rng_state(
+    cpu_state: torch.Tensor, cuda_states: Optional[list[torch.Tensor]]
+) -> None:
+    torch.random.set_rng_state(cpu_state)
+    if cuda_states is not None:
+        torch.cuda.set_rng_state_all(cuda_states)
+
+
+@torch.no_grad()
+def _rec_loss_over_batches(
+    *,
+    config: Config,
+    wm: WorldModel,
+    task_id: int,
+    batches: list[tuple[torch.Tensor, ...]],
+    cpu_rng_state: torch.Tensor,
+    cuda_rng_states: Optional[list[torch.Tensor]],
+) -> float:
+    _restore_torch_rng_state(cpu_rng_state, cuda_rng_states)
+    losses = []
+    for actions, observations, rewards, continues, resets in batches:
+        with _autocast_context(actions.device, config.compute_dtype):
+            loss, _metrics = wm.compute_loss(
+                actions,
+                observations,
+                rewards,
+                continues,
+                resets,
+                task_id=task_id,
+            )
+        if not bool(torch.isfinite(loss).item()):
+            raise FloatingPointError("REC-RSSM consolidation observed a non-finite loss")
+        losses.append(float(loss.detach().float().cpu()))
+    return float(np.mean(losses))
+
+
+def _evaluate_rec_route(
+    *,
+    config: Config,
+    wm: WorldModel,
+    aco: ActorCriticOpt,
+    task_id: int,
+    env_fns,
+    seed: int,
+) -> tuple[float, float]:
+    with _preserve_training_rng_state():
+        return evaluate(
+            config.n_sync,
+            wm=wm,
+            ac=aco.ac,
+            env_fns=env_fns,
+            env_repeat=config.env_repeat,
+            n_rollouts=16,
+            seed=seed,
+            task_id=task_id,
+            deterministic_policy=True,
+        )
+
+
+def _consolidate_rec_routes(
+    *,
+    config: Config,
+    wm: WorldModel,
+    aco: ActorCriticOpt,
+    replay_buffer,
+    completed_task_id: int,
+    eval_env_fns,
+    validation_seed: int,
+    epoch: int,
+    global_step: int,
+    log_dir: Path,
+    writer,
+) -> dict[str, Any]:
+    """Ablate old atoms, hard-prune weak reuse, and validate the route."""
+    if config.continual_method != "rec_rssm_arrow":
+        raise ValueError("REC-RSSM consolidation requires rec_rssm_arrow")
+    if completed_task_id < 1:
+        raise ValueError("REC-RSSM consolidates only post-Task-1 routes")
+
+    banks = _rec_mechanism_banks(wm)
+    route_index = completed_task_id - 1
+    original_masks = {
+        name: bank.routes[route_index].hard_mask.detach().clone()
+        for name, bank in banks.items()
+    }
+    original_shared_masks = {
+        name: bank.routes[route_index].validated_shared_mask.detach().clone()
+        for name, bank in banks.items()
+    }
+    candidate_coordinates = [
+        (name, old_index, atom_index)
+        for name, mask in original_masks.items()
+        for old_index in range(mask.shape[0])
+        for atom_index in range(mask.shape[1])
+        if bool(mask[old_index, atom_index].item())
+    ]
+    artifact: dict[str, Any] = {
+        "schema_version": 1,
+        "artifact_kind": "rec_rssm_atom_route_consolidation",
+        "epoch": epoch,
+        "completed_epochs": epoch + 1,
+        "world_model_updates": global_step,
+        "completed_task": {
+            "index": completed_task_id,
+            "name": config.esc.env_configs[completed_task_id].name,
+        },
+        "settings": {
+            "num_atoms": config.task_mechanism_num_atoms,
+            "replay_batches": config.task_mechanism_consolidation_batches,
+            "minimum_contribution": config.task_mechanism_min_contribution,
+            "maximum_validation_drop": (
+                config.task_mechanism_max_validation_drop
+            ),
+        },
+        "candidate_count": len(candidate_coordinates),
+        "gradient_updates": 0,
+        "training_replay_writes": 0,
+        "evaluation_transitions_enter_replay": False,
+    }
+    if not candidate_coordinates:
+        artifact.update(
+            {
+                "reason": "completed route has no old mechanisms to reuse",
+                "candidates": [],
+                "validation": None,
+                "rollback": False,
+                "accepted_masks": {
+                    name: bank.routes[route_index]
+                    .hard_mask.detach()
+                    .cpu()
+                    .tolist()
+                    for name, bank in banks.items()
+                },
+                "accepted_shared_masks": {
+                    name: bank.routes[route_index]
+                    .validated_shared_mask.detach()
+                    .cpu()
+                    .tolist()
+                    for name, bank in banks.items()
+                },
+                "route_manifest": {
+                    name: bank.route_manifest(completed_task_id)
+                    for name, bank in banks.items()
+                },
+            }
+        )
+    else:
+        wm_was_training = wm.training
+        batches: list[tuple[torch.Tensor, ...]] = []
+        try:
+            with _preserve_training_rng_state():
+                wm.eval()
+                for _ in range(config.task_mechanism_consolidation_batches):
+                    batches.append(
+                        tuple(
+                            tensor.detach()
+                            for tensor in replay_buffer.minibatch(
+                                config.mb_t_size,
+                                config.mb_n_size,
+                                task_id=completed_task_id,
+                            )
+                        )
+                    )
+                condition_cpu_rng = torch.random.get_rng_state()
+                condition_cuda_rngs = (
+                    torch.cuda.get_rng_state_all()
+                    if torch.cuda.is_available()
+                    else None
+                )
+                for bank in banks.values():
+                    bank.begin_contribution_recording(completed_task_id)
+                full_loss = _rec_loss_over_batches(
+                    config=config,
+                    wm=wm,
+                    task_id=completed_task_id,
+                    batches=batches,
+                    cpu_rng_state=condition_cpu_rng,
+                    cuda_rng_states=condition_cuda_rngs,
+                )
+                contributions = {
+                    name: bank.finish_contribution_recording()
+                    for name, bank in banks.items()
+                }
+
+                candidates = []
+                proposed_masks = {
+                    name: mask.detach().clone()
+                    for name, mask in original_masks.items()
+                }
+                proposed_shared_masks = {
+                    name: mask.detach().clone()
+                    for name, mask in original_shared_masks.items()
+                }
+                for bank_name, old_index, atom_index in candidate_coordinates:
+                    bank = banks[bank_name]
+                    temporary_mask = original_masks[bank_name].detach().clone()
+                    temporary_mask[old_index, atom_index] = 0
+                    bank.apply_consolidated_mask(completed_task_id, temporary_mask)
+                    ablated_loss = _rec_loss_over_batches(
+                        config=config,
+                        wm=wm,
+                        task_id=completed_task_id,
+                        batches=batches,
+                        cpu_rng_state=condition_cpu_rng,
+                        cuda_rng_states=condition_cuda_rngs,
+                    )
+                    bank.apply_consolidated_mask(
+                        completed_task_id, original_masks[bank_name]
+                    )
+                    delta_loss = ablated_loss - full_loss
+                    contribution = float(
+                        contributions[bank_name]["contribution_ratio"][old_index][
+                            atom_index
+                        ]
+                    )
+                    should_prune = (
+                        delta_loss <= 0
+                        or contribution < config.task_mechanism_min_contribution
+                    )
+                    if should_prune:
+                        proposed_masks[bank_name][old_index, atom_index] = 0
+                        proposed_shared_masks[bank_name][old_index, atom_index] = 0
+                    else:
+                        proposed_shared_masks[bank_name][old_index, atom_index] = 1
+                    candidates.append(
+                        {
+                            "component": bank_name,
+                            "owner_task": old_index + 1,
+                            "atom_index": atom_index,
+                            "full_loss": full_loss,
+                            "ablated_loss": ablated_loss,
+                            "delta_loss": delta_loss,
+                            "functional_contribution": contribution,
+                            "proposed_prune": should_prune,
+                        }
+                    )
+
+                full_mean, full_std = _evaluate_rec_route(
+                    config=config,
+                    wm=wm,
+                    aco=aco,
+                    task_id=completed_task_id,
+                    env_fns=eval_env_fns,
+                    seed=validation_seed,
+                )
+                for name, bank in banks.items():
+                    bank.apply_consolidated_mask(
+                        completed_task_id, proposed_masks[name]
+                    )
+                pruned_mean, pruned_std = _evaluate_rec_route(
+                    config=config,
+                    wm=wm,
+                    aco=aco,
+                    task_id=completed_task_id,
+                    env_fns=eval_env_fns,
+                    seed=validation_seed,
+                )
+                rollback = pruned_mean < (
+                    (1.0 - config.task_mechanism_max_validation_drop) * full_mean
+                )
+                if rollback:
+                    for name, bank in banks.items():
+                        bank.apply_consolidated_mask(
+                            completed_task_id, original_masks[name]
+                        )
+                        bank.apply_validated_shared_mask(
+                            completed_task_id, original_shared_masks[name]
+                        )
+                else:
+                    for name, bank in banks.items():
+                        bank.apply_validated_shared_mask(
+                            completed_task_id, proposed_shared_masks[name]
+                        )
+                reward_scale = config.esc.env_configs[completed_task_id].rew_scale
+                artifact.update(
+                    {
+                        "full_world_model_loss": full_loss,
+                        "functional_contributions": contributions,
+                        "candidates": candidates,
+                        "validation": {
+                            "cohort": "fixed_periodic_validation",
+                            "seed": validation_seed,
+                            "rollouts_per_condition": 16,
+                            "full_scaled_mean": full_mean,
+                            "full_scaled_std": full_std,
+                            "full_raw_mean": full_mean / reward_scale,
+                            "full_raw_std": full_std / abs(reward_scale),
+                            "pruned_scaled_mean": pruned_mean,
+                            "pruned_scaled_std": pruned_std,
+                            "pruned_raw_mean": pruned_mean / reward_scale,
+                            "pruned_raw_std": pruned_std / abs(reward_scale),
+                            "acceptance_threshold_scaled": (
+                                (1.0 - config.task_mechanism_max_validation_drop)
+                                * full_mean
+                            ),
+                        },
+                        "rollback": rollback,
+                        "accepted_masks": {
+                            name: bank.routes[route_index]
+                            .hard_mask.detach()
+                            .cpu()
+                            .tolist()
+                            for name, bank in banks.items()
+                        },
+                        "accepted_shared_masks": {
+                            name: bank.routes[route_index]
+                            .validated_shared_mask.detach()
+                            .cpu()
+                            .tolist()
+                            for name, bank in banks.items()
+                        },
+                        "route_manifest": {
+                            name: bank.route_manifest(completed_task_id)
+                            for name, bank in banks.items()
+                        },
+                    }
+                )
+        except Exception:
+            for name, bank in banks.items():
+                bank.cancel_contribution_recording()
+                bank.apply_consolidated_mask(
+                    completed_task_id, original_masks[name]
+                )
+                bank.apply_validated_shared_mask(
+                    completed_task_id, original_shared_masks[name]
+                )
+            raise
+        finally:
+            wm.train(wm_was_training)
+
+    output_dir = log_dir / "rec_rssm_consolidation"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"task_{completed_task_id:02d}_boundary.json"
+    temporary_path = path.with_suffix(".json.tmp")
+    temporary_path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary_path, path)
+    writer.add_scalar(
+        "RECRSSM/consolidation_candidate_count",
+        len(candidate_coordinates),
+        global_step,
+    )
+    writer.add_scalar(
+        "RECRSSM/consolidation_rollback",
+        int(bool(artifact["rollback"])),
+        global_step,
+    )
+    return artifact
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1750,6 +2135,7 @@ if __name__ == "__main__":
         "cnn_projector_lora_arrow",
         "cnn_compact_shared_actor_arrow",
         "cnn_mechanism_bank_arrow",
+        "rec_rssm_arrow",
     }:
         if task_bank_snapshot_dir is None:
             raise ValueError(
@@ -1816,6 +2202,7 @@ if __name__ == "__main__":
             "cnn_projector_lora_arrow",
             "cnn_compact_shared_actor_arrow",
             "cnn_mechanism_bank_arrow",
+            "rec_rssm_arrow",
         }:
             raise ValueError(
                 "Task-1 boundary initialization requires "
@@ -1846,9 +2233,9 @@ if __name__ == "__main__":
         raise ValueError(
             "CNN-Compact-SharedActor requires --init-task1-boundary-snapshot"
         )
-    elif config.continual_method == "cnn_mechanism_bank_arrow":
+    elif config.continual_method in {"cnn_mechanism_bank_arrow", "rec_rssm_arrow"}:
         raise ValueError(
-            "CNN-MechanismBank requires --init-task1-boundary-snapshot"
+            "Mechanism-bank methods require --init-task1-boundary-snapshot"
         )
     elif config.continual_method == "cnn_projector_lora_arrow":
         training_start_epoch = 0
@@ -1917,6 +2304,20 @@ if __name__ == "__main__":
             f"{config.task_mechanism_transition_width} "
             f"residual_scale={config.task_mechanism_residual_scale} "
             f"reuse={config.task_mechanism_reuse} "
+            f"current_fraction={config.dino_fullbank_current_task_fraction}"
+        )
+    elif config.continual_method == "rec_rssm_arrow":
+        print(
+            "REC-RSSM routing: "
+            f"tasks={config.rssm_num_experts} actor_bank=per_task "
+            "base=task0_frozen_after_acquisition encoder=task0_plus_projector "
+            "rssm=reuse_expand_consolidate actor_init=fresh "
+            f"widths={config.task_mechanism_recurrent_width}/"
+            f"{config.task_mechanism_representation_width}/"
+            f"{config.task_mechanism_transition_width} "
+            f"atoms={config.task_mechanism_num_atoms} "
+            f"reuse_probe_epochs={config.task_mechanism_reuse_probe_epochs} "
+            f"route_lr_scale={config.task_mechanism_route_lr_scale} "
             f"current_fraction={config.dino_fullbank_current_task_fraction}"
         )
     elif config.continual_method == "dino_fullbank_arrow":
@@ -2056,6 +2457,7 @@ if __name__ == "__main__":
         ),
         task_mechanism_transition_width=config.task_mechanism_transition_width,
         task_mechanism_residual_scale=config.task_mechanism_residual_scale,
+        task_mechanism_num_atoms=config.task_mechanism_num_atoms,
     ).to(device)
     resume_world_model_opened: list[str] = []
     resume_state_report: dict[str, dict[str, list[str]]] = {}
@@ -2082,14 +2484,24 @@ if __name__ == "__main__":
             "Loaded the completed Task-1 CNN/RSSM/heads; later routes remain "
             "zero-effect projector/RSSM adaptations"
         )
-    trainable_world_model_parameters = [
-        parameter for parameter in wm.parameters() if parameter.requires_grad
-    ]
-    opt = Adam(
-        trainable_world_model_parameters,
-        lr=config.wm_lr,
-        fused=args.fused_adam,
-    )
+    if config.continual_method == "rec_rssm_arrow":
+        opt = Adam(
+            _rec_optimizer_parameter_groups(
+                wm,
+                wm_lr=config.wm_lr,
+                route_lr_scale=config.task_mechanism_route_lr_scale,
+            ),
+            fused=args.fused_adam,
+        )
+    else:
+        trainable_world_model_parameters = [
+            parameter for parameter in wm.parameters() if parameter.requires_grad
+        ]
+        opt = Adam(
+            trainable_world_model_parameters,
+            lr=config.wm_lr,
+            fused=args.fused_adam,
+        )
     compute_world_model_loss = wm.compute_loss
     distributed_world_model = None
     distributed_world_model_task_id = None
@@ -2114,6 +2526,7 @@ if __name__ == "__main__":
         "cnn_projector_lora_arrow",
         "cnn_compact_shared_actor_arrow",
         "cnn_mechanism_bank_arrow",
+        "rec_rssm_arrow",
         "dino_patchbank_arrow",
         "dino_convbank_arrow",
     } and (not distributed_context.enabled or distributed_context.is_primary):
@@ -2251,6 +2664,10 @@ if __name__ == "__main__":
             elif config.continual_method == "cnn_mechanism_bank_arrow":
                 actor_bank_artifact_kind = (
                     "cnn_mechanism_bank_arrow_actor_critic_bank_inference_state"
+                )
+            elif config.continual_method == "rec_rssm_arrow":
+                actor_bank_artifact_kind = (
+                    "rec_rssm_arrow_actor_critic_bank_inference_state"
                 )
             elif config.continual_method == "dino_patchbank_arrow":
                 actor_bank_artifact_kind = (
@@ -2482,6 +2899,15 @@ if __name__ == "__main__":
         current_task_id = None
         if config.uses_task_experts:
             current_task_id = envs.current_task_index()
+            mechanism_phase = "full"
+            if config.continual_method == "rec_rssm_arrow":
+                swap_sched = int(config.esc.kwargs["swap_sched"])
+                task_local_epoch = epoch % swap_sched
+                if (
+                    current_task_id >= 2
+                    and task_local_epoch < config.task_mechanism_reuse_probe_epochs
+                ):
+                    mechanism_phase = "reuse_probe"
             warm_start_from = (
                 0
                 if config.continual_method in {
@@ -2546,9 +2972,21 @@ if __name__ == "__main__":
                     f"Initialized independent actor-critic for task {current_task_id}"
                 )
             if config.uses_full_task_experts:
-                wm.activate_task_expert(current_task_id)
+                wm.activate_task_expert(
+                    current_task_id, mechanism_phase=mechanism_phase
+                )
                 if actor_critic_bank is not None:
                     actor_critic_bank.activate(current_task_id)
+                if config.continual_method == "rec_rssm_arrow":
+                    writer.add_scalar(
+                        "RECRSSM/reuse_probe_active",
+                        int(mechanism_phase == "reuse_probe"),
+                        global_step,
+                    )
+                    print(
+                        "REC-RSSM mechanism phase: "
+                        f"task={current_task_id} phase={mechanism_phase}"
+                    )
             if actor_critic_bank is not None:
                 aco = actor_critic_bank.get(current_task_id)
         task_boundary = epoch > 0 and envs.is_new_env()
@@ -2825,6 +3263,8 @@ if __name__ == "__main__":
                         if config.continual_method == "cnn_compact_shared_actor_arrow"
                         else f"CNNMechanismBank/world_model_updates_task_{task_id}"
                         if config.continual_method == "cnn_mechanism_bank_arrow"
+                        else f"RECRSSM/world_model_updates_task_{task_id}"
+                        if config.continual_method == "rec_rssm_arrow"
                         else f"DINOPatchBankArrow/world_model_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
                         else f"DINOConvBankArrow/world_model_updates_task_{task_id}"
@@ -3124,6 +3564,8 @@ if __name__ == "__main__":
                         if config.continual_method == "cnn_projector_lora_arrow"
                         else f"CNNMechanismBank/actor_critic_updates_task_{task_id}"
                         if config.continual_method == "cnn_mechanism_bank_arrow"
+                        else f"RECRSSM/actor_critic_updates_task_{task_id}"
+                        if config.continual_method == "rec_rssm_arrow"
                         else f"DINOPatchBankArrow/actor_critic_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
                         else f"DINOConvBankArrow/actor_critic_updates_task_{task_id}"
@@ -3256,6 +3698,47 @@ if __name__ == "__main__":
         if distributed_context.is_primary:
             _print_cuda_memory(f"epoch_end_{epoch}")
 
+        boundary_snapshot_metadata = (
+            _task_boundary_metadata(config, epoch)
+            if task_bank_snapshot_dir is not None
+            else None
+        )
+        if (
+            distributed_context.is_primary
+            and config.continual_method == "rec_rssm_arrow"
+            and boundary_snapshot_metadata is not None
+            and int(boundary_snapshot_metadata["task_index"]) >= 1
+        ):
+            completed_task_id = int(boundary_snapshot_metadata["task_index"])
+            if current_task_id != completed_task_id:
+                raise RuntimeError(
+                    "REC-RSSM boundary task does not match the active route: "
+                    f"{completed_task_id} != {current_task_id}"
+                )
+            if aco is None:
+                raise RuntimeError(
+                    "REC-RSSM consolidation requires the completed task actor"
+                )
+            consolidation = _consolidate_rec_routes(
+                config=config,
+                wm=wm,
+                aco=aco,
+                replay_buffer=replay,
+                completed_task_id=completed_task_id,
+                eval_env_fns=envs.eval_funcs()[completed_task_id],
+                validation_seed=validation_task_seeds[completed_task_id],
+                epoch=epoch,
+                global_step=global_step,
+                log_dir=log_dir,
+                writer=writer,
+            )
+            print(
+                "Consolidated REC-RSSM atom route: "
+                f"task={completed_task_id} "
+                f"candidates={consolidation['candidate_count']} "
+                f"rollback={consolidation['rollback']}"
+            )
+
         if distributed_context.is_primary and (
             save_nets
             or (config.uses_task_experts and epoch == config.epochs - 1)
@@ -3281,11 +3764,6 @@ if __name__ == "__main__":
                     final_accounting_path,
                 )
 
-        boundary_snapshot_metadata = (
-            _task_boundary_metadata(config, epoch)
-            if task_bank_snapshot_dir is not None
-            else None
-        )
         if (
             distributed_context.is_primary
             and boundary_snapshot_metadata is not None
