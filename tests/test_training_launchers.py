@@ -716,6 +716,74 @@ class TrainingLauncherTests(unittest.TestCase):
         )
         self.assertFalse(output_dir.exists())
 
+    def test_cnn_fullbank_task1_actor_sweep_is_budget_matched(self) -> None:
+        profiles = {
+            "aclr1e4": (1e-4, 3e-4),
+            "aclr5e5": (5e-5, 3e-4),
+            "aclr1e4-ent1e4": (1e-4, 1e-4),
+            "aclr5e5-ent1e4": (5e-5, 1e-4),
+        }
+        reference = (
+            ROOT
+            / "docs"
+            / "protocols"
+            / "references"
+            / "arrow_ar50_original_s0_reference_matrix_v1.json"
+        )
+
+        for profile, (ac_lr, entropy_scale) in profiles.items():
+            with self.subTest(profile=profile), TemporaryDirectory() as temporary:
+                output_dir = Path(temporary) / f"cnn_fullbank_{profile}"
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "scripts/run_moe_arrow_atari.py",
+                        "--seed",
+                        "0",
+                        "--method",
+                        "cnn-fullbank",
+                        "--task-prefix-length",
+                        "1",
+                        "--devices",
+                        "1",
+                        "--batch-profile",
+                        "single-gpu-x4-double-sample-linear-lr",
+                        "--task1-tuning-profile",
+                        profile,
+                        "--evaluation-audit-profile",
+                        "fixed-cohort-snapshots",
+                        "--arrow-reference-matrix",
+                        str(reference),
+                        "--output-dir",
+                        str(output_dir),
+                        "--dry-run",
+                    ],
+                    cwd=ROOT,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                launch = json.loads(result.stdout.split("\ncommand:", maxsplit=1)[0])
+
+            tuning = launch["hyperparameter_tuning"]
+            self.assertEqual(tuning["profile"], profile)
+            self.assertEqual(
+                tuning["config_overrides"],
+                {"ac_lr": ac_lr, "ac_entropy_scale": entropy_scale},
+            )
+            self.assertTrue(tuning["fixed_data_and_update_budgets"])
+            self.assertTrue(tuning["sweep_selection_rule"]["single_seed_pilot_only"])
+            self.assertEqual(launch["actor_critic"]["learning_rate"], ac_lr)
+            self.assertEqual(launch["actor_critic"]["entropy_scale"], entropy_scale)
+            scope = launch["training_scope"]
+            self.assertEqual(scope["epochs"], 90)
+            self.assertEqual(scope["raw_environment_frames"], 5_898_240)
+            self.assertEqual(scope["world_model_updates"], 45_000)
+            self.assertEqual(scope["actor_critic_updates"], 36_000)
+            self.assertEqual(scope["world_model_sampled_replay_frame_uses"], 92_160_000)
+            self.assertEqual(scope["actor_context_frame_uses"], 73_728_000)
+            self.assertFalse(output_dir.exists())
+
     def test_cnn_fullbank_dp4_double_sample_matches_single_gpu_budget(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
