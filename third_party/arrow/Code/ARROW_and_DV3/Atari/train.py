@@ -656,6 +656,22 @@ def _restrict_optimizer_to_trainable(
     return trainable
 
 
+def _optimizer_parameters(
+    optimizer: torch.optim.Optimizer,
+) -> list[torch.nn.Parameter]:
+    """Return the unique parameters currently owned by an optimizer."""
+    parameters = [
+        parameter
+        for parameter_group in optimizer.param_groups
+        for parameter in parameter_group["params"]
+    ]
+    if not parameters:
+        raise RuntimeError("World-model optimizer contains no parameters")
+    if len({id(parameter) for parameter in parameters}) != len(parameters):
+        raise RuntimeError("World-model optimizer contains duplicate parameters")
+    return parameters
+
+
 RESUME_ADAPTATION_MODES = frozenset({"kan_only", "kan_plus_heads"})
 
 
@@ -3027,7 +3043,7 @@ if __name__ == "__main__":
                 freeze_kan_coordinate_maps(
                     {"world_model": wm, "actor_critic": aco.ac}
                 )
-            trainable_world_model_parameters = _restrict_optimizer_to_trainable(opt, wm)
+            _restrict_optimizer_to_trainable(opt, wm)
             _restrict_optimizer_to_trainable(aco.opt, aco.ac)
             shared_core_frozen = True
             print("Frozen shared world-model and actor-critic cores after task 1")
@@ -3339,7 +3355,7 @@ if __name__ == "__main__":
             opt.zero_grad(set_to_none=True)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(
-                trainable_world_model_parameters, 1000
+                _optimizer_parameters(opt), 1000
             )
             opt.step()
             if protected_values is not None:

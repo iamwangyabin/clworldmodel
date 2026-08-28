@@ -362,9 +362,12 @@ documented here, covered by focused parity tests, and followed by regenerating
     no mechanism weight, performs no optimization or environment interaction,
     and adds no teacher, distillation, sparsity, or orthogonality objective.
     Legacy scalar gates repeat across all atoms. Defaults and the whole-gate
-    mechanism method remain unchanged. Focused tests cover lossless atom sums, state migration,
-    recurrent/posterior/prior parity, phase-specific gradients, hard masks,
-    fixed configuration, and launcher budgets.
+    mechanism method remain unchanged. Gradient clipping reads the active
+    optimizer groups directly so REC's two learning-rate groups do not depend
+    on the single-group initializer used by older methods. Focused tests cover
+    lossless atom sums, state migration, recurrent/posterior/prior parity,
+    phase-specific gradients, optimizer ownership, hard masks, fixed
+    configuration, and launcher budgets.
 
 ## Known issues at import
 

@@ -315,6 +315,7 @@ class RecRssmTests(unittest.TestCase):
         groups = arrow_train._rec_optimizer_parameter_groups(
             world_model, wm_lr=2e-4, route_lr_scale=5.0
         )
+        optimizer = torch.optim.Adam(groups)
 
         self.assertEqual([group["lr"] for group in groups], [2e-4, 1e-3])
         normal_ids = {id(parameter) for parameter in groups[0]["params"]}
@@ -332,6 +333,13 @@ class RecRssmTests(unittest.TestCase):
         self.assertIn(
             id(world_model.rssm.recurrent_mechanism_bank.routes[1].logits),
             route_ids,
+        )
+        self.assertEqual(
+            {
+                id(parameter)
+                for parameter in arrow_train._optimizer_parameters(optimizer)
+            },
+            all_ids,
         )
 
     def test_hard_mask_controls_long_term_atom_identity(self) -> None:
