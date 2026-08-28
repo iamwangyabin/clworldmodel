@@ -40,6 +40,16 @@ MECHANISM_WIDTHS = (512, 512, 256)
 MECHANISM_RESIDUAL_SCALE = 0.1
 MECHANISM_PARAMETERS_PER_LATER_TASK = 3_816_192
 REUSE_MODES = ("reuse", "no-reuse")
+COMPILE_ENVIRONMENT_KEYS = ("TRITON_LIBCUDA_PATH",)
+
+
+def _compile_environment_override(environment: dict[str, str]) -> dict[str, str]:
+    """Return the explicit compiler-discovery environment recorded by a run."""
+    return {
+        key: environment[key]
+        for key in COMPILE_ENVIRONMENT_KEYS
+        if environment.get(key)
+    }
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -185,6 +195,7 @@ def main() -> int:
     env["PYTHONPATH"] = os.pathsep.join(
         value for value in (project_pythonpath, inherited_pythonpath) if value
     )
+    compile_environment_override = _compile_environment_override(env)
 
     command = [
         str(python),
@@ -287,6 +298,7 @@ def main() -> int:
         ),
         "cpu_threads": args.cpu_threads,
         "environment": thread_env,
+        "compile_environment_override": compile_environment_override,
         "project_pythonpath_prepend": project_pythonpath,
         "command": command,
     }
@@ -309,6 +321,15 @@ def main() -> int:
         str(replay_backing) if replay_backing is not None else None
     )
     _write_json(output_dir / "launch.json", launch)
+    if compile_environment_override:
+        _write_json(
+            output_dir / "runtime_compile_environment_override.json",
+            {
+                "schema_version": 1,
+                "reason": "Triton libcuda discovery on the target node",
+                "environment": compile_environment_override,
+            },
+        )
 
     return_code = _run_and_tee(
         command,

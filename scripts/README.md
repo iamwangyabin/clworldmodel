@@ -51,6 +51,10 @@ python scripts/run_moe_arrow_atari.py --method dino-convbank ...
 - `summarize_component_audit.py`: paired audit conclusion data.
 - `render_p1_full_audit_dossier.py`: render the completed P1 audit dossier.
 - `extract_arrow_baseline_results.py`: convert ARROW logs into a result bundle.
+- `evaluate_cnn_mechanism_bank_reuse.py`: fixed-cohort Task-3 gate ablations,
+  functional mechanism contribution ratios, shared-trajectory latent/reward
+  diagnostics, and the epoch-260/270 cross-cohort check. It does not train or
+  write evaluation transitions to Replay.
 
 ## Shared Support
 

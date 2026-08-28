@@ -17,12 +17,25 @@ from run_cnn_mechanism_bank_incremental import (  # noqa: E402
     MECHANISM_RESIDUAL_SCALE,
     MECHANISM_WIDTHS,
     PROTOCOL,
+    _compile_environment_override,
     _incremental_config,
     _parser,
 )
 
 
 class CnnMechanismBankLauncherTests(unittest.TestCase):
+    def test_compile_environment_records_only_explicit_libcuda_discovery(self) -> None:
+        self.assertEqual(
+            _compile_environment_override(
+                {
+                    "TRITON_LIBCUDA_PATH": "/usr/lib/x86_64-linux-gnu",
+                    "PATH": "/usr/bin",
+                }
+            ),
+            {"TRITON_LIBCUDA_PATH": "/usr/lib/x86_64-linux-gnu"},
+        )
+        self.assertEqual(_compile_environment_override({}), {})
+
     @staticmethod
     def _source() -> dict:
         return {
