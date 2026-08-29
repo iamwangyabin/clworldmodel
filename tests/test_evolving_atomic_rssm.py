@@ -283,10 +283,9 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
 
     def test_assigned_gradient_uses_parameter_stride_for_fused_adam(self) -> None:
         parameter = nn.Parameter(torch.zeros(4, 4, 4, 4))
-        channels_last = torch.empty_like(
-            parameter,
-            memory_format=torch.channels_last,
-        )
+        channels_last = torch.arange(
+            parameter.numel(), dtype=parameter.dtype
+        ).reshape_as(parameter).contiguous(memory_format=torch.channels_last)
         self.assertNotEqual(channels_last.stride(), parameter.stride())
 
         assigned = _gradient_in_parameter_layout(parameter, channels_last)
