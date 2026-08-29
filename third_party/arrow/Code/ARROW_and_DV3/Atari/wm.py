@@ -141,8 +141,12 @@ class WorldModel(nn.Module):
         residual_consolidation: str = "none",
         num_task_experts: int = 1,
         full_task_experts: bool = False,
+        full_task_rssm_experts: Optional[bool] = None,
+        task_private_heads: Optional[bool] = None,
+        evolving_shared_core: bool = False,
         task_banked_image_encoder: bool = False,
         task_projected_image_encoder: bool = False,
+        task_symmetric_image_projectors: bool = False,
         task_projector_bottleneck_features: int = 64,
         task_lora_recurrent_rank: int = 0,
         task_lora_representation_rank: int = 0,
@@ -155,6 +159,7 @@ class WorldModel(nn.Module):
         task_mechanism_transition_width: int = 256,
         task_mechanism_residual_scale: float = 0.1,
         task_mechanism_num_atoms: int = 1,
+        task_symmetric_mechanisms: bool = False,
         image_embedder: Optional[nn.Module] = None,
         compute_dtype: str = "float32",
     ) -> None:
@@ -184,7 +189,15 @@ class WorldModel(nn.Module):
                 raise ValueError(
                     "DINOv3 posterior features require batch-standardized SmoothL1"
                 )
-        if full_task_experts and observation_objective not in {
+        if task_private_heads is None:
+            task_private_heads = full_task_experts
+        if full_task_rssm_experts is None:
+            full_task_rssm_experts = full_task_experts
+        if not isinstance(task_private_heads, bool):
+            raise TypeError("task_private_heads must be a boolean")
+        if not isinstance(evolving_shared_core, bool):
+            raise TypeError("evolving_shared_core must be a boolean")
+        if task_private_heads and observation_objective not in {
             "reconstruction",
             "dinov3_posterior_feature",
         }:
@@ -208,6 +221,9 @@ class WorldModel(nn.Module):
         self.residual_correction = residual_correction
         self.residual_input_mode = residual_input_mode
         self.full_task_experts = full_task_experts
+        self.full_task_rssm_experts = bool(full_task_rssm_experts)
+        self.task_private_heads = task_private_heads
+        self.evolving_shared_core = evolving_shared_core
 
         self.rssm = Rssm(
             img_channels,
@@ -231,8 +247,10 @@ class WorldModel(nn.Module):
             dinov3_patch_adapter=dinov3_patch_adapter,
             num_task_experts=num_task_experts,
             full_task_experts=full_task_experts,
+            full_task_rssm_experts=full_task_rssm_experts,
             task_banked_image_encoder=task_banked_image_encoder,
             task_projected_image_encoder=task_projected_image_encoder,
+            task_symmetric_image_projectors=task_symmetric_image_projectors,
             task_projector_bottleneck_features=task_projector_bottleneck_features,
             task_lora_recurrent_rank=task_lora_recurrent_rank,
             task_lora_representation_rank=task_lora_representation_rank,
@@ -249,6 +267,7 @@ class WorldModel(nn.Module):
             task_mechanism_transition_width=task_mechanism_transition_width,
             task_mechanism_residual_scale=task_mechanism_residual_scale,
             task_mechanism_num_atoms=task_mechanism_num_atoms,
+            task_symmetric_mechanisms=task_symmetric_mechanisms,
             residual_correction=residual_correction,
             residual_bottleneck_features=residual_bottleneck_features,
             residual_grid_size=residual_grid_size,
@@ -269,7 +288,7 @@ class WorldModel(nn.Module):
 
         if observation_objective == "reconstruction":
             self.decoder = Decoder(img_channels, self.zh_transform.out_features, cnn_depth)
-            if full_task_experts:
+            if task_private_heads:
                 self.decoder_experts.extend(
                     copy.deepcopy(self.decoder) for _ in range(num_task_experts - 1)
                 )
@@ -289,7 +308,7 @@ class WorldModel(nn.Module):
                 self.zh_transform.out_features,
                 self.rssm.image_embedder.output_size,
             )
-            if full_task_experts:
+            if task_private_heads:
                 self.feature_predictor_experts.extend(
                     copy.deepcopy(self.feature_predictor)
                     for _ in range(num_task_experts - 1)
@@ -459,7 +478,7 @@ class WorldModel(nn.Module):
         if not hasattr(self, "feature_predictor"):
             raise RuntimeError("The configured observation objective has no feature predictor")
         task_index = self.rssm._task_index(task_id)
-        if task_index == 0 or not self.full_task_experts:
+        if task_index == 0 or not self.task_private_heads:
             return self.feature_predictor
         return self.feature_predictor_experts[task_index - 1]
 
@@ -467,7 +486,7 @@ class WorldModel(nn.Module):
         if not hasattr(self, "decoder"):
             raise RuntimeError("The configured observation objective has no decoder")
         task_index = self.rssm._task_index(task_id)
-        if task_index == 0 or not self.full_task_experts:
+        if task_index == 0 or not self.task_private_heads:
             return self.decoder
         return self.decoder_experts[task_index - 1]
 
@@ -499,11 +518,11 @@ class WorldModel(nn.Module):
                 self.continue_fc, self.continue_experts, source_index
             ).state_dict()
         )
-        if self.full_task_experts and self.observation_objective == "reconstruction":
+        if self.task_private_heads and self.observation_objective == "reconstruction":
             self.decoder_for(target_index).load_state_dict(
                 self.decoder_for(source_index).state_dict()
             )
-        elif self.full_task_experts:
+        elif self.task_private_heads:
             self.feature_predictor_for(target_index).load_state_dict(
                 self.feature_predictor_for(source_index).state_dict()
             )
@@ -514,8 +533,12 @@ class WorldModel(nn.Module):
         self, task_id: int, mechanism_phase: str = "full"
     ) -> None:
         """Make exactly one complete task expert plastic and freeze all others."""
-        if not self.full_task_experts:
-            raise ValueError("Complete task activation requires full_task_experts=True")
+        if not (
+            self.task_private_heads
+            or self.rssm.full_task_rssm_experts
+            or self.rssm.task_mechanism_bank_enabled
+        ):
+            raise ValueError("Complete task activation requires task-routed modules")
         task_index = self.rssm._task_index(task_id)
         if self.task_expert_initialized is None or not bool(
             self.task_expert_initialized[task_index].item()
@@ -523,8 +546,15 @@ class WorldModel(nn.Module):
             raise ValueError(f"Task expert {task_index} has not been initialized")
 
         if self.rssm.task_projected_image_encoder:
-            self.rssm.image_embedder.requires_grad_(task_index == 0)
-            for index, projector in enumerate(self.rssm.image_projectors, start=1):
+            self.rssm.image_embedder.requires_grad_(
+                self.evolving_shared_core or task_index == 0
+            )
+            projector_start = (
+                0 if self.rssm.task_symmetric_image_projectors else 1
+            )
+            for index, projector in enumerate(
+                self.rssm.image_projectors, start=projector_start
+            ):
                 projector.requires_grad_(index == task_index)
         else:
             for index in range(self.rssm.num_task_experts):
@@ -535,7 +565,7 @@ class WorldModel(nn.Module):
             self.rssm.observation_adapter_kind != "none"
         )
         if self.rssm.task_mechanism_bank_enabled:
-            base_is_active = task_index == 0
+            base_is_active = self.evolving_shared_core or task_index == 0
             self.rssm.recurrent.requires_grad_(base_is_active)
             self.rssm.representation.requires_grad_(base_is_active)
             self.rssm.transition.requires_grad_(base_is_active)
@@ -600,6 +630,107 @@ class WorldModel(nn.Module):
                 self.decoder_for(index).requires_grad_(is_active)
             else:
                 self.feature_predictor_for(index).requires_grad_(is_active)
+        for parameter in self.parameters():
+            if not parameter.requires_grad:
+                parameter.grad = None
+
+    @staticmethod
+    def _deduplicate_parameters(
+        parameters: list[nn.Parameter],
+    ) -> list[nn.Parameter]:
+        unique: list[nn.Parameter] = []
+        seen: set[int] = set()
+        for parameter in parameters:
+            if id(parameter) not in seen:
+                unique.append(parameter)
+                seen.add(id(parameter))
+        return unique
+
+    def shared_parameter_groups(self) -> dict[str, list[nn.Parameter]]:
+        """Return E/Q/F/P/H groups used by component gradient projection."""
+
+        groups = self.rssm.shared_parameter_groups()
+        groups["latent_interface"] = list(self.zh_transform.parameters())
+        all_ids = [id(parameter) for values in groups.values() for parameter in values]
+        if len(all_ids) != len(set(all_ids)):
+            raise RuntimeError("Shared world-model parameter groups overlap")
+        return groups
+
+    def private_parameters(self, task_id: int) -> list[nn.Parameter]:
+        """Return one task's projector, atoms, and observation/return heads."""
+
+        task_index = self.rssm._task_index(task_id)
+        parameters = list(self.rssm.private_parameters(task_index))
+        parameters.extend(
+            self._head_for(
+                self.reward_fc, self.reward_experts, task_index
+            ).parameters()
+        )
+        parameters.extend(
+            self._head_for(
+                self.continue_fc, self.continue_experts, task_index
+            ).parameters()
+        )
+        if self.task_private_heads:
+            observation_head = (
+                self.decoder_for(task_index)
+                if self.observation_objective == "reconstruction"
+                else self.feature_predictor_for(task_index)
+            )
+            parameters.extend(observation_head.parameters())
+        return self._deduplicate_parameters(parameters)
+
+    def route_parameters(self, task_id: int) -> list[nn.Parameter]:
+        return self.rssm.route_parameters(task_id)
+
+    def activate_shared_only(self) -> None:
+        """Freeze all task-private state and expose only the evolving core."""
+
+        self.requires_grad_(False)
+        for parameters in self.shared_parameter_groups().values():
+            for parameter in parameters:
+                parameter.requires_grad_(True)
+        for parameter in self.parameters():
+            if not parameter.requires_grad:
+                parameter.grad = None
+
+    def shared_core_state_dict(self) -> dict[str, dict[str, torch.Tensor]]:
+        """Capture only the evolving core for safe consolidation rollback."""
+
+        return {
+            "encoder": copy.deepcopy(self.rssm.image_embedder.state_dict()),
+            "observation_adapter": copy.deepcopy(
+                self.rssm.observation_adapter.state_dict()
+            ),
+            "posterior": copy.deepcopy(self.rssm.representation.state_dict()),
+            "recurrent": copy.deepcopy(self.rssm.recurrent.state_dict()),
+            "prior": copy.deepcopy(self.rssm.transition.state_dict()),
+            "latent_interface": copy.deepcopy(self.zh_transform.state_dict()),
+        }
+
+    def load_shared_core_state_dict(
+        self, state: dict[str, dict[str, torch.Tensor]]
+    ) -> None:
+        required = {
+            "encoder",
+            "observation_adapter",
+            "posterior",
+            "recurrent",
+            "prior",
+            "latent_interface",
+        }
+        if set(state) != required:
+            raise ValueError(
+                f"Shared-core state keys must be {sorted(required)}, got {sorted(state)}"
+            )
+        self.rssm.image_embedder.load_state_dict(state["encoder"], strict=True)
+        self.rssm.observation_adapter.load_state_dict(
+            state["observation_adapter"], strict=True
+        )
+        self.rssm.representation.load_state_dict(state["posterior"], strict=True)
+        self.rssm.recurrent.load_state_dict(state["recurrent"], strict=True)
+        self.rssm.transition.load_state_dict(state["prior"], strict=True)
+        self.zh_transform.load_state_dict(state["latent_interface"], strict=True)
 
     def predict_reward_symlog(
         self, model_state: torch.Tensor, task_id: Optional[int | torch.Tensor] = None
@@ -705,11 +836,63 @@ class WorldModel(nn.Module):
         observation_features: Optional[torch.Tensor] = None,
         task_id: Optional[int | torch.Tensor] = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        loss, metrics, _trace = self._compute_loss_and_trace(
+            actions,
+            xs,
+            rews,
+            conts,
+            resets,
+            observation_features=observation_features,
+            task_id=task_id,
+        )
+        return loss, metrics
+
+    def compute_loss_and_trace(
+        self,
+        actions: ActionT,
+        xs: ImageT,
+        rews: RewardT,
+        conts: ContT,
+        resets: ResetT,
+        observation_features: Optional[torch.Tensor] = None,
+        task_id: Optional[int | torch.Tensor] = None,
+    ) -> tuple[
+        torch.Tensor,
+        dict[str, torch.Tensor],
+        dict[str, object],
+    ]:
+        """Return Dreamer loss plus the Q/F/P/H/Actor interface trace."""
+
+        return self._compute_loss_and_trace(
+            actions,
+            xs,
+            rews,
+            conts,
+            resets,
+            observation_features=observation_features,
+            task_id=task_id,
+        )
+
+    def _compute_loss_and_trace(
+        self,
+        actions: ActionT,
+        xs: ImageT,
+        rews: RewardT,
+        conts: ContT,
+        resets: ResetT,
+        observation_features: Optional[torch.Tensor] = None,
+        task_id: Optional[int | torch.Tensor] = None,
+    ) -> tuple[
+        torch.Tensor,
+        dict[str, torch.Tensor],
+        dict[str, object],
+    ]:
         # Returns (loss, metrics)
         if len(actions.shape) == 2:
             raise ValueError("Time dimension required")
         _, n, _ = actions.shape
         init_z, init_h = self.rssm.initial_state(n)
+        mechanism_trace: dict[str, list[torch.Tensor]] = {}
         # Shift actions and xs, since RSSM takes (prev_action, next_obs)
         embeddings = None
         if observation_features is not None or self.observation_objective in {
@@ -746,12 +929,21 @@ class WorldModel(nn.Module):
                 embeddings,
                 resets,
                 task_id=task_id,
+                mechanism_trace=mechanism_trace,
             )
         else:
             z_posts, z_samples, hiddens = self.rssm(
-                init_z, actions, init_h, xs, resets, task_id=task_id
+                init_z,
+                actions,
+                init_h,
+                xs,
+                resets,
+                task_id=task_id,
+                mechanism_trace=mechanism_trace,
             )
-        z_priors = self.rssm.prior(hiddens, task_id)
+        z_priors = self.rssm.prior(
+            hiddens, task_id, mechanism_trace=mechanism_trace
+        )
 
         # Dynamics and representation losses
         dyn_loss_scale = 0.5
@@ -882,14 +1074,30 @@ class WorldModel(nn.Module):
             consolidation_loss = self.consolidation_penalty()
             metrics["Loss/kan_consolidation"] = consolidation_loss.detach()
 
-        return (
+        total_loss = (
             z_repr_loss
             + observation_loss
             + rews_loss
             + conts_loss
-            + consolidation_loss,
-            metrics,
+            + consolidation_loss
         )
+        current_atom_outputs: dict[str, torch.Tensor] = {}
+        for component, values in mechanism_trace.items():
+            if not values:
+                continue
+            current_atom_outputs[component] = (
+                values[0] if len(values) == 1 else torch.stack(values)
+            )
+        trace: dict[str, object] = {
+            "posterior_log_probs": z_posts,
+            "posterior_logits": z_posts,
+            "prior_log_probs": z_priors,
+            "prior_logits": z_priors,
+            "hiddens": hiddens,
+            "actor_states": zhs,
+            "current_atom_outputs": current_atom_outputs,
+        }
+        return total_loss, metrics, trace
 
 
 class ZhToModelState(nn.Module):

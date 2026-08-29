@@ -472,6 +472,31 @@ This protocol remains experimental and has no validated multi-seed result. See
 `docs/protocols/dino_convbank_arrow_v4_atari.md` for the exact gradient path,
 resource accounting, routing semantics, and acquisition gates.
 
+## Evolving-Core Atomic RSSM pilot
+
+The separately named Evolving-Core pilot trains three Atari tasks from scratch
+with one continually updated CNN/base RSSM. Every task, including the first,
+owns a zero-effect projector, four-atom recurrent/posterior/prior residual
+mechanisms, private heads, and an independent Actor-Critic. Later updates keep
+the world-model sequence batch at 16 by using 12 current sequences and four
+task-homogeneous LTDM memory sequences; conflicting current gradients are
+projected per shared component. Boundary consolidation adds explicitly
+reported compute and can roll back the shared core and its persistent Adam
+state.
+
+```bash
+python scripts/run_evolving_atomic_rssm.py \
+  --task-order mspacman-boxing-crazyclimber \
+  --seed 0 \
+  --classification pilot \
+  --dry-run
+```
+
+The launcher also supports the two predeclared first-task swaps. This is a
+task-aware experimental protocol with no validated performance result. See
+`docs/protocols/evolving_core_atomic_rssm_arrow_v1_atari.md` for its fixed
+losses, optimizer ownership, checkpoint contract, budgets, and claim limits.
+
 ## Task-2 snapshot acquisition diagnostic
 
 The Task-2 snapshot protocol starts from the completed Task-1 analysis

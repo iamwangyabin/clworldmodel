@@ -34,6 +34,7 @@ ContinualMethod = Literal[
     "cnn_compact_shared_actor_arrow",
     "cnn_mechanism_bank_arrow",
     "rec_rssm_arrow",
+    "evolving_atomic_rssm_arrow",
     "dino_fullbank_arrow",
     "dino_patchbank_arrow",
     "dino_convbank_arrow",
@@ -50,6 +51,7 @@ SharedCoreMode = Literal[
     "task1_frozen_projector_lora",
     "task1_frozen_projector_compact_rssm",
     "task1_frozen_mechanism_bank",
+    "evolving_replay_protected",
 ]
 ActorNetwork = Literal[
     "mlp",
@@ -316,6 +318,28 @@ class Config(Serialisable):
     task_mechanism_consolidation_batches: int = 8
     task_mechanism_min_contribution: float = 0.01
     task_mechanism_max_validation_drop: float = 0.05
+    # Evolving-Core Atomic RSSM is intentionally configured independently of
+    # the frozen-base MB/REC methods above.
+    evolving_shared_core: bool = False
+    first_task_shared_core_lr: float = 2e-4
+    shared_core_lr: float = 1e-4
+    task_private_lr: float = 2e-4
+    task_route_lr: float = 1e-3
+    current_batch_n: int = 12
+    memory_batch_n: int = 4
+    memory_loss_scale: float = 1.0
+    interface_q_scale: float = 0.1
+    interface_h_scale: float = 0.05
+    interface_actor_scale: float = 0.05
+    component_gradient_projection: bool = True
+    task_atom_output_regularization: float = 1e-4
+    boundary_consolidation_steps: int = 1000
+    boundary_consolidation_lr: float = 2e-5
+    boundary_max_return_drop: float = 0.05
+    task_private_heads: bool = False
+    task_private_actor_critic: bool = False
+    task_atomic_routes: bool = False
+    full_task_rssm_experts: bool = False
     shared_actor_imagination_distillation: bool = False
     shared_actor_distill_scale: float = 0.0
     shared_actor_distill_interval: int = 1
@@ -421,6 +445,7 @@ class Config(Serialisable):
             "cnn_compact_shared_actor_arrow",
             "cnn_mechanism_bank_arrow",
             "rec_rssm_arrow",
+            "evolving_atomic_rssm_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -438,7 +463,12 @@ class Config(Serialisable):
             self.continual_method == "cnn_mechanism_bank_arrow"
         )
         is_rec_rssm = self.continual_method == "rec_rssm_arrow"
-        uses_mechanism_bank = is_cnn_mechanism_bank or is_rec_rssm
+        is_evolving_atomic = (
+            self.continual_method == "evolving_atomic_rssm_arrow"
+        )
+        uses_mechanism_bank = (
+            is_cnn_mechanism_bank or is_rec_rssm or is_evolving_atomic
+        )
         if self.task_mechanism_capacity_profile not in {
             "matched_512",
             "expanded_640",
@@ -469,6 +499,84 @@ class Config(Serialisable):
             raise ValueError("task_mechanism_min_contribution must lie in [0, 1)")
         if not 0 <= self.task_mechanism_max_validation_drop < 1:
             raise ValueError("task_mechanism_max_validation_drop must lie in [0, 1)")
+        evolving_defaults = {
+            "evolving_shared_core": False,
+            "first_task_shared_core_lr": 2e-4,
+            "shared_core_lr": 1e-4,
+            "task_private_lr": 2e-4,
+            "task_route_lr": 1e-3,
+            "current_batch_n": 12,
+            "memory_batch_n": 4,
+            "memory_loss_scale": 1.0,
+            "interface_q_scale": 0.1,
+            "interface_h_scale": 0.05,
+            "interface_actor_scale": 0.05,
+            "component_gradient_projection": True,
+            "task_atom_output_regularization": 1e-4,
+            "boundary_consolidation_steps": 1000,
+            "boundary_consolidation_lr": 2e-5,
+            "boundary_max_return_drop": 0.05,
+            "task_private_heads": False,
+            "task_private_actor_critic": False,
+            "task_atomic_routes": False,
+            "full_task_rssm_experts": False,
+        }
+        if is_evolving_atomic:
+            expected_evolving = {
+                **evolving_defaults,
+                "evolving_shared_core": True,
+                "task_private_heads": True,
+                "task_private_actor_critic": True,
+                "task_atomic_routes": True,
+            }
+            mismatches = {
+                name: (getattr(self, name), expected)
+                for name, expected in expected_evolving.items()
+                if getattr(self, name) != expected
+            }
+            if mismatches:
+                raise ValueError(
+                    "Evolving-Core Atomic RSSM requires its fixed optimizer, "
+                    f"replay, interface, and topology settings: {mismatches}"
+                )
+            if self.current_batch_n + self.memory_batch_n != self.mb_n_size:
+                raise ValueError(
+                    "Evolving-Core current and memory sequence counts must sum "
+                    "to mb_n_size"
+                )
+            if self.pretrain_mb_n_size != self.mb_n_size:
+                raise ValueError(
+                    "Evolving-Core Task 1 requires the same full sequence batch size"
+                )
+            if self.evaluation_seed_protocol != "fixed_validation_heldout_final":
+                raise ValueError(
+                    "Evolving-Core consolidation requires fixed validation and "
+                    "held-out final cohorts"
+                )
+            if self.memory_loss_scale < 0:
+                raise ValueError("memory_loss_scale must be non-negative")
+            if min(
+                self.interface_q_scale,
+                self.interface_h_scale,
+                self.interface_actor_scale,
+                self.task_atom_output_regularization,
+            ) < 0:
+                raise ValueError(
+                    "Evolving-Core interface and atom regularization scales "
+                    "must be non-negative"
+                )
+        else:
+            evolving_nondefault = {
+                name: (getattr(self, name), expected)
+                for name, expected in evolving_defaults.items()
+                if getattr(self, name) != expected
+            }
+            if evolving_nondefault:
+                raise ValueError(
+                    "Evolving-Core settings require "
+                    "continual_method='evolving_atomic_rssm_arrow': "
+                    f"{evolving_nondefault}"
+                )
         is_dino_fullbank = self.continual_method == "dino_fullbank_arrow"
         is_dino_patchbank = self.continual_method == "dino_patchbank_arrow"
         is_dino_convbank = self.continual_method == "dino_convbank_arrow"
@@ -623,6 +731,7 @@ class Config(Serialisable):
             or is_cnn_projector_lora
             or is_cnn_compact_shared_actor
             or is_cnn_mechanism_bank
+            or is_evolving_atomic
             or is_dino_fullbank
             or is_dino_pixelbank
         ):
@@ -631,7 +740,9 @@ class Config(Serialisable):
                     "Full task banks assign all updates to the current task"
                 )
             expected_shared_core_mode = (
-                "task_banked_shared_adapter"
+                "evolving_replay_protected"
+                if is_evolving_atomic
+                else "task_banked_shared_adapter"
                 if is_dino_convbank
                 else "task1_frozen_projector_compact_rssm"
                 if is_cnn_compact_shared_actor
@@ -663,6 +774,7 @@ class Config(Serialisable):
                         or is_cnn_projector_lora
                         or is_cnn_compact_shared_actor
                         or is_cnn_mechanism_bank
+                        or is_evolving_atomic
                         or is_dino_pixelbank
                         else "DINO-FullBank-ARROW reconstructs posterior DINOv3 features"
                     )
@@ -676,6 +788,7 @@ class Config(Serialisable):
                 or is_cnn_projector_lora
                 or is_cnn_compact_shared_actor
                 or is_cnn_mechanism_bank
+                or is_evolving_atomic
                 or is_dino_pixelbank
             ) and any(
                 replay_config.rb_device.split(":", 1)[0] != "cpu"
@@ -754,6 +867,8 @@ class Config(Serialisable):
                 expected_atom_settings = (
                     (4, 1, 5.0, 8, 0.01, 0.05)
                     if is_rec_rssm
+                    else (4, 0, 1.0, 8, 0.01, 0.05)
+                    if is_evolving_atomic
                     else (1, 0, 1.0, 8, 0.01, 0.05)
                 )
                 if atom_settings != expected_atom_settings:
@@ -761,9 +876,9 @@ class Config(Serialisable):
                         "The named mechanism protocol fixes atom/probe/route-LR/"
                         "consolidation settings to "
                         f"{expected_atom_settings}, got {atom_settings}"
-                    )
-                if is_rec_rssm and not self.task_mechanism_reuse:
-                    raise ValueError("REC-RSSM requires atom reuse")
+                )
+                if (is_rec_rssm or is_evolving_atomic) and not self.task_mechanism_reuse:
+                    raise ValueError("Atomic RSSM requires atom reuse")
                 if self.fresh_ac is not False or self.actor_network != "mlp":
                     raise ValueError(
                         "CNN-MechanismBank requires independent fresh MLP actor-critics"
@@ -849,6 +964,7 @@ class Config(Serialisable):
             or is_cnn_projector_lora
             or is_cnn_compact_shared_actor
             or is_cnn_mechanism_bank
+            or is_evolving_atomic
         ) and self.observation_encoder != "cnn":
             raise ValueError("CNN task-bank methods require the CNN observation encoder")
         if self.observation_objective not in {
@@ -1117,6 +1233,7 @@ class Config(Serialisable):
             "task1_frozen_projector_lora",
             "task1_frozen_projector_compact_rssm",
             "task1_frozen_mechanism_bank",
+            "evolving_replay_protected",
         }:
             raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
         if self.shared_core_mode == "task_isolated" and not (
@@ -1156,6 +1273,14 @@ class Config(Serialisable):
             raise ValueError(
                 "shared_core_mode='task1_frozen_mechanism_bank' is reserved for "
                 "CNN-MechanismBank-ARROW"
+            )
+        if (
+            self.shared_core_mode == "evolving_replay_protected"
+            and not is_evolving_atomic
+        ):
+            raise ValueError(
+                "shared_core_mode='evolving_replay_protected' is reserved for "
+                "Evolving-Core Atomic RSSM"
             )
         if self.residual_correction != "none" and not uses_dinov3:
             raise ValueError("KARROW residuals require the frozen DINOv3 protocol")
@@ -1466,6 +1591,7 @@ class Config(Serialisable):
             "cnn_compact_shared_actor_arrow",
             "cnn_mechanism_bank_arrow",
             "rec_rssm_arrow",
+            "evolving_atomic_rssm_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1494,6 +1620,7 @@ class Config(Serialisable):
             "cnn_compact_shared_actor_arrow",
             "cnn_mechanism_bank_arrow",
             "rec_rssm_arrow",
+            "evolving_atomic_rssm_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1504,6 +1631,22 @@ class Config(Serialisable):
     @property
     def uses_shared_actor(self) -> bool:
         return self.continual_method == "cnn_compact_shared_actor_arrow"
+
+    @property
+    def uses_task_private_heads(self) -> bool:
+        """Separate private heads from copied full-RSSM expert topology."""
+
+        return self.task_private_heads or self.uses_full_task_experts
+
+    @property
+    def uses_full_task_rssm_experts(self) -> bool:
+        if self.continual_method == "evolving_atomic_rssm_arrow":
+            return self.full_task_rssm_experts
+        return self.uses_full_task_experts
+
+    @property
+    def uses_evolving_atomic_rssm(self) -> bool:
+        return self.continual_method == "evolving_atomic_rssm_arrow"
 
     def get_env_schedule(self) -> EnvironmentSchedule:
         return self.esc.env_schedule_type(

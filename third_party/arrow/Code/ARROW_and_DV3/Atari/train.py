@@ -5,6 +5,7 @@ import json
 import math
 import os
 import random
+import shutil
 import socket
 import time
 from collections.abc import Mapping, Sequence
@@ -429,6 +430,237 @@ def _cpu_state_dict(module: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {name: value.detach().cpu() for name, value in module.state_dict().items()}
 
 
+def _optimizer_bank_state_dict(
+    optimizers: Mapping[int, torch.optim.Optimizer],
+) -> dict[str, dict[str, object]]:
+    return {
+        str(task_id): optimizer.state_dict()
+        for task_id, optimizer in sorted(optimizers.items())
+    }
+
+
+def _snapshot_checkpoint_replay_mmaps(
+    replay_state: dict[str, object],
+    *,
+    checkpoint_path: Path,
+) -> dict[str, object]:
+    """Copy mutable mmap replay files into immutable checkpoint-owned assets."""
+
+    snapshotted = copy.deepcopy(replay_state)
+    replay_states = snapshotted.get("replays")
+    if not isinstance(replay_states, list):
+        replay_states = [snapshotted]
+    shared_stem = checkpoint_path.stem.replace("_pre_consolidation", "").replace(
+        "_post_consolidation", ""
+    )
+    asset_dir = checkpoint_path.parent / f"{shared_stem}_replay_assets"
+    for index, sub_state in enumerate(replay_states):
+        if not isinstance(sub_state, dict):
+            raise ValueError("Replay checkpoint state must contain mappings")
+        observations = sub_state.get("observations")
+        if not isinstance(observations, dict) or observations.get("kind") != "mmap":
+            continue
+        source = Path(str(observations["path"])).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(f"Replay mmap is missing: {source}")
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        destination = asset_dir / f"{index}_{source.name}"
+        if not destination.exists():
+            temporary = destination.with_suffix(destination.suffix + ".tmp")
+            shutil.copyfile(source, temporary)
+            os.replace(temporary, destination)
+        expected_bytes = int(observations["byte_size"])
+        if destination.stat().st_size != expected_bytes:
+            raise ValueError(
+                "Checkpoint replay mmap byte size changed: "
+                f"{destination.stat().st_size} != {expected_bytes}"
+            )
+        observations["path"] = str(destination)
+        observations["sha256"] = _sha256(destination)
+        observations["immutable_checkpoint_asset"] = True
+    return snapshotted
+
+
+def _save_evolving_resumable_checkpoint(
+    path: Path,
+    *,
+    config: Config,
+    wm: WorldModel,
+    boundary_teacher: WorldModel,
+    shared_optimizer: torch.optim.Optimizer,
+    private_optimizers: Mapping[int, torch.optim.Optimizer],
+    route_optimizers: Mapping[int, torch.optim.Optimizer],
+    actor_critic_bank,
+    replay_buffer,
+    environment_schedule,
+    epoch: int,
+    current_task_id: int,
+    world_model_updates: int,
+    actor_critic_updates: int,
+    total_env_steps: int,
+    task_update_rng: np.random.Generator,
+    collection_environment_seed_rng: np.random.Generator,
+    validation_environment_seed_rng: np.random.Generator,
+    final_environment_seed_rng: np.random.Generator,
+) -> Path:
+    """Atomically persist every state required for an equivalent resume."""
+
+    if not config.uses_evolving_atomic_rssm:
+        raise ValueError("Resumable evolving checkpoints require the named protocol")
+    if current_task_id < 0:
+        raise ValueError("current_task_id must be non-negative")
+    path = path.expanduser().resolve()
+    replay_state = _snapshot_checkpoint_replay_mmaps(
+        replay_buffer.state_dict(), checkpoint_path=path
+    )
+    payload = {
+        "schema_version": 1,
+        "artifact_kind": "evolving_core_atomic_rssm_resumable_checkpoint",
+        "resumable": True,
+        "config": config.to_dict(),
+        "world_model": wm.state_dict(),
+        "boundary_teacher": boundary_teacher.state_dict(),
+        "optimizers": {
+            "shared": shared_optimizer.state_dict(),
+            "private_by_task": _optimizer_bank_state_dict(private_optimizers),
+            "route_by_task": _optimizer_bank_state_dict(route_optimizers),
+            "actor_critic_bank": actor_critic_bank.resumable_state_dict(),
+        },
+        "replay": replay_state,
+        "rng": {
+            "python": random.getstate(),
+            "numpy_legacy": np.random.get_state(),
+            "torch_cpu": torch.random.get_rng_state(),
+            "torch_cuda": (
+                torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+            ),
+            "task_update": copy.deepcopy(task_update_rng.bit_generator.state),
+            "collection_environment": copy.deepcopy(
+                collection_environment_seed_rng.bit_generator.state
+            ),
+            "validation_environment": copy.deepcopy(
+                validation_environment_seed_rng.bit_generator.state
+            ),
+            "final_environment": copy.deepcopy(
+                final_environment_seed_rng.bit_generator.state
+            ),
+        },
+        "schedule": {
+            "environment_step": int(environment_schedule._step) + 1,
+            "epoch": epoch,
+            "completed_epochs": epoch + 1,
+            "current_task_id": current_task_id,
+        },
+        "counters": {
+            "raw_environment_frames": total_env_steps,
+            "world_model_updates": world_model_updates,
+            "actor_critic_updates": actor_critic_updates,
+        },
+        "replay_checkpoint_semantics": (
+            "mapped observations are copied into immutable checkpoint-owned assets; "
+            "all other replay tensors and retention indices are embedded"
+        ),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, temporary)
+    os.replace(temporary, path)
+    checksum_path = path.with_suffix(path.suffix + ".sha256")
+    temporary_checksum = checksum_path.with_suffix(checksum_path.suffix + ".tmp")
+    temporary_checksum.write_text(f"{_sha256(path)}  {path.name}\n", encoding="utf-8")
+    os.replace(temporary_checksum, checksum_path)
+    return path
+
+
+def _restore_evolving_resumable_checkpoint(
+    path: Path,
+    *,
+    config: Config,
+    wm: WorldModel,
+    boundary_teacher: WorldModel,
+    shared_optimizer: torch.optim.Optimizer,
+    private_optimizers: Mapping[int, torch.optim.Optimizer],
+    route_optimizers: Mapping[int, torch.optim.Optimizer],
+    actor_critic_bank,
+    actor_critic_factory,
+    replay_buffer,
+    environment_schedule,
+    task_update_rng: np.random.Generator,
+    collection_environment_seed_rng: np.random.Generator,
+    validation_environment_seed_rng: np.random.Generator,
+    final_environment_seed_rng: np.random.Generator,
+) -> dict[str, int]:
+    """Restore a preconstructed Evolving-Core training topology exactly."""
+
+    path = path.expanduser().resolve()
+    checksum_path = path.with_suffix(path.suffix + ".sha256")
+    if not checksum_path.is_file():
+        raise FileNotFoundError(
+            f"Evolving-Core checkpoint checksum is missing: {checksum_path}"
+        )
+    checksum_fields = checksum_path.read_text(encoding="ascii").split()
+    if not checksum_fields or checksum_fields[0] != _sha256(path):
+        raise ValueError("Evolving-Core checkpoint checksum does not match")
+    payload = torch.load(
+        path,
+        map_location=next(wm.parameters()).device,
+        weights_only=False,
+    )
+    if not isinstance(payload, Mapping):
+        raise ValueError("Evolving-Core checkpoint must contain a mapping")
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("artifact_kind")
+        != "evolving_core_atomic_rssm_resumable_checkpoint"
+        or payload.get("resumable") is not True
+    ):
+        raise ValueError("Checkpoint is not resumable Evolving-Core schema v1")
+    if payload.get("config") != config.to_dict():
+        raise ValueError("Resolved config changed across Evolving-Core resume")
+
+    wm.load_state_dict(payload["world_model"], strict=True)
+    boundary_teacher.load_state_dict(payload["boundary_teacher"], strict=True)
+    optimizers = payload["optimizers"]
+    shared_optimizer.load_state_dict(optimizers["shared"])
+    for name, targets in (
+        ("private_by_task", private_optimizers),
+        ("route_by_task", route_optimizers),
+    ):
+        states = optimizers[name]
+        if {int(task_id) for task_id in states} != set(targets):
+            raise ValueError(f"Checkpoint {name} ownership does not match target")
+        for task_id, optimizer in targets.items():
+            optimizer.load_state_dict(states[str(task_id)])
+    actor_critic_bank.load_resumable_state_dict(
+        optimizers["actor_critic_bank"], actor_critic_factory
+    )
+    replay_buffer.load_state_dict(payload["replay"])
+
+    rng = payload["rng"]
+    random.setstate(rng["python"])
+    np.random.set_state(rng["numpy_legacy"])
+    torch.random.set_rng_state(rng["torch_cpu"].cpu())
+    if rng["torch_cuda"] is not None:
+        torch.cuda.set_rng_state_all(rng["torch_cuda"])
+    for generator, name in (
+        (task_update_rng, "task_update"),
+        (collection_environment_seed_rng, "collection_environment"),
+        (validation_environment_seed_rng, "validation_environment"),
+        (final_environment_seed_rng, "final_environment"),
+    ):
+        generator.bit_generator.state = copy.deepcopy(rng[name])
+    schedule = payload["schedule"]
+    environment_schedule._step = int(schedule["environment_step"])
+    counters = payload["counters"]
+    return {
+        "completed_epochs": int(schedule["completed_epochs"]),
+        "current_task_id": int(schedule["current_task_id"]),
+        "raw_environment_frames": int(counters["raw_environment_frames"]),
+        "world_model_updates": int(counters["world_model_updates"]),
+        "actor_critic_updates": int(counters["actor_critic_updates"]),
+    }
+
+
 def _parameter_accounting(module: torch.nn.Module) -> dict[str, int]:
     parameters = list(module.parameters())
     return {
@@ -535,9 +767,12 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
     }
     projectors_per_task = {
         str(task_id): _parameter_accounting(
-            wm.rssm.image_projectors[task_id - 1]
+            wm.rssm.image_projector_for(task_id)
         )
-        for task_id in range(1, wm.rssm.num_task_experts)
+        for task_id in range(
+            0 if wm.rssm.task_symmetric_image_projectors else 1,
+            wm.rssm.num_task_experts,
+        )
         if wm.rssm.task_projected_image_encoder
     }
     mechanism_banks = {}
@@ -560,11 +795,18 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         }
         mechanism_parameters_per_later_task = {
             str(task_id): sum(
-                report["mechanism_parameters_per_later_task"][task_id - 1]
-                + report["route_parameters_per_later_task"][task_id - 1]
+                report["mechanism_parameters_per_task"][
+                    task_id if report["include_task0"] else task_id - 1
+                ]
+                + report["route_parameters_per_later_task"][
+                    task_id if report["include_task0"] else task_id - 1
+                ]
                 for report in mechanism_banks.values()
             )
-            for task_id in range(1, wm.rssm.num_task_experts)
+            for task_id in range(
+                0 if wm.rssm.task_symmetric_mechanisms else 1,
+                wm.rssm.num_task_experts,
+            )
         }
     return {
         "schema_version": 1,
@@ -579,6 +821,9 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         ),
         "observation_encoders_per_task": observation_encoders_per_task,
         "task_projected_image_encoder": wm.rssm.task_projected_image_encoder,
+        "task_symmetric_image_projectors": (
+            wm.rssm.task_symmetric_image_projectors
+        ),
         "observation_projectors_per_task": projectors_per_task,
         "rssm_task_lora_enabled": wm.rssm.task_lora_enabled,
         "rssm_task_lora_reports": wm.rssm.task_lora_reports,
@@ -592,6 +837,7 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
             wm.rssm.task_mechanism_bank_enabled
         ),
         "rssm_task_mechanism_reuse": wm.rssm.task_mechanism_reuse,
+        "rssm_task_symmetric_mechanisms": wm.rssm.task_symmetric_mechanisms,
         "rssm_task_mechanism_banks": mechanism_banks,
         "rssm_task_mechanism_parameters_per_later_task": (
             mechanism_parameters_per_later_task
@@ -1260,6 +1506,239 @@ def _rec_optimizer_parameter_groups(
     ]
 
 
+def _flatten_parameter_groups(
+    groups: Mapping[str, Sequence[torch.nn.Parameter]],
+) -> list[torch.nn.Parameter]:
+    parameters = [parameter for values in groups.values() for parameter in values]
+    if not parameters:
+        raise RuntimeError("Parameter groups contain no parameters")
+    if len({id(parameter) for parameter in parameters}) != len(parameters):
+        raise RuntimeError("Parameter groups contain duplicate parameters")
+    return parameters
+
+
+def _ensure_evolving_private_optimizers(
+    *,
+    wm: WorldModel,
+    task_id: int,
+    private_optimizers: dict[int, torch.optim.Optimizer],
+    route_optimizers: dict[int, torch.optim.Optimizer],
+    private_lr: float,
+    route_lr: float,
+    fused: bool,
+) -> tuple[torch.optim.Optimizer, Optional[torch.optim.Optimizer]]:
+    """Create each task optimizer once and retain its Adam state thereafter."""
+
+    if task_id not in private_optimizers:
+        private_parameters = wm.private_parameters(task_id)
+        if not private_parameters:
+            raise RuntimeError(f"Task {task_id} has no private world-model parameters")
+        private_optimizers[task_id] = Adam(
+            private_parameters,
+            lr=private_lr,
+            fused=fused,
+        )
+    route_parameters = wm.route_parameters(task_id)
+    if route_parameters and task_id not in route_optimizers:
+        route_optimizers[task_id] = Adam(
+            route_parameters,
+            lr=route_lr,
+            fused=fused,
+        )
+    route_optimizer = route_optimizers.get(task_id)
+    owned_ids = {
+        id(parameter)
+        for optimizer in (
+            private_optimizers[task_id],
+            route_optimizer,
+        )
+        if optimizer is not None
+        for parameter in _optimizer_parameters(optimizer)
+    }
+    expected_ids = {
+        id(parameter) for parameter in (*wm.private_parameters(task_id), *route_parameters)
+    }
+    if owned_ids != expected_ids:
+        raise RuntimeError("Task-private optimizer ownership is incomplete or overlapping")
+    return private_optimizers[task_id], route_optimizer
+
+
+def _set_optimizer_learning_rate(
+    optimizer: torch.optim.Optimizer, learning_rate: float
+) -> None:
+    if learning_rate <= 0:
+        raise ValueError("Optimizer learning rate must be positive")
+    for group in optimizer.param_groups:
+        group["lr"] = learning_rate
+
+
+def _restore_sampling_rng(
+    cpu_state: torch.Tensor,
+    cuda_states: Optional[list[torch.Tensor]],
+) -> None:
+    torch.random.set_rng_state(cpu_state)
+    if cuda_states is not None:
+        torch.cuda.set_rng_state_all(cuda_states)
+
+
+def _evolving_memory_loss(
+    *,
+    config: Config,
+    wm: WorldModel,
+    teacher: WorldModel,
+    frozen_actor: torch.nn.Module,
+    batch: tuple[torch.Tensor, ...],
+    task_id: int,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute old-task Dreamer and Q/H/policy interface protection losses."""
+
+    from clworldmodel.continual import interface_distillation_losses
+
+    actions, observations, rewards, continues, resets = batch
+    cpu_state = torch.random.get_rng_state()
+    cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    with torch.no_grad(), _autocast_context(actions.device, config.compute_dtype):
+        _teacher_loss, _teacher_metrics, teacher_trace = (
+            teacher.compute_loss_and_trace(
+                actions,
+                observations,
+                rewards,
+                continues,
+                resets,
+                task_id=task_id,
+            )
+        )
+    _restore_sampling_rng(cpu_state, cuda_states)
+    with _autocast_context(actions.device, config.compute_dtype):
+        dreamer_loss, dreamer_metrics, student_trace = wm.compute_loss_and_trace(
+            actions,
+            observations,
+            rewards,
+            continues,
+            resets,
+            task_id=task_id,
+        )
+        interface = interface_distillation_losses(
+            student_trace=student_trace,
+            teacher_trace=teacher_trace,
+            frozen_actor=frozen_actor,
+        )
+        total = (
+            dreamer_loss
+            + config.interface_q_scale * interface["posterior"]
+            + config.interface_h_scale * interface["hidden"]
+            + config.interface_actor_scale * interface["actor"]
+        )
+    metrics = {
+        **dreamer_metrics,
+        "Loss/evolving_interface_q": interface["posterior"].detach(),
+        "Loss/evolving_interface_h": interface["hidden"].detach(),
+        "Loss/evolving_interface_actor": interface["actor"].detach(),
+        "Loss/evolving_memory_total": total.detach(),
+    }
+    return total, metrics
+
+
+def _evolving_world_model_update(
+    *,
+    config: Config,
+    wm: WorldModel,
+    boundary_teacher: Optional[WorldModel],
+    actor_critic_bank,
+    replay_buffer,
+    current_task_id: int,
+    memory_task_id: Optional[int],
+    sequence_length: int,
+    shared_optimizer: torch.optim.Optimizer,
+    private_optimizer: torch.optim.Optimizer,
+    route_optimizer: Optional[torch.optim.Optimizer],
+) -> tuple[dict[str, torch.Tensor], dict[str, Any], torch.Tensor]:
+    """Run one fixed-budget Evolving-Core world-model optimizer update."""
+
+    from clworldmodel.continual import (
+        assign_component_projected_gradients,
+        assign_unprojected_current_gradients,
+        atom_output_penalty,
+    )
+
+    current_sequences = (
+        config.mb_n_size if current_task_id == 0 else config.current_batch_n
+    )
+    current_batch = replay_buffer.minibatch_for_task(
+        current_task_id,
+        sequence_length,
+        current_sequences,
+        source="mixed",
+    )
+    with _autocast_context(current_batch[0].device, config.compute_dtype):
+        current_dreamer, current_metrics, current_trace = (
+            wm.compute_loss_and_trace(*current_batch, task_id=current_task_id)
+        )
+        atom_penalty = atom_output_penalty(current_trace)
+        current_loss = (
+            current_dreamer
+            + config.task_atom_output_regularization * atom_penalty
+        )
+
+    for optimizer in (shared_optimizer, private_optimizer, route_optimizer):
+        if optimizer is not None:
+            optimizer.zero_grad(set_to_none=True)
+
+    shared_groups = wm.shared_parameter_groups()
+    shared_parameters = _flatten_parameter_groups(shared_groups)
+    private_parameters = list(wm.private_parameters(current_task_id))
+    private_parameters.extend(wm.route_parameters(current_task_id))
+    diagnostics: dict[str, Any] = {}
+    memory_metrics: dict[str, torch.Tensor] = {}
+    if current_task_id == 0:
+        assign_unprojected_current_gradients(
+            current_loss,
+            (*shared_parameters, *private_parameters),
+        )
+    else:
+        if boundary_teacher is None:
+            raise RuntimeError("Old-task protection requires a boundary teacher")
+        if memory_task_id is None or not 0 <= memory_task_id < current_task_id:
+            raise ValueError("memory_task_id must select a previously completed task")
+        memory_batch = replay_buffer.minibatch_for_task(
+            memory_task_id,
+            sequence_length,
+            config.memory_batch_n,
+            source="ltdm",
+        )
+        memory_loss, memory_metrics = _evolving_memory_loss(
+            config=config,
+            wm=wm,
+            teacher=boundary_teacher,
+            frozen_actor=actor_critic_bank.get(memory_task_id).ac.actor,
+            batch=memory_batch,
+            task_id=memory_task_id,
+        )
+        diagnostics = assign_component_projected_gradients(
+            current_loss=current_loss,
+            memory_loss=memory_loss,
+            shared_parameter_groups=shared_groups,
+            private_parameters=private_parameters,
+            memory_scale=config.memory_loss_scale,
+            project_conflicts=config.component_gradient_projection,
+        )
+
+    active_parameters = (*shared_parameters, *private_parameters)
+    grad_norm = torch.nn.utils.clip_grad_norm_(active_parameters, 1000)
+    shared_optimizer.step()
+    private_optimizer.step()
+    if route_optimizer is not None:
+        route_optimizer.step()
+
+    metrics = {
+        **current_metrics,
+        **{f"Memory/{name}": value for name, value in memory_metrics.items()},
+        "Loss/evolving_atom_output_penalty": atom_penalty.detach(),
+        "Loss/evolving_current_total": current_loss.detach(),
+    }
+    return metrics, diagnostics, grad_norm
+
+
 def _restore_torch_rng_state(
     cpu_state: torch.Tensor, cuda_states: Optional[list[torch.Tensor]]
 ) -> None:
@@ -1605,6 +2084,175 @@ def _consolidate_rec_routes(
         "RECRSSM/consolidation_rollback",
         int(bool(artifact["rollback"])),
         global_step,
+    )
+    return artifact
+
+
+def _consolidate_evolving_shared_core(
+    *,
+    config: Config,
+    wm: WorldModel,
+    shared_optimizer: torch.optim.Optimizer,
+    replay_buffer,
+    actor_critic_bank,
+    completed_task_id: int,
+    eval_funcs,
+    validation_task_seeds: Sequence[int],
+    epoch: int,
+    global_step: int,
+    log_dir: Path,
+    writer,
+) -> dict[str, Any]:
+    """Run task-balanced shared-only consolidation with whole-core rollback."""
+
+    from clworldmodel.continual import recursive_python_scalars
+
+    if not config.uses_evolving_atomic_rssm:
+        raise ValueError("Shared consolidation requires Evolving-Core Atomic RSSM")
+    if not 0 <= completed_task_id < len(eval_funcs):
+        raise ValueError("completed_task_id is outside the evaluation task set")
+    seen_count = completed_task_id + 1
+    seen_eval_funcs = eval_funcs[:seen_count]
+    seen_validation_seeds = validation_task_seeds[:seen_count]
+    shared_before = wm.shared_core_state_dict()
+    optimizer_before = copy.deepcopy(shared_optimizer.state_dict())
+    learning_rates_before = [group["lr"] for group in shared_optimizer.param_groups]
+    was_training = wm.training
+
+    pre_scaled_mean, pre_scaled_std = _evaluate_policy_tasks(
+        config,
+        wm,
+        actor_critic_bank.get(completed_task_id),
+        seen_eval_funcs,
+        seen_validation_seeds,
+        actor_critic_bank=actor_critic_bank,
+    )
+    pre_raw_mean, pre_raw_std = _raw_return_statistics(
+        config.esc.env_configs[:seen_count], pre_scaled_mean, pre_scaled_std
+    )
+
+    losses: list[float] = []
+    rollback = False
+    rollback_reasons: list[dict[str, float | int]] = []
+    try:
+        wm.train()
+        wm.activate_shared_only()
+        _set_optimizer_learning_rate(
+            shared_optimizer, config.boundary_consolidation_lr
+        )
+        shared_parameters = _flatten_parameter_groups(wm.shared_parameter_groups())
+        for consolidation_index in range(config.boundary_consolidation_steps):
+            task_id = consolidation_index % seen_count
+            batch = replay_buffer.minibatch_for_task(
+                task_id,
+                config.mb_t_size,
+                config.mb_n_size,
+                source="ltdm",
+            )
+            shared_optimizer.zero_grad(set_to_none=True)
+            with _autocast_context(batch[0].device, config.compute_dtype):
+                loss, _metrics = wm.compute_loss(*batch, task_id=task_id)
+            if not bool(torch.isfinite(loss).item()):
+                raise FloatingPointError(
+                    "Evolving-Core consolidation produced a non-finite loss"
+                )
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(shared_parameters, 1000)
+            shared_optimizer.step()
+            losses.append(float(loss.detach().float().cpu()))
+
+        wm.eval()
+        post_scaled_mean, post_scaled_std = _evaluate_policy_tasks(
+            config,
+            wm,
+            actor_critic_bank.get(completed_task_id),
+            seen_eval_funcs,
+            seen_validation_seeds,
+            actor_critic_bank=actor_critic_bank,
+        )
+        post_raw_mean, post_raw_std = _raw_return_statistics(
+            config.esc.env_configs[:seen_count],
+            post_scaled_mean,
+            post_scaled_std,
+        )
+        for task_id, (before, after) in enumerate(
+            zip(pre_raw_mean, post_raw_mean)
+        ):
+            relative_drop = (before - after) / max(abs(before), 1.0)
+            if relative_drop > config.boundary_max_return_drop:
+                rollback = True
+                rollback_reasons.append(
+                    {
+                        "task_id": task_id,
+                        "pre_return": before,
+                        "post_return": after,
+                        "relative_drop": relative_drop,
+                    }
+                )
+        if rollback:
+            wm.load_shared_core_state_dict(shared_before)
+            shared_optimizer.load_state_dict(optimizer_before)
+            post_scaled_mean = pre_scaled_mean
+            post_scaled_std = pre_scaled_std
+            post_raw_mean = pre_raw_mean
+            post_raw_std = pre_raw_std
+    except Exception:
+        # Restore exact pre-consolidation training state before propagating the
+        # failure to the boundary safety wrapper in the trainer.
+        wm.load_shared_core_state_dict(shared_before)
+        shared_optimizer.load_state_dict(optimizer_before)
+        raise
+    finally:
+        for group, learning_rate in zip(
+            shared_optimizer.param_groups, learning_rates_before
+        ):
+            group["lr"] = learning_rate
+        wm.train(was_training)
+        wm.activate_task_expert(completed_task_id)
+
+    artifact = recursive_python_scalars(
+        {
+            "schema_version": 1,
+            "artifact_kind": "evolving_core_boundary_consolidation",
+            "epoch": epoch,
+            "completed_task_id": completed_task_id,
+            "world_model_update_start": global_step,
+            "world_model_update_stop": (
+                global_step + config.boundary_consolidation_steps
+            ),
+            "steps": config.boundary_consolidation_steps,
+            "learning_rate": config.boundary_consolidation_lr,
+            "sampling": "round-robin task-balanced LTDM",
+            "private_modules_frozen": True,
+            "loss_mean": float(np.mean(losses)),
+            "validation": {
+                "task_seeds": list(seen_validation_seeds),
+                "pre_scaled_mean": pre_scaled_mean,
+                "pre_scaled_std": pre_scaled_std,
+                "post_scaled_mean": post_scaled_mean,
+                "post_scaled_std": post_scaled_std,
+                "pre_raw_mean": pre_raw_mean,
+                "pre_raw_std": pre_raw_std,
+                "post_raw_mean": post_raw_mean,
+                "post_raw_std": post_raw_std,
+                "maximum_relative_drop": config.boundary_max_return_drop,
+            },
+            "rollback": rollback,
+            "rollback_reasons": rollback_reasons,
+            "evaluation_transitions_enter_replay": False,
+        }
+    )
+    output_dir = log_dir / "evolving_core_consolidation"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"task_{completed_task_id:02d}_boundary.json"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    writer.add_scalar(
+        "EvolvingCoreConsolidation/rollback", int(rollback), global_step
+    )
+    writer.add_scalar(
+        "EvolvingCoreConsolidation/loss_mean", artifact["loss_mean"], global_step
     )
     return artifact
 
@@ -2177,6 +2825,11 @@ if __name__ == "__main__":
     if distributed_context.enabled and log_dir is None:
         raise ValueError("multi-GPU training requires an explicit --log-dir")
     _require_cuda_compute_support(config.compute_dtype)
+    if config.uses_evolving_atomic_rssm and args.compile_world_model:
+        raise ValueError(
+            "Evolving-Core component-wise autograd is not compatible with "
+            "--compile-world-model"
+        )
     if config.uses_task_experts and analysis_snapshot_dir is not None:
         raise ValueError(
             "Task-bank analysis snapshots are disabled until replay, all actor "
@@ -2197,6 +2850,7 @@ if __name__ == "__main__":
         "cnn_compact_shared_actor_arrow",
         "cnn_mechanism_bank_arrow",
         "rec_rssm_arrow",
+        "evolving_atomic_rssm_arrow",
     }:
         if task_bank_snapshot_dir is None:
             raise ValueError(
@@ -2499,8 +3153,12 @@ if __name__ == "__main__":
         residual_consolidation=config.residual_consolidation,
         num_task_experts=config.rssm_num_experts,
         full_task_experts=config.uses_full_task_experts,
+        full_task_rssm_experts=config.uses_full_task_rssm_experts,
+        task_private_heads=config.uses_task_private_heads,
+        evolving_shared_core=config.evolving_shared_core,
         task_banked_image_encoder=config.task_banked_image_encoder,
         task_projected_image_encoder=config.task_projected_image_encoder,
+        task_symmetric_image_projectors=config.task_atomic_routes,
         task_projector_bottleneck_features=(
             config.task_projector_bottleneck_features
         ),
@@ -2519,6 +3177,7 @@ if __name__ == "__main__":
         task_mechanism_transition_width=config.task_mechanism_transition_width,
         task_mechanism_residual_scale=config.task_mechanism_residual_scale,
         task_mechanism_num_atoms=config.task_mechanism_num_atoms,
+        task_symmetric_mechanisms=config.task_atomic_routes,
     ).to(device)
     resume_world_model_opened: list[str] = []
     resume_state_report: dict[str, dict[str, list[str]]] = {}
@@ -2545,7 +3204,19 @@ if __name__ == "__main__":
             "Loaded the completed Task-1 CNN/RSSM/heads; later routes remain "
             "zero-effect projector/RSSM adaptations"
         )
-    if config.continual_method == "rec_rssm_arrow":
+    evolving_shared_optimizer: Optional[torch.optim.Optimizer] = None
+    evolving_private_optimizers: dict[int, torch.optim.Optimizer] = {}
+    evolving_route_optimizers: dict[int, torch.optim.Optimizer] = {}
+    if config.uses_evolving_atomic_rssm:
+        evolving_shared_optimizer = Adam(
+            _flatten_parameter_groups(wm.shared_parameter_groups()),
+            lr=config.first_task_shared_core_lr,
+            fused=args.fused_adam,
+        )
+        # Keep ``opt`` as the shared optimizer for generic accounting paths;
+        # Evolving-Core updates step the explicit optimizer bank below.
+        opt = evolving_shared_optimizer
+    elif config.continual_method == "rec_rssm_arrow":
         opt = Adam(
             _rec_optimizer_parameter_groups(
                 wm,
@@ -2588,6 +3259,7 @@ if __name__ == "__main__":
         "cnn_compact_shared_actor_arrow",
         "cnn_mechanism_bank_arrow",
         "rec_rssm_arrow",
+        "evolving_atomic_rssm_arrow",
         "dino_patchbank_arrow",
         "dino_convbank_arrow",
     } and (not distributed_context.enabled or distributed_context.is_primary):
@@ -2737,6 +3409,10 @@ if __name__ == "__main__":
             elif config.continual_method == "dino_convbank_arrow":
                 actor_bank_artifact_kind = (
                     "dino_convbank_arrow_actor_critic_bank_inference_state"
+                )
+            elif config.uses_evolving_atomic_rssm:
+                actor_bank_artifact_kind = (
+                    "evolving_atomic_rssm_actor_critic_bank_resumable_state"
                 )
             elif config.uses_full_task_experts:
                 actor_bank_artifact_kind = (
@@ -2958,6 +3634,7 @@ if __name__ == "__main__":
         else 0
     )  # gradient updates so far
     shared_core_frozen = resume_payload is not None
+    boundary_teacher: Optional[WorldModel] = None
     capture_kan_parameter_values = None
     protect_kan_parameter_updates = None
     if config.residual_consolidation == "replay_functional":
@@ -3043,7 +3720,7 @@ if __name__ == "__main__":
                 print(
                     f"Initialized independent actor-critic for task {current_task_id}"
                 )
-            if config.uses_full_task_experts:
+            if config.uses_task_private_heads:
                 wm.activate_task_expert(
                     current_task_id, mechanism_phase=mechanism_phase
                 )
@@ -3061,6 +3738,24 @@ if __name__ == "__main__":
                     )
             if actor_critic_bank is not None:
                 aco = actor_critic_bank.get(current_task_id)
+            if config.uses_evolving_atomic_rssm:
+                if evolving_shared_optimizer is None:
+                    raise RuntimeError("Evolving-Core shared optimizer was not initialized")
+                _set_optimizer_learning_rate(
+                    evolving_shared_optimizer,
+                    config.first_task_shared_core_lr
+                    if current_task_id == 0
+                    else config.shared_core_lr,
+                )
+                _ensure_evolving_private_optimizers(
+                    wm=wm,
+                    task_id=current_task_id,
+                    private_optimizers=evolving_private_optimizers,
+                    route_optimizers=evolving_route_optimizers,
+                    private_lr=config.task_private_lr,
+                    route_lr=config.task_route_lr,
+                    fused=args.fused_adam,
+                )
         task_boundary = epoch > 0 and envs.is_new_env()
         if config.residual_consolidation == "replay_functional" and task_boundary:
             if aco is None:
@@ -3337,6 +4032,8 @@ if __name__ == "__main__":
                         if config.continual_method == "cnn_mechanism_bank_arrow"
                         else f"RECRSSM/world_model_updates_task_{task_id}"
                         if config.continual_method == "rec_rssm_arrow"
+                        else f"EvolvingCore/world_model_updates_task_{task_id}"
+                        if config.uses_evolving_atomic_rssm
                         else f"DINOPatchBankArrow/world_model_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
                         else f"DINOConvBankArrow/world_model_updates_task_{task_id}"
@@ -3369,6 +4066,59 @@ if __name__ == "__main__":
                 mb_t_size = config.pretrain_mb_t_size
                 global_mb_n_size = config.pretrain_mb_n_size
             mb_n_size = distributed_context.local_sequences(global_mb_n_size)
+            if config.uses_evolving_atomic_rssm:
+                if current_task_id is None or evolving_shared_optimizer is None:
+                    raise RuntimeError("Evolving-Core requires an active task and optimizer")
+                private_optimizer = evolving_private_optimizers[current_task_id]
+                route_optimizer = evolving_route_optimizers.get(current_task_id)
+                memory_task_id = (
+                    int(task_update_rng.integers(0, current_task_id))
+                    if current_task_id > 0
+                    else None
+                )
+                metrics, projection_diagnostics, grad_norm = (
+                    _evolving_world_model_update(
+                        config=config,
+                        wm=wm,
+                        boundary_teacher=boundary_teacher,
+                        actor_critic_bank=actor_critic_bank,
+                        replay_buffer=replay,
+                        current_task_id=current_task_id,
+                        memory_task_id=memory_task_id,
+                        sequence_length=mb_t_size,
+                        shared_optimizer=evolving_shared_optimizer,
+                        private_optimizer=private_optimizer,
+                        route_optimizer=route_optimizer,
+                    )
+                )
+                if global_step % config.log_frequency == 0:
+                    writer.add_scalar("Metric/grad_norm", grad_norm, global_step)
+                    for metric_key, metric_value in metrics.items():
+                        writer.add_scalar(metric_key, metric_value, global_step)
+                    for component, diagnostic in projection_diagnostics.items():
+                        writer.add_scalar(
+                            f"EvolvingCore/{component}/gradient_dot",
+                            diagnostic.dot_product,
+                            global_step,
+                        )
+                        writer.add_scalar(
+                            f"EvolvingCore/{component}/gradient_conflict",
+                            int(diagnostic.conflicted),
+                            global_step,
+                        )
+                        writer.add_scalar(
+                            f"EvolvingCore/{component}/projected_current_norm",
+                            diagnostic.projected_current_norm,
+                            global_step,
+                        )
+                    if memory_task_id is not None:
+                        writer.add_scalar(
+                            "EvolvingCore/memory_task_id",
+                            memory_task_id,
+                            global_step,
+                        )
+                global_step += 1
+                continue
             replay_sample_kwargs = {}
             if update_task_id is not None:
                 replay_sample_kwargs["task_id"] = update_task_id
@@ -3638,6 +4388,8 @@ if __name__ == "__main__":
                         if config.continual_method == "cnn_mechanism_bank_arrow"
                         else f"RECRSSM/actor_critic_updates_task_{task_id}"
                         if config.continual_method == "rec_rssm_arrow"
+                        else f"EvolvingCore/actor_critic_updates_task_{task_id}"
+                        if config.uses_evolving_atomic_rssm
                         else f"DINOPatchBankArrow/actor_critic_updates_task_{task_id}"
                         if config.continual_method == "dino_patchbank_arrow"
                         else f"DINOConvBankArrow/actor_critic_updates_task_{task_id}"
@@ -3775,6 +4527,137 @@ if __name__ == "__main__":
             if task_bank_snapshot_dir is not None
             else None
         )
+        if (
+            distributed_context.is_primary
+            and config.uses_evolving_atomic_rssm
+            and boundary_snapshot_metadata is not None
+        ):
+            completed_task_id = int(boundary_snapshot_metadata["task_index"])
+            if current_task_id != completed_task_id:
+                raise RuntimeError(
+                    "Evolving-Core boundary task does not match the active route: "
+                    f"{completed_task_id} != {current_task_id}"
+                )
+            if evolving_shared_optimizer is None or actor_critic_bank is None:
+                raise RuntimeError(
+                    "Evolving-Core boundary requires shared and Actor-Critic optimizers"
+                )
+            provisional_teacher = copy.deepcopy(wm).eval()
+            provisional_teacher.requires_grad_(False)
+            checkpoint_dir = log_dir / "evolving_core_checkpoints"
+            pre_checkpoint = checkpoint_dir / (
+                f"task_{completed_task_id:02d}_pre_consolidation.pt"
+            )
+            _save_evolving_resumable_checkpoint(
+                pre_checkpoint,
+                config=config,
+                wm=wm,
+                boundary_teacher=provisional_teacher,
+                shared_optimizer=evolving_shared_optimizer,
+                private_optimizers=evolving_private_optimizers,
+                route_optimizers=evolving_route_optimizers,
+                actor_critic_bank=actor_critic_bank,
+                replay_buffer=replay,
+                environment_schedule=envs,
+                epoch=epoch,
+                current_task_id=completed_task_id,
+                world_model_updates=global_step,
+                actor_critic_updates=actor_critic_updates,
+                total_env_steps=total_env_steps,
+                task_update_rng=task_update_rng,
+                collection_environment_seed_rng=collection_environment_seed_rng,
+                validation_environment_seed_rng=validation_environment_seed_rng,
+                final_environment_seed_rng=final_environment_seed_rng,
+            )
+            consolidation_succeeded = False
+            boundary_shared_before = wm.shared_core_state_dict()
+            boundary_optimizer_before = copy.deepcopy(
+                evolving_shared_optimizer.state_dict()
+            )
+            try:
+                consolidation = _consolidate_evolving_shared_core(
+                    config=config,
+                    wm=wm,
+                    shared_optimizer=evolving_shared_optimizer,
+                    replay_buffer=replay,
+                    actor_critic_bank=actor_critic_bank,
+                    completed_task_id=completed_task_id,
+                    eval_funcs=envs.eval_funcs(),
+                    validation_task_seeds=validation_task_seeds,
+                    epoch=epoch,
+                    global_step=global_step,
+                    log_dir=log_dir,
+                    writer=writer,
+                )
+                global_step += config.boundary_consolidation_steps
+                consolidation_succeeded = True
+                print(
+                    "Consolidated Evolving-Core shared RSSM: "
+                    f"task={completed_task_id} "
+                    f"rollback={consolidation['rollback']}"
+                )
+            except Exception as exc:
+                # Consolidation is an explicitly isolated post-training phase.
+                # Its helper restores shared weights/Adam state before raising;
+                # preserve the completed pre-consolidation checkpoint and record
+                # the failure rather than corrupting the completed task.
+                wm.load_shared_core_state_dict(boundary_shared_before)
+                evolving_shared_optimizer.load_state_dict(
+                    boundary_optimizer_before
+                )
+                wm.activate_task_expert(completed_task_id)
+                failure = {
+                    "schema_version": 1,
+                    "artifact_kind": "evolving_core_consolidation_failure",
+                    "task_id": completed_task_id,
+                    "exception_type": type(exc).__name__,
+                    "message": str(exc),
+                    "pre_consolidation_checkpoint": str(pre_checkpoint),
+                    "formal_training_state_preserved": True,
+                }
+                failure_path = checkpoint_dir / (
+                    f"task_{completed_task_id:02d}_consolidation_failure.json"
+                )
+                temporary_failure = failure_path.with_suffix(".json.tmp")
+                temporary_failure.write_text(
+                    json.dumps(failure, indent=2) + "\n", encoding="utf-8"
+                )
+                os.replace(temporary_failure, failure_path)
+                print(
+                    "Evolving-Core consolidation failed after safe rollback; "
+                    f"continuing from completed task state: {type(exc).__name__}: {exc}"
+                )
+            boundary_teacher = copy.deepcopy(wm).eval()
+            boundary_teacher.requires_grad_(False)
+            post_checkpoint = checkpoint_dir / (
+                f"task_{completed_task_id:02d}_post_consolidation.pt"
+            )
+            _save_evolving_resumable_checkpoint(
+                post_checkpoint,
+                config=config,
+                wm=wm,
+                boundary_teacher=boundary_teacher,
+                shared_optimizer=evolving_shared_optimizer,
+                private_optimizers=evolving_private_optimizers,
+                route_optimizers=evolving_route_optimizers,
+                actor_critic_bank=actor_critic_bank,
+                replay_buffer=replay,
+                environment_schedule=envs,
+                epoch=epoch,
+                current_task_id=completed_task_id,
+                world_model_updates=global_step,
+                actor_critic_updates=actor_critic_updates,
+                total_env_steps=total_env_steps,
+                task_update_rng=task_update_rng,
+                collection_environment_seed_rng=collection_environment_seed_rng,
+                validation_environment_seed_rng=validation_environment_seed_rng,
+                final_environment_seed_rng=final_environment_seed_rng,
+            )
+            writer.add_scalar(
+                "EvolvingCoreConsolidation/succeeded",
+                int(consolidation_succeeded),
+                global_step,
+            )
         if (
             distributed_context.is_primary
             and config.continual_method == "rec_rssm_arrow"

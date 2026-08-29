@@ -1,6 +1,8 @@
+import hashlib
 import random
+from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import numpy as np
 import torch
@@ -16,9 +18,35 @@ _OBSERVATION_DTYPES = {
 }
 
 
+class TaskReplayBatch(Sequence[torch.Tensor]):
+    """Five Dreamer tensors plus explicit homogeneous task metadata."""
+
+    def __init__(self, values: tuple[torch.Tensor, ...], task_id: int) -> None:
+        if len(values) != 5:
+            raise ValueError("A task replay batch requires five model tensors")
+        self._values = values
+        sequences = values[0].shape[1]
+        self.task_ids = torch.full(
+            (sequences,),
+            task_id,
+            dtype=torch.long,
+            device=values[0].device,
+        )
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __iter__(self) -> Iterator[torch.Tensor]:
+        return iter(self._values)
+
+    def __getitem__(self, index):
+        return self._values[index]
+
+
 class Replay:
     def __init__(self) -> None:
         self.n_valid = 0
+        self.valid_slots_by_task: dict[int, torch.Tensor] = {}
 
     def add(
         self,
@@ -105,20 +133,165 @@ class Replay:
             ns,
         )
 
+    def minibatch_for_task(
+        self,
+        task_id: int,
+        sequence_length: int,
+        sequences: int,
+        source: Literal["fifo", "ltdm", "mixed"] = "mixed",
+        mb_device: str = "cuda",
+    ) -> TaskReplayBatch:
+        """Sample a task-homogeneous batch without rejection sampling."""
+
+        if isinstance(task_id, bool) or not isinstance(task_id, int) or task_id < 0:
+            raise ValueError("task_id must be a non-negative integer")
+        if sequence_length < 1 or sequences < 1:
+            raise ValueError("Replay sequence length and count must be positive")
+        if source not in {"fifo", "ltdm", "mixed"}:
+            raise ValueError(f"Unknown replay source: {source!r}")
+        if isinstance(self, FifoReplay) and source == "ltdm":
+            raise ValueError("A FIFO replay cannot provide an LTDM sample")
+        if isinstance(self, LongTermReplay) and source == "fifo":
+            raise ValueError("An LTDM replay cannot provide a FIFO sample")
+        return TaskReplayBatch(
+            self.minibatch(
+                sequence_length,
+                sequences,
+                mb_device,
+                task_id=task_id,
+            ),
+            task_id,
+        )
+
+    def _refresh_valid_slots_by_task(self) -> None:
+        """Synchronize exact task-to-slot tensors after retention/overwrite."""
+
+        task_ids = getattr(self, "task_ids", None)
+        if task_ids is None or self.n_valid == 0:
+            self.valid_slots_by_task = {}
+            return
+        valid = task_ids[: self.n_valid]
+        refreshed: dict[int, torch.Tensor] = {}
+        for value in valid.unique().tolist():
+            task_id = int(value)
+            if task_id < 0:
+                continue
+            refreshed[task_id] = torch.nonzero(
+                valid == task_id, as_tuple=False
+            ).flatten()
+        self.valid_slots_by_task = refreshed
+
+    def _trajectory_state_dict(self) -> dict[str, object]:
+        """Serialize valid trajectories and mmap provenance for exact resume."""
+
+        state: dict[str, object] = {
+            "replay_type": type(self).__name__,
+            "t": self.t,
+            "n": self.n,
+            "n_valid": self.n_valid,
+            "acts": self.acts[:, : self.n_valid].detach().cpu().clone(),
+            "rews": self.rews[:, : self.n_valid].detach().cpu().clone(),
+            "conts": self.conts[:, : self.n_valid].detach().cpu().clone(),
+            "resets": self.resets[:, : self.n_valid].detach().cpu().clone(),
+            "task_ids": (
+                None
+                if self.task_ids is None
+                else self.task_ids[: self.n_valid].detach().cpu().clone()
+            ),
+            "observation_dtype": self.observation_dtype,
+        }
+        if self.observation_storage_path is None:
+            state["observations"] = {
+                "kind": "tensor",
+                "values": self.obss[:, : self.n_valid].detach().cpu().clone(),
+            }
+        else:
+            state["observations"] = {
+                "kind": "mmap",
+                "path": str(self.observation_storage_path),
+                "shape": list(self.obss.shape),
+                "dtype": self.observation_dtype,
+                "byte_size": self.observation_storage_path.stat().st_size,
+            }
+        return state
+
+    def _load_trajectory_state_dict(self, state: dict[str, object]) -> None:
+        if state.get("replay_type") != type(self).__name__:
+            raise ValueError("Replay checkpoint type does not match target replay")
+        if (int(state["t"]), int(state["n"])) != (self.t, self.n):
+            raise ValueError("Replay checkpoint capacity does not match target replay")
+        n_valid = int(state["n_valid"])
+        if not 0 <= n_valid <= self.n:
+            raise ValueError("Replay checkpoint n_valid is outside capacity")
+        observations = state.get("observations")
+        if not isinstance(observations, dict):
+            raise ValueError("Replay checkpoint is missing observation state")
+        if observations.get("kind") == "mmap":
+            from clworldmodel.replay.mapped_tensor import open_file_backed_tensor
+
+            observation_path = Path(str(observations["path"])).expanduser().resolve()
+            expected_sha256 = observations.get("sha256")
+            if expected_sha256 is not None:
+                digest = hashlib.sha256()
+                with observation_path.open("rb") as file:
+                    for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest() != expected_sha256:
+                    raise ValueError(
+                        f"Mapped replay checksum mismatch: {observation_path}"
+                    )
+            dtype = _OBSERVATION_DTYPES[str(observations["dtype"])]
+            mapped = open_file_backed_tensor(
+                observation_path,
+                tuple(int(value) for value in observations["shape"]),
+                dtype=dtype,
+            )
+            if tuple(mapped.shape) != tuple(self.obss.shape):
+                raise ValueError("Mapped replay shape does not match target replay")
+            if mapped.dtype != self.obss.dtype:
+                raise ValueError("Mapped replay dtype does not match target replay")
+            # Checkpoint assets are immutable provenance.  Copy their contents
+            # into the target replay's independently constructed working
+            # storage instead of mapping and later mutating the checkpoint.
+            self.obss[:, :n_valid].copy_(mapped[:, :n_valid])
+        elif observations.get("kind") == "tensor":
+            values = observations.get("values")
+            if not isinstance(values, torch.Tensor):
+                raise ValueError("Replay tensor observations are missing")
+            self.obss[:, :n_valid].copy_(values.to(self.obss.device))
+        else:
+            raise ValueError("Unknown replay observation checkpoint kind")
+
+        for name in ("acts", "rews", "conts", "resets"):
+            values = state.get(name)
+            target = getattr(self, name)
+            if not isinstance(values, torch.Tensor):
+                raise ValueError(f"Replay checkpoint is missing {name}")
+            target[:, :n_valid].copy_(values.to(target.device))
+        task_ids = state.get("task_ids")
+        if self.task_ids is None:
+            if task_ids is not None:
+                raise ValueError("Task-aware replay state cannot load into unlabelled replay")
+        else:
+            if not isinstance(task_ids, torch.Tensor):
+                raise ValueError("Task-aware replay checkpoint is missing task IDs")
+            self.task_ids.fill_(-1)
+            self.task_ids[:n_valid].copy_(task_ids.to(self.task_ids.device))
+        self.n_valid = n_valid
+        self._refresh_valid_slots_by_task()
+
     def _eligible_sequence_indices(self, task_id: int) -> np.ndarray:
         if task_id < 0:
             raise ValueError("task_id must be non-negative")
         if self.task_ids is None:
             raise ValueError("Replay was constructed without task-id storage")
-        return np.flatnonzero(
-            self.task_ids[: self.n_valid].detach().cpu().numpy() == task_id
-        )
+        eligible = self.valid_slots_by_task.get(task_id)
+        if eligible is None:
+            return np.empty(0, dtype=np.int64)
+        return eligible.detach().cpu().numpy()
 
     def available_task_ids(self) -> tuple[int, ...]:
-        if self.n_valid == 0 or self.task_ids is None:
-            return ()
-        task_ids = self.task_ids[: self.n_valid].detach().cpu().unique().tolist()
-        return tuple(sorted(int(task_id) for task_id in task_ids if task_id >= 0))
+        return tuple(sorted(self.valid_slots_by_task))
 
     @staticmethod
     def _encode_observations(
@@ -286,7 +459,18 @@ class FifoReplay(Replay):
 
         self.n_idx = (self.n_idx + data_n) % self.n
         self.n_valid = min(self.n_valid + data_n, self.n)
+        self._refresh_valid_slots_by_task()
         return slots
+
+    def state_dict(self) -> dict[str, object]:
+        return {**self._trajectory_state_dict(), "n_idx": self.n_idx}
+
+    def load_state_dict(self, state: dict[str, object]) -> None:
+        self._load_trajectory_state_dict(state)
+        n_idx = int(state["n_idx"])
+        if not 0 <= n_idx < self.n:
+            raise ValueError("FIFO replay checkpoint n_idx is outside capacity")
+        self.n_idx = n_idx
 
 
 class LongTermReplay(Replay):
@@ -365,7 +549,23 @@ class LongTermReplay(Replay):
                 if self.task_ids is not None:
                     self.task_ids[least_index] = stored_task_id
                 slots[n] = least_index
+        self._refresh_valid_slots_by_task()
         return slots
+
+    def state_dict(self) -> dict[str, object]:
+        return {
+            **self._trajectory_state_dict(),
+            "collection": list(self.collection),
+        }
+
+    def load_state_dict(self, state: dict[str, object]) -> None:
+        self._load_trajectory_state_dict(state)
+        collection = state.get("collection")
+        if not isinstance(collection, list) or len(collection) != self.n:
+            raise ValueError("LTDM replay checkpoint has an invalid key collection")
+        self.collection = SortedList(
+            (float(priority), int(index)) for priority, index in collection
+        )
 
 
 class MultiTypeReplay(Replay):
@@ -442,6 +642,61 @@ class MultiTypeReplay(Replay):
         )
         return acts, obss, rews, conts, resets, replay_index, t_starts, ns
 
+    def minibatch_for_task(
+        self,
+        task_id: int,
+        sequence_length: int,
+        sequences: int,
+        source: Literal["fifo", "ltdm", "mixed"] = "mixed",
+        mb_device: str = "cuda",
+    ) -> TaskReplayBatch:
+        """Select the requested ARROW sub-buffer, then sample cached task slots."""
+
+        if isinstance(task_id, bool) or not isinstance(task_id, int) or task_id < 0:
+            raise ValueError("task_id must be a non-negative integer")
+        if sequence_length < 1 or sequences < 1:
+            raise ValueError("Replay sequence length and count must be positive")
+        if source == "mixed":
+            return TaskReplayBatch(
+                self.minibatch(
+                    sequence_length,
+                    sequences,
+                    mb_device,
+                    task_id=task_id,
+                ),
+                task_id,
+            )
+        replay_type = (
+            FifoReplay
+            if source == "fifo"
+            else LongTermReplay
+            if source == "ltdm"
+            else None
+        )
+        if replay_type is None:
+            raise ValueError(f"Unknown replay source: {source!r}")
+        candidates = [
+            replay
+            for replay in self.replays
+            if isinstance(replay, replay_type)
+            and task_id in replay.valid_slots_by_task
+        ]
+        if not candidates:
+            raise ValueError(
+                f"ARROW {source} replay contains no sequences for task {task_id}"
+            )
+        if len(candidates) != 1:
+            raise RuntimeError(
+                f"Expected one eligible {source} replay, found {len(candidates)}"
+            )
+        return candidates[0].minibatch_for_task(
+            task_id,
+            sequence_length,
+            sequences,
+            source=source,
+            mb_device=mb_device,
+        )
+
     def available_task_ids(self) -> tuple[int, ...]:
         return tuple(
             sorted(
@@ -452,3 +707,22 @@ class MultiTypeReplay(Replay):
                 }
             )
         )
+
+    def state_dict(self) -> dict[str, object]:
+        return {
+            "replay_type": type(self).__name__,
+            "sampling_weights": self.sampling_weights,
+            "replays": [replay.state_dict() for replay in self.replays],
+        }
+
+    def load_state_dict(self, state: dict[str, object]) -> None:
+        if state.get("replay_type") != type(self).__name__:
+            raise ValueError("Replay checkpoint type does not match MultiTypeReplay")
+        replay_states = state.get("replays")
+        if not isinstance(replay_states, list) or len(replay_states) != len(self.replays):
+            raise ValueError("Replay checkpoint sub-buffer count does not match")
+        weights = tuple(float(value) for value in state["sampling_weights"])
+        if weights != tuple(self.sampling_weights):
+            raise ValueError("Replay checkpoint sampling weights do not match")
+        for replay, replay_state in zip(self.replays, replay_states):
+            replay.load_state_dict(replay_state)

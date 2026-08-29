@@ -107,8 +107,10 @@ class Rssm(nn.Module):
         dinov3_patch_adapter: str = "none",
         num_task_experts: int = 1,
         full_task_experts: bool = False,
+        full_task_rssm_experts: Optional[bool] = None,
         task_banked_image_encoder: bool = False,
         task_projected_image_encoder: bool = False,
+        task_symmetric_image_projectors: bool = False,
         task_projector_bottleneck_features: int = 64,
         task_lora_recurrent_rank: int = 0,
         task_lora_representation_rank: int = 0,
@@ -121,6 +123,7 @@ class Rssm(nn.Module):
         task_mechanism_transition_width: int = 256,
         task_mechanism_residual_scale: float = 0.1,
         task_mechanism_num_atoms: int = 1,
+        task_symmetric_mechanisms: bool = False,
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
         residual_grid_size: int = 8,
@@ -134,9 +137,14 @@ class Rssm(nn.Module):
         compute_dtype: str = "float32",
     ) -> None:
         super().__init__()
+        if full_task_rssm_experts is None:
+            # Legacy callers used one flag for copied RSSMs and private heads.
+            full_task_rssm_experts = full_task_experts
+        if not isinstance(full_task_rssm_experts, bool):
+            raise TypeError("full_task_rssm_experts must be a boolean")
         if num_task_experts < 1:
             raise ValueError("num_task_experts must be positive")
-        if full_task_experts and num_task_experts < 2:
+        if (full_task_experts or full_task_rssm_experts) and num_task_experts < 2:
             raise ValueError("Full task experts require at least two task routes")
         if task_banked_image_encoder and not full_task_experts:
             raise ValueError(
@@ -146,9 +154,11 @@ class Rssm(nn.Module):
             raise ValueError(
                 "A task-banked image encoder does not use a shared observation adapter"
             )
-        if task_projected_image_encoder and not full_task_experts:
+        if task_projected_image_encoder and not (
+            full_task_experts or full_task_rssm_experts or task_mechanism_bank
+        ):
             raise ValueError(
-                "A projected shared image encoder requires complete task experts"
+                "A projected shared image encoder requires task-routed components"
             )
         if task_projected_image_encoder and task_banked_image_encoder:
             raise ValueError(
@@ -193,10 +203,16 @@ class Rssm(nn.Module):
             raise ValueError(
                 "RSSM mechanism widths must be divisible by the atom count"
             )
-        if task_mechanism_bank and not full_task_experts:
-            raise ValueError("RSSM mechanism banks require complete task experts")
         if task_mechanism_bank and not task_projected_image_encoder:
             raise ValueError("RSSM mechanism banks require task image projectors")
+        if task_symmetric_image_projectors and not task_projected_image_encoder:
+            raise ValueError("Symmetric projectors require task image projection")
+        if task_symmetric_mechanisms and not task_mechanism_bank:
+            raise ValueError("Symmetric mechanisms require RSSM mechanism banks")
+        if task_symmetric_image_projectors != task_symmetric_mechanisms:
+            raise ValueError(
+                "The evolving atomic topology requires symmetric projectors and mechanisms"
+            )
         task_rssm_adaptation_enabled = bool(
             any(task_lora_ranks) or task_recurrent_output_adapter_features
         )
@@ -212,7 +228,7 @@ class Rssm(nn.Module):
                 "Task RSSM adaptation requires posterior/prior LoRA and one "
                 "recurrent adaptation mechanism"
             )
-        if task_rssm_adaptation_enabled and not full_task_experts:
+        if task_rssm_adaptation_enabled and not full_task_rssm_experts:
             raise ValueError(
                 "Task RSSM adaptation requires complete task experts"
             )
@@ -224,8 +240,12 @@ class Rssm(nn.Module):
         self.h_dim = h_dim
         self.num_task_experts = num_task_experts
         self.full_task_experts = full_task_experts
+        self.full_task_rssm_experts = full_task_rssm_experts
         self.task_banked_image_encoder = task_banked_image_encoder
         self.task_projected_image_encoder = task_projected_image_encoder
+        self.task_symmetric_image_projectors = bool(
+            task_symmetric_image_projectors
+        )
         self.task_lora_recurrent_rank = task_lora_recurrent_rank
         self.task_lora_representation_rank = task_lora_representation_rank
         self.task_lora_transition_rank = task_lora_transition_rank
@@ -245,6 +265,7 @@ class Rssm(nn.Module):
         self.task_mechanism_transition_width = task_mechanism_transition_width
         self.task_mechanism_residual_scale = task_mechanism_residual_scale
         self.task_mechanism_num_atoms = task_mechanism_num_atoms
+        self.task_symmetric_mechanisms = bool(task_symmetric_mechanisms)
 
         self.recurrent = Recurrent(
             ls,
@@ -318,7 +339,11 @@ class Rssm(nn.Module):
                 SpatialFeatureProjector(
                     bottleneck_channels=task_projector_bottleneck_features
                 )
-                for _ in range(num_task_experts - 1)
+                for _ in range(
+                    num_task_experts
+                    if self.task_symmetric_image_projectors
+                    else num_task_experts - 1
+                )
             )
         self.observation_adapter_kind = dinov3_patch_adapter
         self.observation_adapter: nn.Module = nn.Identity()
@@ -360,7 +385,7 @@ class Rssm(nn.Module):
             residual_consolidation=residual_consolidation,
         )
         representation_expert_count = 0
-        if full_task_experts and not self.task_mechanism_bank_enabled:
+        if full_task_rssm_experts and not self.task_mechanism_bank_enabled:
             representation_expert_count = num_task_experts - 1
         self.representation_experts = nn.ModuleList(
             copy.deepcopy(self.representation)
@@ -404,6 +429,7 @@ class Rssm(nn.Module):
                     residual_scale=task_mechanism_residual_scale,
                     reuse_enabled=task_mechanism_reuse,
                     num_atoms=task_mechanism_num_atoms,
+                    include_task0=self.task_symmetric_mechanisms,
                 )
                 self.representation_mechanism_bank = MechanismBank(
                     num_tasks=num_task_experts,
@@ -413,6 +439,7 @@ class Rssm(nn.Module):
                     residual_scale=task_mechanism_residual_scale,
                     reuse_enabled=task_mechanism_reuse,
                     num_atoms=task_mechanism_num_atoms,
+                    include_task0=self.task_symmetric_mechanisms,
                 )
                 self.transition_mechanism_bank = MechanismBank(
                     num_tasks=num_task_experts,
@@ -422,6 +449,7 @@ class Rssm(nn.Module):
                     residual_scale=task_mechanism_residual_scale,
                     reuse_enabled=task_mechanism_reuse,
                     num_atoms=task_mechanism_num_atoms,
+                    include_task0=self.task_symmetric_mechanisms,
                 )
             self.task_mechanism_reports = {
                 "recurrent": self.recurrent_mechanism_bank.parameter_report(),
@@ -527,7 +555,11 @@ class Rssm(nn.Module):
         self, task_id: Optional[int | torch.Tensor]
     ) -> nn.Module:
         task_index = self._task_index(task_id)
-        if task_index == 0 or not self.task_projected_image_encoder:
+        if not self.task_projected_image_encoder:
+            return self.image_projector_identity
+        if self.task_symmetric_image_projectors:
+            return self.image_projectors[task_index]
+        if task_index == 0:
             return self.image_projector_identity
         return self.image_projectors[task_index - 1]
 
@@ -557,39 +589,59 @@ class Rssm(nn.Module):
         prev_a: ActionT,
         prev_h: HiddenT,
         task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
     ) -> HiddenT:
         task_index = self._task_index(task_id)
         if not self.task_mechanism_bank_enabled:
             return self.recurrent_for(task_index)(prev_z, prev_a, prev_h)
         base_hidden = self.recurrent(prev_z, prev_a, prev_h)
-        return base_hidden + self.recurrent_mechanism_bank(base_hidden, task_index)
+        correction, current_output = (
+            self.recurrent_mechanism_bank.forward_with_current(
+                base_hidden, task_index
+            )
+        )
+        if mechanism_trace is not None:
+            mechanism_trace.setdefault("recurrent", []).append(current_output)
+        return base_hidden + correction
 
     def posterior_step(
         self,
         embedding: EmbedT,
         hidden: HiddenT,
         task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
     ) -> LatentLogDistT:
         task_index = self._task_index(task_id)
         if not self.task_mechanism_bank_enabled:
             return self.representation_for(task_index)(embedding, hidden)
         mechanism_input = torch.cat((embedding, hidden), dim=-1)
         base_logits = self.representation.logits(embedding, hidden)
-        correction = self.representation_mechanism_bank(
-            mechanism_input, task_index
+        correction, current_output = (
+            self.representation_mechanism_bank.forward_with_current(
+                mechanism_input, task_index
+            )
         )
+        if mechanism_trace is not None:
+            mechanism_trace.setdefault("posterior", []).append(current_output)
         return self.representation.distribution_from_logits(
             base_logits + correction
         )
 
     def prior(
-        self, hidden: HiddenT, task_id: Optional[int | torch.Tensor] = None
+        self,
+        hidden: HiddenT,
+        task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
     ) -> LatentLogDistT:
         task_index = self._task_index(task_id)
         if not self.task_mechanism_bank_enabled:
             return self.transition_for(task_index)(hidden)
         base_logits = self.transition.logits(hidden)
-        correction = self.transition_mechanism_bank(hidden, task_index)
+        correction, current_output = (
+            self.transition_mechanism_bank.forward_with_current(hidden, task_index)
+        )
+        if mechanism_trace is not None:
+            mechanism_trace.setdefault("prior", []).append(current_output)
         return self.transition.distribution_from_logits(base_logits + correction)
 
     def copy_task_expert(self, target_task_id: int, source_task_id: int) -> None:
@@ -604,7 +656,12 @@ class Rssm(nn.Module):
             self.representation_mechanism_bank.reset_task(target_task_id)
             self.transition_mechanism_bank.reset_task(target_task_id)
             if self.task_projected_image_encoder:
-                self.image_projectors[target_task_id - 1].reset_parameters()
+                projector_index = (
+                    target_task_id
+                    if self.task_symmetric_image_projectors
+                    else target_task_id - 1
+                )
+                self.image_projectors[projector_index].reset_parameters()
         elif (
             self.task_lora_enabled or self.task_recurrent_output_adapter_enabled
         ) and target_task_id > 0:
@@ -653,6 +710,7 @@ class Rssm(nn.Module):
         stochastic: bool = True,
         temperature: float = 1.0,
         task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
     ) -> tuple[LatentLogDistT, LatentT, HiddenT]:
         return super().__call__(
             prev_z,
@@ -663,6 +721,7 @@ class Rssm(nn.Module):
             stochastic=stochastic,
             temperature=temperature,
             task_id=task_id,
+            mechanism_trace=mechanism_trace,
         )
 
     def forward(
@@ -675,20 +734,25 @@ class Rssm(nn.Module):
         stochastic: bool = True,
         temperature: float = 1.0,
         task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
     ) -> tuple[LatentLogDistT, LatentT, HiddenT]:
         if len(prev_a.shape) == 2:
             # Apply reset flags
             prev_z = prev_z * (1 - reset).unsqueeze(-1)  # Need to multiply againt dim [ N 1 1 ]
             prev_h = prev_h * (1 - reset)
             # No time dimension
-            h = self.recurrent_step(prev_z, prev_a, prev_h, task_id)
+            h = self.recurrent_step(
+                prev_z, prev_a, prev_h, task_id, mechanism_trace
+            )
             if x is not None:
                 e = self.adapt_observation_embeddings(
                     self.image_embedder_for(task_id)(x), task_id=task_id
                 )
-                z_log_dist = self.posterior_step(e, h, task_id)
+                z_log_dist = self.posterior_step(
+                    e, h, task_id, mechanism_trace
+                )
             else:
-                z_log_dist = self.prior(h, task_id)
+                z_log_dist = self.prior(h, task_id, mechanism_trace)
             z_logits, z_sample = straight_through_one_hot(
                 z_log_dist / temperature, stochastic
             )
@@ -708,6 +772,7 @@ class Rssm(nn.Module):
                     stochastic=stochastic,
                     temperature=temperature,
                     task_id=task_id,
+                    mechanism_trace=mechanism_trace,
                 )
                 z_log_dists.append(z_log_dist)
                 z_samples.append(z_sample)
@@ -725,6 +790,7 @@ class Rssm(nn.Module):
                 stochastic=stochastic,
                 temperature=temperature,
                 task_id=task_id,
+                mechanism_trace=mechanism_trace,
             )
         raise ValueError
 
@@ -781,6 +847,7 @@ class Rssm(nn.Module):
         stochastic: bool = True,
         temperature: float = 1.0,
         task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
     ) -> tuple[LatentLogDistT, LatentT, HiddenT]:
         """Run the posterior recurrence from precomputed [T, N, E] embeddings."""
         if len(prev_a.shape) != 3 or len(embeddings.shape) != 3:
@@ -804,8 +871,11 @@ class Rssm(nn.Module):
                 a,
                 h * (1 - r),
                 task_id,
+                mechanism_trace,
             )
-            z_log_dist = self.posterior_step(e, h, task_id)
+            z_log_dist = self.posterior_step(
+                e, h, task_id, mechanism_trace
+            )
             _, z_sample = straight_through_one_hot(
                 z_log_dist / temperature, stochastic
             )
@@ -821,6 +891,67 @@ class Rssm(nn.Module):
             torch.zeros(n, *self.ls, device=device),
             torch.zeros(n, self.h_dim, device=device),
         )
+
+    @staticmethod
+    def _unique_parameters(
+        modules: list[nn.Module],
+    ) -> list[nn.Parameter]:
+        parameters: list[nn.Parameter] = []
+        seen: set[int] = set()
+        for module in modules:
+            for parameter in module.parameters():
+                if id(parameter) not in seen:
+                    parameters.append(parameter)
+                    seen.add(id(parameter))
+        return parameters
+
+    def shared_parameter_groups(self) -> dict[str, list[nn.Parameter]]:
+        """Return non-overlapping shared encoder/Q/F/P parameter groups."""
+
+        return {
+            "encoder": self._unique_parameters(
+                [self.image_embedder, self.observation_adapter]
+            ),
+            "posterior": list(self.representation.parameters()),
+            "recurrent": list(self.recurrent.parameters()),
+            "prior": list(self.transition.parameters()),
+        }
+
+    def private_parameters(self, task_id: int) -> list[nn.Parameter]:
+        """Return the selected task's projector and Q/F/P atom parameters."""
+
+        task_index = self._task_index(task_id)
+        modules: list[nn.Module] = []
+        projector = self.image_projector_for(task_index)
+        if projector is not self.image_projector_identity:
+            modules.append(projector)
+        if self.task_mechanism_bank_enabled:
+            for bank in (
+                self.recurrent_mechanism_bank,
+                self.representation_mechanism_bank,
+                self.transition_mechanism_bank,
+            ):
+                mechanism = bank.mechanism_for(task_index)
+                if mechanism is not None:
+                    modules.append(mechanism)
+        return self._unique_parameters(modules)
+
+    def route_parameters(self, task_id: int) -> list[nn.Parameter]:
+        """Return only the selected task's old-atom gate parameters."""
+
+        if not self.task_mechanism_bank_enabled:
+            return []
+        task_index = self._task_index(task_id)
+        modules: list[nn.Module] = []
+        for bank in (
+            self.recurrent_mechanism_bank,
+            self.representation_mechanism_bank,
+            self.transition_mechanism_bank,
+        ):
+            route = bank.route_for(task_index)
+            if route is not None:
+                modules.append(route)
+        return self._unique_parameters(modules)
 
 
 class Recurrent(nn.Module):

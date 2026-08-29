@@ -180,7 +180,12 @@ class ReuseRoute(nn.Module):
 
 
 class MechanismBank(nn.Module):
-    """One full residual mechanism per later task plus optional old-task reuse."""
+    """Task-private residual mechanisms plus optional older-task atom reuse.
+
+    ``include_task0=False`` preserves the frozen-Task-1 REC/MB-RSSM topology.
+    ``include_task0=True`` gives every task, including Task 0, an isomorphic
+    private mechanism and makes older-task reuse address all preceding tasks.
+    """
 
     def __init__(
         self,
@@ -192,6 +197,7 @@ class MechanismBank(nn.Module):
         residual_scale: float = 0.1,
         reuse_enabled: bool = True,
         num_atoms: int = 1,
+        include_task0: bool = False,
     ) -> None:
         super().__init__()
         if num_tasks < 2:
@@ -204,6 +210,7 @@ class MechanismBank(nn.Module):
         self.residual_scale = float(residual_scale)
         self.reuse_enabled = bool(reuse_enabled)
         self.num_atoms = int(num_atoms)
+        self.include_task0 = bool(include_task0)
         self._recording_task_id: int | None = None
         self._recorded_atom_norm_sum: torch.Tensor | None = None
         self._recorded_correction_norm_sum: torch.Tensor | None = None
@@ -216,14 +223,20 @@ class MechanismBank(nn.Module):
                 residual_scale=self.residual_scale,
                 num_atoms=self.num_atoms,
             )
-            for _ in range(self.num_tasks - 1)
+            for _ in range(
+                self.num_tasks if self.include_task0 else self.num_tasks - 1
+            )
         )
         self.routes = nn.ModuleList(
             ReuseRoute(
-                num_old_mechanisms=task_id - 1,
+                num_old_mechanisms=(
+                    task_id if self.include_task0 else task_id - 1
+                ),
                 num_atoms=self.num_atoms,
             )
-            for task_id in range(1, self.num_tasks)
+            for task_id in range(
+                0 if self.include_task0 else 1, self.num_tasks
+            )
         )
 
     def _task_index(self, task_id: int) -> int:
@@ -233,7 +246,39 @@ class MechanismBank(nn.Module):
             raise ValueError(f"Invalid mechanism-bank task_id: {task_id}")
         return task_id
 
+    def _mechanism_index(self, task_id: int) -> int | None:
+        task_index = self._task_index(task_id)
+        if task_index == 0 and not self.include_task0:
+            return None
+        return task_index if self.include_task0 else task_index - 1
+
+    def _route_index(self, task_id: int) -> int | None:
+        task_index = self._task_index(task_id)
+        if task_index == 0 and not self.include_task0:
+            return None
+        return task_index if self.include_task0 else task_index - 1
+
+    def mechanism_for(self, task_id: int) -> ResidualMechanism | None:
+        """Return the private mechanism owned by ``task_id``, if one exists."""
+
+        index = self._mechanism_index(task_id)
+        return None if index is None else self.mechanisms[index]
+
+    def route_for(self, task_id: int) -> ReuseRoute | None:
+        """Return the reuse route owned by ``task_id``, if one exists."""
+
+        index = self._route_index(task_id)
+        return None if index is None else self.routes[index]
+
     def forward(self, inputs: torch.Tensor, task_id: int) -> torch.Tensor:
+        correction, _current = self.forward_with_current(inputs, task_id)
+        return correction
+
+    def forward_with_current(
+        self, inputs: torch.Tensor, task_id: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the full routed correction and the unscaled current-task path."""
+
         task_index = self._task_index(task_id)
         if inputs.shape[-1] != self.in_features:
             raise ValueError(
@@ -241,17 +286,22 @@ class MechanismBank(nn.Module):
                 f"got {inputs.shape[-1]}"
             )
         output_shape = (*inputs.shape[:-1], self.out_features)
-        if task_index == 0:
-            return inputs.new_zeros(output_shape)
+        current_index = self._mechanism_index(task_index)
+        if current_index is None:
+            zeros = inputs.new_zeros(output_shape)
+            return zeros, zeros
 
-        current_index = task_index - 1
-        correction = self.mechanisms[current_index](inputs)
+        current_output = self.mechanisms[current_index](inputs)
+        correction = current_output
         recorded_atom_norms = None
         if self.reuse_enabled:
-            gates = self.routes[current_index](inputs)
+            route_index = self._route_index(task_index)
+            if route_index is None:
+                raise RuntimeError("A task mechanism is missing its reuse route")
+            gates = self.routes[route_index](inputs)
             if self._recording_task_id == task_index:
                 recorded_atom_norms = inputs.new_zeros(
-                    current_index, self.num_atoms, dtype=torch.float64
+                    gates.shape[0], self.num_atoms, dtype=torch.float64
                 )
             for mechanism_index, atom_gates in enumerate(gates.unbind(0)):
                 old_atoms = self.mechanisms[mechanism_index].atom_outputs(inputs)
@@ -280,7 +330,7 @@ class MechanismBank(nn.Module):
                     correction_norms.double().sum()
                 )
             self._recorded_value_count += correction_norms.numel()
-        return correction
+        return correction, current_output
 
     def activate_task(self, task_id: int, phase: str = "full") -> None:
         """Expose only the selected task's new mechanism and reuse gates."""
@@ -288,30 +338,37 @@ class MechanismBank(nn.Module):
         if phase not in {"full", "reuse_probe"}:
             raise ValueError(f"Unknown mechanism phase: {phase!r}")
         self.requires_grad_(False)
-        if task_index == 0:
+        current_index = self._mechanism_index(task_index)
+        if current_index is None:
             return
-        current_index = task_index - 1
         self.mechanisms[current_index].requires_grad_(phase == "full")
         if self.reuse_enabled:
-            self.routes[current_index].requires_grad_(True)
+            route_index = self._route_index(task_index)
+            if route_index is None:
+                raise RuntimeError("A task mechanism is missing its reuse route")
+            self.routes[route_index].requires_grad_(True)
 
     def reset_task(self, task_id: int) -> None:
         task_index = self._task_index(task_id)
-        if task_index == 0:
+        current_index = self._mechanism_index(task_index)
+        if current_index is None:
             return
-        current_index = task_index - 1
         self.mechanisms[current_index].reset_parameters()
-        self.routes[current_index].reset_parameters()
+        route_index = self._route_index(task_index)
+        if route_index is None:
+            raise RuntimeError("A task mechanism is missing its reuse route")
+        self.routes[route_index].reset_parameters()
 
     @torch.no_grad()
     def route_values(self, task_id: int) -> list[float] | list[list[float]]:
         task_index = self._task_index(task_id)
-        if task_index == 0:
+        route_index = self._route_index(task_index)
+        if route_index is None:
             return []
-        logits = self.routes[task_index - 1].logits
+        logits = self.routes[route_index].logits
         if logits is None:
             return []
-        values = (torch.tanh(logits) * self.routes[task_index - 1].hard_mask)
+        values = torch.tanh(logits) * self.routes[route_index].hard_mask
         values_list = values.detach().cpu().tolist()
         if self.num_atoms == 1:
             return [row[0] for row in values_list]
@@ -322,10 +379,14 @@ class MechanismBank(nn.Module):
         self, task_id: int, mask: torch.Tensor
     ) -> torch.Tensor:
         task_index = self._task_index(task_id)
-        if task_index == 0:
+        route_index = self._route_index(task_index)
+        if route_index is None or self.routes[route_index].logits is None:
             raise ValueError("Task 0 has no reusable mechanism route")
-        route = self.routes[task_index - 1]
-        expected_shape = (task_index - 1, self.num_atoms)
+        route = self.routes[route_index]
+        expected_shape = (
+            task_index if self.include_task0 else task_index - 1,
+            self.num_atoms,
+        )
         if tuple(mask.shape) != expected_shape:
             raise ValueError(
                 f"Expected consolidated mask shape {expected_shape}, got {tuple(mask.shape)}"
@@ -338,7 +399,8 @@ class MechanismBank(nn.Module):
 
     def begin_contribution_recording(self, task_id: int) -> None:
         task_index = self._task_index(task_id)
-        if task_index < 2:
+        minimum_task = 1 if self.include_task0 else 2
+        if task_index < minimum_task:
             raise ValueError("Atom reuse contributions require at least one old mechanism")
         if self._recording_task_id is not None:
             raise RuntimeError("Mechanism contribution recording is already active")
@@ -352,10 +414,14 @@ class MechanismBank(nn.Module):
         self, task_id: int, mask: torch.Tensor
     ) -> torch.Tensor:
         task_index = self._task_index(task_id)
-        if task_index == 0:
+        route_index = self._route_index(task_index)
+        if route_index is None or self.routes[route_index].logits is None:
             raise ValueError("Task 0 has no reusable mechanism route")
-        route = self.routes[task_index - 1]
-        expected_shape = (task_index - 1, self.num_atoms)
+        route = self.routes[route_index]
+        expected_shape = (
+            task_index if self.include_task0 else task_index - 1,
+            self.num_atoms,
+        )
         if tuple(mask.shape) != expected_shape:
             raise ValueError(
                 f"Expected validated-shared mask shape {expected_shape}, "
@@ -406,8 +472,12 @@ class MechanismBank(nn.Module):
     def route_manifest(self, completed_through_task_id: int) -> dict[str, Any]:
         completed_task = self._task_index(completed_through_task_id)
         routes = []
-        for task_id in range(1, completed_task + 1):
-            route = self.routes[task_id - 1]
+        first_route_task = 0 if self.include_task0 else 1
+        for task_id in range(first_route_task, completed_task + 1):
+            route_index = self._route_index(task_id)
+            if route_index is None:
+                continue
+            route = self.routes[route_index]
             routes.append(
                 {
                     "task_id": task_id,
@@ -419,12 +489,16 @@ class MechanismBank(nn.Module):
                 }
             )
         atoms = []
-        for owner_index in range(min(completed_task, len(self.mechanisms))):
-            owner_task = owner_index + 1
+        completed_owner_count = completed_task + int(self.include_task0)
+        for owner_index in range(min(completed_owner_count, len(self.mechanisms))):
+            owner_task = owner_index if self.include_task0 else owner_index + 1
             for atom_index in range(self.num_atoms):
                 users = [owner_task]
                 for user_task in range(owner_task + 1, completed_task + 1):
-                    route = self.routes[user_task - 1]
+                    route_index = self._route_index(user_task)
+                    if route_index is None:
+                        raise RuntimeError("A routed task is missing its route")
+                    route = self.routes[route_index]
                     if bool(
                         route.validated_shared_mask[
                             owner_index, atom_index
@@ -460,6 +534,8 @@ class MechanismBank(nn.Module):
             "atom_width": self.hidden_features // self.num_atoms,
             "residual_scale": self.residual_scale,
             "reuse_enabled": self.reuse_enabled,
+            "include_task0": self.include_task0,
+            "mechanism_parameters_per_task": mechanism_parameters,
             "mechanism_parameters_per_later_task": mechanism_parameters,
             "route_parameters_per_later_task": route_parameters,
             "parameters": sum(mechanism_parameters) + sum(route_parameters),

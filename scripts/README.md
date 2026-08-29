@@ -25,6 +25,11 @@ contains experiment-facing code.
   posterior, and prior mechanisms, optional zero-initialized reuse of frozen old
   mechanisms, private world-model heads, and independent Actor-Critics. The
   `no-reuse` mode is the capacity-matched routing ablation.
+- `run_evolving_atomic_rssm.py`: from-scratch three-task Evolving-Core Atomic
+  RSSM with a continually updated shared CNN/RSSM, symmetric per-task
+  projectors/atoms/heads, independent Actor-Critics, replay-protected
+  component gradients, and boundary consolidation. It supports the three
+  predeclared task orders and always disables world-model compilation.
 - `run_moe_arrow_atari.py`: task-aware MoE, CNN-FullBank, DINO-FullBank, DINO-PatchBank, and DINO-ConvBank launchers.
 - `verify_arrow_environment.py`: pinned dependency, CUDA, and Atari registration check.
 

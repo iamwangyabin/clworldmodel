@@ -383,6 +383,28 @@ documented here, covered by focused parity tests, and followed by regenerating
     path and all upstream defaults remain unchanged. Focused tests cover
     variable schedule boundaries, task-local Actor age, exact capacity and
     parameter ledgers, and launcher budgets.
+45. Add the separately named, task-aware, from-scratch
+    `Evolving-Core-Atomic-RSSM-ARROW-v1-Atari-TaskAware` path. It separates
+    copied-RSSM ownership from task-private heads, retains exactly one shared
+    CNN and posterior/recurrent/prior RSSM, and gives every task (including
+    Task 0) a zero-effect spatial projector, four-atom recurrent/posterior/prior
+    mechanism route, private decoder/reward/continue heads, and independent
+    Actor-Critic. Later online updates split the fixed 16-sequence batch into
+    12 current and four uniformly selected old-task LTDM sequences. Project-
+    owned code applies posterior/hidden/frozen-Actor interface protection,
+    per-component conflicting-current-gradient projection, and the unprojected
+    current loss to only current private parameters. One shared Adam persists
+    across tasks; private and route optimizers are task-indexed. Replay now
+    maintains exact task-to-slot tensors and exposes non-rejection,
+    task-homogeneous FIFO/LTDM/mixed sampling. Each task boundary writes a
+    complete resumable checkpoint and attempts 1,000 task-balanced shared-only
+    updates with fixed-cohort rollback of both shared weights and Adam state.
+    Mapped replay checkpoint assets are immutable and checksum verified.
+    Legacy methods retain their prior topology, sampling, optimizer, and loss
+    defaults. Focused tests cover Task-0 symmetry and zero effect, config
+    isolation, Replay purity, gradient projection/ownership, persistent Adam,
+    complete checkpoint and mmap round trips, consolidation rollback, launcher
+    orders/budgets, and existing MB/REC parity.
 
 ## Known issues at import
 
