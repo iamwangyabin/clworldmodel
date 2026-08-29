@@ -30,6 +30,10 @@ contains experiment-facing code.
   projectors/atoms/heads, independent Actor-Critics, replay-protected
   component gradients, and boundary consolidation. It supports the three
   predeclared task orders and always disables world-model compilation.
+- `smoke_evolving_atomic_rssm.py`: target-CUDA, production-shaped synthetic
+  update covering the fixed 12-current/4-memory split, component projection,
+  frozen old private state, and shared/private/route Adam steps. It performs no
+  environment interaction and is evidence of execution correctness only.
 - `run_moe_arrow_atari.py`: task-aware MoE, CNN-FullBank, DINO-FullBank, DINO-PatchBank, and DINO-ConvBank launchers.
 - `verify_arrow_environment.py`: pinned dependency, CUDA, and Atari registration check.
 

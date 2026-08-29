@@ -123,3 +123,12 @@ python scripts/run_evolving_atomic_rssm.py \
 Non-dry runs enforce the repository clean, committed, pushed, and synchronized
 Git provenance gate. Evolving-Core deliberately disables world-model
 compilation because its component-wise `autograd.grad` ownership is explicit.
+
+Run the production-shaped synthetic CUDA gate before starting a campaign:
+
+```bash
+python scripts/smoke_evolving_atomic_rssm.py --device cuda:0
+```
+
+This smoke performs one optimizer update without environment interaction. It
+must be recorded as `smoke`, never as pilot or performance evidence.
