@@ -31,6 +31,28 @@ def _zeros_like_parameter(parameter: torch.nn.Parameter) -> torch.Tensor:
     return torch.zeros_like(parameter, memory_format=torch.preserve_format)
 
 
+def _gradient_in_parameter_layout(
+    parameter: torch.nn.Parameter,
+    gradient: torch.Tensor,
+) -> torch.Tensor:
+    """Copy a gradient into the parameter's exact dense memory layout.
+
+    ``autograd.grad`` may return convolution gradients with channels-last
+    strides even when the parameter and Adam state use contiguous strides.
+    PyTorch's fused Adam requires corresponding parameter, gradient, and state
+    tensors to have the same layout, so assigning the raw tensor is unsafe.
+    """
+
+    if gradient.shape != parameter.shape:
+        raise ValueError("A parameter gradient has an unexpected shape")
+    materialized = torch.empty_like(
+        parameter,
+        memory_format=torch.preserve_format,
+    )
+    materialized.copy_(gradient)
+    return materialized
+
+
 def _materialize_gradients(
     parameters: Sequence[torch.nn.Parameter],
     gradients: Sequence[torch.Tensor | None],
@@ -221,12 +243,18 @@ def assign_component_projected_gradients(
                     conflicted=bool((dot < 0).item()),
                 )
         for parameter, gradient in zip(parameters, combined):
-            parameter.grad = gradient.detach()
+            parameter.grad = _gradient_in_parameter_layout(
+                parameter,
+                gradient.detach(),
+            )
         diagnostics[name] = diagnostic
         offset = stop
 
     for parameter, gradient in zip(private, private_current):
-        parameter.grad = gradient.detach()
+        parameter.grad = _gradient_in_parameter_layout(
+            parameter,
+            gradient.detach(),
+        )
     return diagnostics
 
 
@@ -243,7 +271,10 @@ def assign_unprojected_current_gradients(
         raise ValueError("At least one parameter is required")
     raw = torch.autograd.grad(loss, owned, allow_unused=True)
     for parameter, gradient in zip(owned, _materialize_gradients(owned, raw)):
-        parameter.grad = gradient.detach()
+        parameter.grad = _gradient_in_parameter_layout(
+            parameter,
+            gradient.detach(),
+        )
 
 
 def atom_output_penalty(trace: Mapping[str, Any]) -> torch.Tensor:

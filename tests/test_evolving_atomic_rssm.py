@@ -33,6 +33,9 @@ if torch is not None:
     sys.path.insert(0, str(PROJECT_SRC))
     sys.path.insert(0, str(VENDORED_ATARI))
     from clworldmodel.continual import project_component_gradients
+    from clworldmodel.continual.evolving_core import (
+        _gradient_in_parameter_layout,
+    )
     from config import Config
     from replay import FifoReplay, LongTermReplay, MultiTypeReplay
     import train
@@ -276,6 +279,19 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
         projected_dot = sum((left * right).sum() for left, right in zip(combined, memory))
         self.assertTrue(diagnostic.conflicted)
         self.assertGreaterEqual(float(projected_dot), -1e-6)
+
+    def test_assigned_gradient_uses_parameter_stride_for_fused_adam(self) -> None:
+        parameter = nn.Parameter(torch.zeros(4, 4, 4, 4))
+        channels_last = torch.empty_like(
+            parameter,
+            memory_format=torch.channels_last,
+        )
+        self.assertNotEqual(channels_last.stride(), parameter.stride())
+
+        assigned = _gradient_in_parameter_layout(parameter, channels_last)
+
+        self.assertEqual(assigned.stride(), parameter.stride())
+        torch.testing.assert_close(assigned, channels_last)
 
     def test_task_indexed_ltdm_sampling_uses_cached_pure_slots(self) -> None:
         fifo = FifoReplay(2, 4, 4, "cpu", store_task_ids=True)
