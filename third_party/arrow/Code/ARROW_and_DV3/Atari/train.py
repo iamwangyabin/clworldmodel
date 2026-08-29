@@ -572,6 +572,61 @@ def _save_evolving_resumable_checkpoint(
     return path
 
 
+def _apply_evolving_checkpoint_retention(
+    checkpoint_dir: Path,
+    *,
+    completed_task_id: int,
+    retention: str,
+) -> dict[str, object]:
+    """Prune only older resumable boundaries after the new pair is durable."""
+
+    if retention not in {"all_boundaries", "latest_boundary"}:
+        raise ValueError(f"Unknown Evolving-Core checkpoint retention: {retention!r}")
+    checkpoint_dir = checkpoint_dir.expanduser().resolve()
+    current_paths = [
+        checkpoint_dir / f"task_{completed_task_id:02d}_pre_consolidation.pt",
+        checkpoint_dir / f"task_{completed_task_id:02d}_post_consolidation.pt",
+    ]
+    for path in current_paths:
+        checksum = path.with_suffix(path.suffix + ".sha256")
+        if not path.is_file() or not checksum.is_file():
+            raise FileNotFoundError(
+                "Checkpoint retention requires the complete current pre/post pair: "
+                f"{path}"
+            )
+
+    removed: list[str] = []
+    if retention == "latest_boundary":
+        for old_task_id in range(completed_task_id):
+            for phase in ("pre_consolidation", "post_consolidation"):
+                path = checkpoint_dir / f"task_{old_task_id:02d}_{phase}.pt"
+                checksum = path.with_suffix(path.suffix + ".sha256")
+                for candidate in (path, checksum):
+                    if candidate.exists():
+                        candidate.unlink()
+                        removed.append(str(candidate))
+            asset_dir = checkpoint_dir / f"task_{old_task_id:02d}_replay_assets"
+            if asset_dir.exists():
+                shutil.rmtree(asset_dir)
+                removed.append(str(asset_dir))
+
+    artifact = {
+        "schema_version": 1,
+        "artifact_kind": "evolving_core_checkpoint_retention",
+        "retention": retention,
+        "completed_task_id": completed_task_id,
+        "retained_checkpoint_pair": [str(path) for path in current_paths],
+        "removed_older_artifacts": removed,
+        "task_boundary_inference_snapshots_retained": True,
+        "consolidation_records_retained": True,
+    }
+    artifact_path = checkpoint_dir / "retention.json"
+    temporary = artifact_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, artifact_path)
+    return artifact
+
+
 def _restore_evolving_resumable_checkpoint(
     path: Path,
     *,
@@ -4691,6 +4746,18 @@ if __name__ == "__main__":
                 validation_environment_seed_rng=validation_environment_seed_rng,
                 final_environment_seed_rng=final_environment_seed_rng,
             )
+            retention = _apply_evolving_checkpoint_retention(
+                checkpoint_dir,
+                completed_task_id=completed_task_id,
+                retention=config.evolving_checkpoint_retention,
+            )
+            if retention["removed_older_artifacts"]:
+                print(
+                    "Applied Evolving-Core checkpoint retention: "
+                    f"mode={config.evolving_checkpoint_retention} "
+                    f"completed_task={completed_task_id} "
+                    f"removed={len(retention['removed_older_artifacts'])}"
+                )
             writer.add_scalar(
                 "EvolvingCoreConsolidation/succeeded",
                 int(consolidation_succeeded),

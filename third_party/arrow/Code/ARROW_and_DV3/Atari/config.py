@@ -83,6 +83,7 @@ EvolvingTask0Profile = Literal[
     "task0_epochs_180",
     "task0_epochs_240",
 ]
+EvolvingCheckpointRetention = Literal["all_boundaries", "latest_boundary"]
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -333,6 +334,7 @@ class Config(Serialisable):
     # the frozen-base MB/REC methods above.
     evolving_task0_profile: EvolvingTask0Profile = "fixed_v1"
     evolving_shared_core: bool = False
+    evolving_checkpoint_retention: EvolvingCheckpointRetention = "all_boundaries"
     first_task_shared_core_lr: float = 2e-4
     shared_core_lr: float = 1e-4
     task_private_lr: float = 2e-4
@@ -535,6 +537,14 @@ class Config(Serialisable):
             "full_task_rssm_experts": False,
         }
         if is_evolving_atomic:
+            if self.evolving_checkpoint_retention not in {
+                "all_boundaries",
+                "latest_boundary",
+            }:
+                raise ValueError(
+                    "Unknown Evolving-Core checkpoint retention: "
+                    f"{self.evolving_checkpoint_retention!r}"
+                )
             task0_profile_overrides = {
                 "fixed_v1": {},
                 "task0_shared_lr_1e4": {
@@ -638,6 +648,11 @@ class Config(Serialisable):
                     "must be non-negative"
                 )
         else:
+            if self.evolving_checkpoint_retention != "all_boundaries":
+                raise ValueError(
+                    "Evolving-Core checkpoint retention requires "
+                    "continual_method='evolving_atomic_rssm_arrow'"
+                )
             evolving_nondefault = {
                 name: (getattr(self, name), expected)
                 for name, expected in evolving_defaults.items()

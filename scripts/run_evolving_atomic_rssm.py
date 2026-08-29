@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch Evolving-Core Atomic RSSM from scratch on a three-task Atari order."""
+"""Launch Evolving-Core Atomic RSSM from scratch on a declared Atari order."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import copy
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -31,6 +32,9 @@ from run_cnn_projector_lora_incremental import _prepare_replay_symlink
 
 
 PROTOCOL = "Evolving-Core-Atomic-RSSM-ARROW-v1-Atari-TaskAware"
+ORIGINAL_SIX_TASK_PROTOCOL = (
+    "Evolving-Core-Atomic-RSSM-ARROW-v2-OriginalSix-Atari-TaskAware-Pilot"
+)
 TASK_ORDERS = {
     "mspacman-boxing-crazyclimber": (
         "ALE/MsPacman-v5",
@@ -47,10 +51,68 @@ TASK_ORDERS = {
         "ALE/Boxing-v5",
         "ALE/MsPacman-v5",
     ),
+    "arrow-original-six": (
+        "ALE/MsPacman-v5",
+        "ALE/Boxing-v5",
+        "ALE/CrazyClimber-v5",
+        "ALE/Frostbite-v5",
+        "ALE/Seaquest-v5",
+        "ALE/Enduro-v5",
+    ),
 }
 TASK_DURATION_EPOCHS = 90
-TASK_COUNT = 3
 MECHANISM_WIDTHS = (512, 512, 256)
+ORIGINAL_SIX_MINIMUM_FREE_BYTES = 48 * 1024**3
+
+
+def _protocol_for_task_order(task_order: str) -> str:
+    if task_order not in TASK_ORDERS:
+        raise ValueError(f"Unknown Evolving-Core task order: {task_order!r}")
+    if task_order == "arrow-original-six":
+        return ORIGINAL_SIX_TASK_PROTOCOL
+    return PROTOCOL
+
+
+def _existing_ancestor(path: Path) -> Path:
+    candidate = path.expanduser().resolve()
+    while not candidate.exists():
+        if candidate.parent == candidate:
+            raise FileNotFoundError(f"No existing ancestor for storage path: {path}")
+        candidate = candidate.parent
+    return candidate
+
+
+def _storage_preflight(
+    *, output_dir: Path, replay_mmap_root: Path | None, task_order: str
+) -> dict[str, object]:
+    """Reject a six-task launch without room for rolling atomic checkpoints."""
+
+    output_ancestor = _existing_ancestor(output_dir.parent)
+    replay_target = output_dir if replay_mmap_root is None else replay_mmap_root
+    replay_ancestor = _existing_ancestor(replay_target)
+    output_usage = shutil.disk_usage(output_ancestor)
+    replay_usage = shutil.disk_usage(replay_ancestor)
+    same_filesystem = output_ancestor.stat().st_dev == replay_ancestor.stat().st_dev
+    required_output_bytes = (
+        ORIGINAL_SIX_MINIMUM_FREE_BYTES
+        if task_order == "arrow-original-six"
+        else 0
+    )
+    if output_usage.free < required_output_bytes:
+        raise RuntimeError(
+            "Original-six Evolving-Core requires at least "
+            f"{required_output_bytes / 1024**3:.0f} GiB free for live Replay, "
+            "rolling boundary checkpoints, atomic-save temporaries, and logs; "
+            f"found {output_usage.free / 1024**3:.1f} GiB at {output_ancestor}"
+        )
+    return {
+        "output_existing_ancestor": str(output_ancestor),
+        "replay_existing_ancestor": str(replay_ancestor),
+        "same_filesystem": same_filesystem,
+        "output_free_bytes": output_usage.free,
+        "replay_free_bytes": replay_usage.free,
+        "required_output_free_bytes": required_output_bytes,
+    }
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -89,11 +151,12 @@ def _resolved_config(source: dict, *, task_order: str) -> dict:
     config["esc"]["env_configs"] = [
         copy.deepcopy(by_name[name]) for name in TASK_ORDERS[task_order]
     ]
-    config["epochs"] = TASK_COUNT * TASK_DURATION_EPOCHS
+    task_count = len(TASK_ORDERS[task_order])
+    config["epochs"] = task_count * TASK_DURATION_EPOCHS
     config.update(
         {
             "continual_method": "evolving_atomic_rssm_arrow",
-            "rssm_num_experts": TASK_COUNT,
+            "rssm_num_experts": task_count,
             "dino_fullbank_current_task_fraction": 1.0,
             "observation_objective": "reconstruction",
             "observation_encoder": "cnn",
@@ -132,6 +195,11 @@ def _resolved_config(source: dict, *, task_order: str) -> dict:
             "independent_expert_original_task_index": None,
             "evolving_task0_profile": "fixed_v1",
             "evolving_shared_core": True,
+            "evolving_checkpoint_retention": (
+                "latest_boundary"
+                if task_order == "arrow-original-six"
+                else "all_boundaries"
+            ),
             "first_task_shared_core_lr": 2e-4,
             "shared_core_lr": 1e-4,
             "task_private_lr": 2e-4,
@@ -187,15 +255,29 @@ def _training_command(
 
 
 def _budget_manifest(config: dict) -> dict:
+    task_count = len(config["esc"]["env_configs"])
     decisions_per_epoch = int(config["n_sync"]) * int(config["gen_seq_len"])
     raw_frames_per_epoch = decisions_per_epoch * int(config["env_repeat"])
     online_updates = int(config["epochs"]) * int(config["steps_per_batch"])
-    consolidation_updates = TASK_COUNT * int(
+    consolidation_updates = task_count * int(
         config["boundary_consolidation_steps"]
     )
     task_updates = TASK_DURATION_EPOCHS * int(config["steps_per_batch"])
+    replay_budget = _arrow_replay_storage_budget(config)
+    checkpoint_retention = config.get(
+        "evolving_checkpoint_retention", "all_boundaries"
+    )
+    retained_replay_boundaries = (
+        1 if checkpoint_retention == "latest_boundary" else task_count
+    )
+    peak_replay_boundaries = (
+        min(task_count, 2)
+        if checkpoint_retention == "latest_boundary"
+        else task_count
+    )
     return {
-        "task_duration_epochs": [TASK_DURATION_EPOCHS] * TASK_COUNT,
+        "task_count": task_count,
+        "task_duration_epochs": [TASK_DURATION_EPOCHS] * task_count,
         "raw_environment_frames": raw_frames_per_epoch * int(config["epochs"]),
         "online_world_model_updates": online_updates,
         "boundary_consolidation_world_model_updates": consolidation_updates,
@@ -203,16 +285,30 @@ def _budget_manifest(config: dict) -> dict:
         + consolidation_updates,
         "actor_critic_updates": int(config["epochs"])
         * int(config["ac_train_steps"]),
-        "online_current_sequences": task_updates * 16
-        + (TASK_COUNT - 1) * task_updates * 12,
-        "online_memory_sequences": (TASK_COUNT - 1) * task_updates * 4,
+        "online_current_sequences": task_updates * int(config["mb_n_size"])
+        + (task_count - 1) * task_updates * int(config["current_batch_n"]),
+        "online_memory_sequences": (task_count - 1)
+        * task_updates
+        * int(config["memory_batch_n"]),
         "consolidation_sequences": consolidation_updates
         * int(config["mb_n_size"]),
         "online_sequence_batch_total": int(config["mb_n_size"]),
-        "later_task_current_memory_split": [12, 4],
+        "later_task_current_memory_split": [
+            int(config["current_batch_n"]),
+            int(config["memory_batch_n"]),
+        ],
         "memory_task_selection": "uniform over completed tasks",
         "memory_source": "LTDM task-homogeneous sequences",
-        "replay": _arrow_replay_storage_budget(config),
+        "replay": replay_budget,
+        "checkpoint_retention": checkpoint_retention,
+        "retained_boundary_replay_asset_bytes": retained_replay_boundaries
+        * int(replay_budget["observation_bytes"]),
+        "peak_boundary_replay_asset_bytes": peak_replay_boundaries
+        * int(replay_budget["observation_bytes"]),
+        "minimum_live_plus_peak_replay_observation_bytes": (
+            1 + peak_replay_boundaries
+        )
+        * int(replay_budget["observation_bytes"]),
         "evaluation_transitions_enter_replay": False,
         "consolidation_is_extra_compute": True,
     }
@@ -228,6 +324,10 @@ def main() -> int:
     source_path = _config_path("original", args.seed)
     source = _verify_primary_config(source_path, "original", args.seed)
     config = _resolved_config(source, task_order=args.task_order)
+    task_count = len(TASK_ORDERS[args.task_order])
+    protocol = _protocol_for_task_order(args.task_order)
+    if args.task_order == "arrow-original-six" and args.classification != "pilot":
+        raise ValueError("The original-six Evolving-Core campaign is pilot-only")
     python = args.python.expanduser().resolve()
     output_dir = (
         args.output_dir.expanduser().resolve()
@@ -257,7 +357,7 @@ def main() -> int:
     launch = {
         "schema_version": 1,
         "method": "Evolving-Core Atomic RSSM",
-        "protocol": PROTOCOL,
+        "protocol": protocol,
         "classification": args.classification,
         "status": "dry_run" if args.dry_run else "launching",
         "project_git": project_git,
@@ -288,6 +388,7 @@ def main() -> int:
         ),
         "project_pythonpath_prepend": project_pythonpath,
         "world_model_compile": False,
+        "checkpoint_retention": config["evolving_checkpoint_retention"],
         "command": command,
     }
     print(json.dumps(launch, indent=2))
@@ -299,6 +400,11 @@ def main() -> int:
 
     if output_dir.exists() or output_dir.is_symlink():
         raise FileExistsError(f"Refusing to overwrite run directory: {output_dir}")
+    launch["storage_preflight"] = _storage_preflight(
+        output_dir=output_dir,
+        replay_mmap_root=args.replay_mmap_root,
+        task_order=args.task_order,
+    )
     output_dir.mkdir(parents=True)
     replay_backing = _prepare_replay_symlink(output_dir, args.replay_mmap_root)
     _write_json(config_path, config)
@@ -324,7 +430,12 @@ def main() -> int:
         "model_parameter_accounting.json",
         "actor_critic_parameter_accounting.json",
     ]
-    for task_id in range(TASK_COUNT):
+    required_checkpoint_task_ids = (
+        [task_count - 1]
+        if config["evolving_checkpoint_retention"] == "latest_boundary"
+        else range(task_count)
+    )
+    for task_id in required_checkpoint_task_ids:
         required.extend(
             [
                 f"evolving_core_checkpoints/task_{task_id:02d}_pre_consolidation.pt",
@@ -333,7 +444,7 @@ def main() -> int:
         )
     missing = [name for name in required if not (output_dir / name).is_file()]
     missing_consolidation_records = []
-    for task_id in range(TASK_COUNT):
+    for task_id in range(task_count):
         success = (
             output_dir
             / "evolving_core_consolidation"

@@ -515,6 +515,27 @@ duration within five percent of the observed maximum is preferred. See
 budget, eligibility rule, and claim limits. The earlier LR-only design remains
 documented but was superseded before selection.
 
+The separately named original-six-task pilot extends the same method through
+the complete published ARROW order—MsPacman, Boxing, CrazyClimber, Frostbite,
+Seaquest, and Enduro—for 90 epochs each. It stops at the 540-epoch sixth-task
+boundary and is explicitly not matched to plain ARROW because Evolving-Core
+adds six boundary-consolidation phases and task-owned capacity. Its declared
+`latest_boundary` artifact policy keeps only the newest complete resumable
+pre/post pair while preserving all metrics, consolidation records, and
+task-bank inference snapshots:
+
+```bash
+python scripts/run_evolving_atomic_rssm.py \
+  --task-order arrow-original-six \
+  --seed 0 \
+  --classification pilot \
+  --dry-run
+```
+
+See
+`docs/protocols/evolving_core_atomic_rssm_arrow_v2_original_six_atari.md` for
+the complete budget, storage gate, and single-seed evidence limits.
+
 ## Task-2 snapshot acquisition diagnostic
 
 The Task-2 snapshot protocol starts from the completed Task-1 analysis

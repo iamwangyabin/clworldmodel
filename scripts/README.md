@@ -29,7 +29,8 @@ contains experiment-facing code.
   RSSM with a continually updated shared CNN/RSSM, symmetric per-task
   projectors/atoms/heads, independent Actor-Critics, replay-protected
   component gradients, and boundary consolidation. It supports the three
-  predeclared task orders and always disables world-model compilation.
+  predeclared three-task orders plus the separately named original-six-task
+  seed-0 pilot, and always disables world-model compilation.
 - `smoke_evolving_atomic_rssm.py`: target-CUDA, production-shaped synthetic
   update covering the fixed 12-current/4-memory split, component projection,
   frozen old private state, and shared/private/route Adam steps. It performs no
