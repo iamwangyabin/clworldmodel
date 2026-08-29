@@ -33,7 +33,10 @@ except ModuleNotFoundError:  # pragma: no cover - minimal hosts omit experiment 
 if torch is not None:
     sys.path.insert(0, str(PROJECT_SRC))
     sys.path.insert(0, str(VENDORED_ATARI))
-    from clworldmodel.continual import project_component_gradients
+    from clworldmodel.continual import (
+        assign_component_projected_gradients,
+        project_component_gradients,
+    )
     from clworldmodel.continual.evolving_core import (
         _gradient_in_parameter_layout,
     )
@@ -280,6 +283,32 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
         projected_dot = sum((left * right).sum() for left, right in zip(combined, memory))
         self.assertTrue(diagnostic.conflicted)
         self.assertGreaterEqual(float(projected_dot), -1e-6)
+
+    def test_deferred_projection_diagnostics_preserve_assigned_gradients(self) -> None:
+        def assign(materialize_diagnostics: bool):
+            shared = nn.Parameter(torch.tensor([1.0, -2.0]))
+            private = nn.Parameter(torch.tensor([0.5]))
+            current_loss = (shared * torch.tensor([1.0, -2.0])).sum()
+            current_loss = current_loss + (private * 3.0).sum()
+            memory_loss = (shared * torch.tensor([-2.0, 1.0])).sum()
+            diagnostics = assign_component_projected_gradients(
+                current_loss=current_loss,
+                memory_loss=memory_loss,
+                shared_parameter_groups={"encoder": (shared,)},
+                private_parameters=(private,),
+                memory_scale=0.5,
+                materialize_diagnostics=materialize_diagnostics,
+            )
+            return shared.grad.clone(), private.grad.clone(), diagnostics
+
+        default_shared, default_private, diagnostics = assign(True)
+        fast_shared, fast_private, deferred = assign(False)
+
+        self.assertEqual(set(diagnostics), {"encoder"})
+        self.assertTrue(diagnostics["encoder"].conflicted)
+        self.assertEqual(deferred, {})
+        torch.testing.assert_close(fast_shared, default_shared, rtol=0, atol=0)
+        torch.testing.assert_close(fast_private, default_private, rtol=0, atol=0)
 
     def test_assigned_gradient_uses_parameter_stride_for_fused_adam(self) -> None:
         parameter = nn.Parameter(torch.zeros(4, 4, 4, 4))

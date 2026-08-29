@@ -71,7 +71,11 @@ def project_component_gradients(
     *,
     memory_scale: float,
     epsilon: float = 1e-12,
-) -> tuple[tuple[torch.Tensor, ...], ComponentProjectionDiagnostic]:
+    materialize_diagnostic: bool = True,
+) -> tuple[
+    tuple[torch.Tensor, ...],
+    ComponentProjectionDiagnostic | None,
+]:
     """Project a current-task gradient against one component's memory gradient.
 
     The dot product and projection coefficient are computed jointly over every
@@ -99,15 +103,10 @@ def project_component_gradients(
             memory.detach().float().square().sum()
             for memory in memory_gradients
         )
-        current_squared_norm = sum(
-            current.detach().float().square().sum()
-            for current in current_gradients
-        )
-        conflicted = bool((dot < 0).item())
-        coefficient = (
-            dot / (memory_squared_norm + epsilon)
-            if conflicted
-            else dot.new_zeros(())
+        coefficient = torch.where(
+            dot < 0,
+            dot / (memory_squared_norm + epsilon),
+            dot.new_zeros(()),
         )
 
     projected_current = tuple(
@@ -119,18 +118,31 @@ def project_component_gradients(
         + memory_scale * memory.to(device=projected.device, dtype=projected.dtype)
         for projected, memory in zip(projected_current, memory_gradients)
     )
-    with torch.no_grad():
-        projected_squared_norm = sum(
-            value.detach().float().square().sum() for value in projected_current
-        )
+    diagnostic = None
+    if materialize_diagnostic:
+        with torch.no_grad():
+            current_squared_norm = sum(
+                current.detach().float().square().sum()
+                for current in current_gradients
+            )
+            projected_squared_norm = sum(
+                value.detach().float().square().sum()
+                for value in projected_current
+            )
+            diagnostic_values = torch.stack(
+                (
+                    dot,
+                    current_squared_norm.sqrt(),
+                    memory_squared_norm.sqrt(),
+                    projected_squared_norm.sqrt(),
+                )
+            ).detach().cpu().tolist()
         diagnostic = ComponentProjectionDiagnostic(
-            dot_product=float(dot.detach().cpu()),
-            current_norm=float(current_squared_norm.sqrt().detach().cpu()),
-            memory_norm=float(memory_squared_norm.sqrt().detach().cpu()),
-            projected_current_norm=float(
-                projected_squared_norm.sqrt().detach().cpu()
-            ),
-            conflicted=conflicted,
+            dot_product=diagnostic_values[0],
+            current_norm=diagnostic_values[1],
+            memory_norm=diagnostic_values[2],
+            projected_current_norm=diagnostic_values[3],
+            conflicted=diagnostic_values[0] < 0.0,
         )
     return combined, diagnostic
 
@@ -144,6 +156,7 @@ def assign_component_projected_gradients(
     memory_scale: float,
     project_conflicts: bool = True,
     epsilon: float = 1e-12,
+    materialize_diagnostics: bool = True,
 ) -> dict[str, ComponentProjectionDiagnostic]:
     """Differentiate two losses and assign optimizer-ready ``.grad`` tensors.
 
@@ -201,13 +214,14 @@ def assign_component_projected_gradients(
         current_group = shared_current[offset:stop]
         memory_group = shared_memory[offset:stop]
         if not parameters:
-            diagnostics[name] = ComponentProjectionDiagnostic(
-                dot_product=0.0,
-                current_norm=0.0,
-                memory_norm=0.0,
-                projected_current_norm=0.0,
-                conflicted=False,
-            )
+            if materialize_diagnostics:
+                diagnostics[name] = ComponentProjectionDiagnostic(
+                    dot_product=0.0,
+                    current_norm=0.0,
+                    memory_norm=0.0,
+                    projected_current_norm=0.0,
+                    conflicted=False,
+                )
             offset = stop
             continue
         if project_conflicts:
@@ -216,38 +230,45 @@ def assign_component_projected_gradients(
                 memory_group,
                 memory_scale=memory_scale,
                 epsilon=epsilon,
+                materialize_diagnostic=materialize_diagnostics,
             )
         else:
             combined = tuple(
                 current + memory_scale * memory
                 for current, memory in zip(current_group, memory_group)
             )
-            with torch.no_grad():
-                dot = sum(
-                    (current.detach().float() * memory.detach().float()).sum()
-                    for current, memory in zip(current_group, memory_group)
-                )
-                current_norm = sum(
-                    current.detach().float().square().sum()
-                    for current in current_group
-                ).sqrt()
-                memory_norm = sum(
-                    memory.detach().float().square().sum()
-                    for memory in memory_group
-                ).sqrt()
+            diagnostic = None
+            if materialize_diagnostics:
+                with torch.no_grad():
+                    dot = sum(
+                        (current.detach().float() * memory.detach().float()).sum()
+                        for current, memory in zip(current_group, memory_group)
+                    )
+                    current_norm = sum(
+                        current.detach().float().square().sum()
+                        for current in current_group
+                    ).sqrt()
+                    memory_norm = sum(
+                        memory.detach().float().square().sum()
+                        for memory in memory_group
+                    ).sqrt()
+                    diagnostic_values = torch.stack(
+                        (dot, current_norm, memory_norm)
+                    ).detach().cpu().tolist()
                 diagnostic = ComponentProjectionDiagnostic(
-                    dot_product=float(dot.detach().cpu()),
-                    current_norm=float(current_norm.detach().cpu()),
-                    memory_norm=float(memory_norm.detach().cpu()),
-                    projected_current_norm=float(current_norm.detach().cpu()),
-                    conflicted=bool((dot < 0).item()),
+                    dot_product=diagnostic_values[0],
+                    current_norm=diagnostic_values[1],
+                    memory_norm=diagnostic_values[2],
+                    projected_current_norm=diagnostic_values[1],
+                    conflicted=diagnostic_values[0] < 0.0,
                 )
         for parameter, gradient in zip(parameters, combined):
             parameter.grad = _gradient_in_parameter_layout(
                 parameter,
                 gradient.detach(),
             )
-        diagnostics[name] = diagnostic
+        if diagnostic is not None:
+            diagnostics[name] = diagnostic
         offset = stop
 
     for parameter, gradient in zip(private, private_current):

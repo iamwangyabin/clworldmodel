@@ -1652,6 +1652,7 @@ def _evolving_world_model_update(
     shared_optimizer: torch.optim.Optimizer,
     private_optimizer: torch.optim.Optimizer,
     route_optimizer: Optional[torch.optim.Optimizer],
+    materialize_diagnostics: bool = True,
 ) -> tuple[dict[str, torch.Tensor], dict[str, Any], torch.Tensor]:
     """Run one fixed-budget Evolving-Core world-model optimizer update."""
 
@@ -1721,6 +1722,7 @@ def _evolving_world_model_update(
             private_parameters=private_parameters,
             memory_scale=config.memory_loss_scale,
             project_conflicts=config.component_gradient_projection,
+            materialize_diagnostics=materialize_diagnostics,
         )
 
     active_parameters = (*shared_parameters, *private_parameters)
@@ -4127,6 +4129,9 @@ if __name__ == "__main__":
                         shared_optimizer=evolving_shared_optimizer,
                         private_optimizer=private_optimizer,
                         route_optimizer=route_optimizer,
+                        materialize_diagnostics=(
+                            global_step % config.log_frequency == 0
+                        ),
                     )
                 )
                 if global_step % config.log_frequency == 0:

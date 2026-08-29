@@ -40,6 +40,21 @@ def _full_precision_context(device: torch.device):
     return nullcontext()
 
 
+def _assert_all_finite(values: torch.Tensor, label: str) -> None:
+    """Reject non-finite training tensors without synchronizing healthy CUDA."""
+
+    finite = torch.isfinite(values).all()
+    if values.device.type == "cuda" and hasattr(torch, "_assert_async"):
+        # A failed invariant aborts this training process; the healthy path does
+        # not force the host to wait for every actor-critic update.
+        torch._assert_async(finite)
+        return
+    if not bool(finite):
+        raise FloatingPointError(
+            f"Non-finite {label}: {values.detach().cpu().tolist()}"
+        )
+
+
 def zh_to_ac_state(z: LatentT, h: HiddenT) -> AcStateT:
     return torch.cat((z.flatten(-2), h), dim=-1)
 
@@ -1062,18 +1077,25 @@ def train_ac_from_wm(
     scale_ema = aco.return_scale_ema if persistent_return_norm else None
     lam_returns_mean_ema = aco.return_mean_ema if persistent_return_norm else None
 
-    metric_totals = {
-        "actor_reinforce_loss": 0.0,
-        "actor_entropy": 0.0,
-        "critic_imagination_loss": 0.0,
-        "critic_replay_loss": 0.0,
-        "kan_consolidation_loss": 0.0,
-        "total_loss": 0.0,
-        "return_mean": 0.0,
-        "return_scale": 0.0,
-        "gradient_norm": 0.0,
-    }
-    actor_old_policy_kl_total = 0.0
+    metric_names = (
+        "actor_reinforce_loss",
+        "actor_entropy",
+        "critic_imagination_loss",
+        "critic_replay_loss",
+        "kan_consolidation_loss",
+        "total_loss",
+        "return_mean",
+        "return_scale",
+        "gradient_norm",
+    )
+    metric_sums = torch.zeros(
+        len(metric_names),
+        device=next(wm.parameters()).device,
+        dtype=torch.float64,
+    )
+    actor_old_policy_kl_total = torch.zeros(
+        (), device=metric_sums.device, dtype=torch.float64
+    )
     actor_distillation_batches = 0
     actor_distillation_states = 0
     actor_distillation_burnin_state_uses = 0
@@ -1256,16 +1278,10 @@ def train_ac_from_wm(
             actor_distillation_burnin_state_uses += (
                 actor_distill_n_sync * actor_distill_burnin_steps
             )
-            actor_old_policy_kl_total += float(
-                actor_old_policy_kl.detach().item()
+            actor_old_policy_kl_total.add_(
+                actor_old_policy_kl.detach().to(torch.float64)
             )
-        if not torch.isfinite(loss):
-            raise FloatingPointError(
-                "Non-finite actor-critic loss: "
-                f"reinforce={reinforce.item()} entropy={entropy.item()} "
-                f"critic={critic_loss.item()} replay_critic={replay_critic_loss.item()} "
-                f"old_policy_kl={actor_old_policy_kl.item()}"
-            )
+        _assert_all_finite(loss, "actor-critic loss")
 
         protected_values = (
             capture_kan_parameter_values(ac)
@@ -1306,13 +1322,13 @@ def train_ac_from_wm(
             "return_scale": torch.max(one, scale_ema),
             "gradient_norm": gradient_norm,
         }
-        for name, value in step_metrics.items():
-            scalar = float(value.detach().item())
-            if not np.isfinite(scalar):
-                raise FloatingPointError(f"Non-finite actor-critic metric {name}={scalar}")
-            metric_totals[name] += scalar
+        step_metric_values = torch.stack(
+            tuple(value.detach().float() for value in step_metrics.values())
+        ).to(torch.float64)
+        _assert_all_finite(step_metric_values, "actor-critic metric vector")
+        metric_sums.add_(step_metric_values)
 
-        if step % 50 == 0:
+        if not progbar.disable and step % 50 == 0:
             progbar.set_postfix(
                 {
                     "Actor entropy": f"{entropy.item():.3f}",
@@ -1323,12 +1339,17 @@ def train_ac_from_wm(
     if persistent_return_norm:
         aco.return_scale_ema = scale_ema.detach()
         aco.return_mean_ema = lam_returns_mean_ema.detach()
+    summary_values = torch.cat(
+        (metric_sums, actor_old_policy_kl_total.unsqueeze(0))
+    ).detach().cpu().tolist()
+    metric_totals = dict(zip(metric_names, summary_values[:-1]))
+    actor_old_policy_kl_total_value = summary_values[-1]
     if distributed_enabled:
         metric_totals = distributed_context.mean_float_mapping(metric_totals)
     metrics = {name: total / steps for name, total in metric_totals.items()}
     metrics["replay_critic_loss_scale"] = replay_critic_loss_scale
     metrics["actor_old_policy_kl"] = (
-        actor_old_policy_kl_total / actor_distillation_batches
+        actor_old_policy_kl_total_value / actor_distillation_batches
         if actor_distillation_batches
         else 0.0
     )

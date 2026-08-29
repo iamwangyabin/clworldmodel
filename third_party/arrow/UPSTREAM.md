@@ -434,6 +434,18 @@ documented here, covered by focused parity tests, and followed by regenerating
     hypothesis changed to insufficient acquisition time. Focused tests cover
     exact schedule isolation, resource ledgers, boundary stopping, complete-set
     validation, held-out exclusion, and duration-curve selection.
+48. Remove healthy-path CUDA host barriers from the project runtime without
+    changing update equations, budgets, logging cadence, or protocol names.
+    Actor-Critic scalar metrics now accumulate sequentially in FP64 on the
+    accelerator and transfer once after the fixed update block; finite-value
+    invariants use PyTorch's asynchronous CUDA assertion while CPU execution
+    retains synchronous exceptions. Disabled progress output no longer
+    materializes CUDA scalars. Evolving-Core computes gradient projection on
+    device and materializes component diagnostics only on the existing
+    TensorBoard logging steps; the default project-owned projection API still
+    returns diagnostics for direct callers. Focused tests compare deferred and
+    materialized gradients, while the pushed-commit CUDA A/B harness records
+    update-state hashes and scalar metrics on identical synthetic batches.
 
 ## Known issues at import
 
