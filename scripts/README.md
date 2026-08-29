@@ -34,12 +34,14 @@ contains experiment-facing code.
   update covering the fixed 12-current/4-memory split, component projection,
   frozen old private state, and shared/private/route Adam steps. It performs no
   environment interaction and is evidence of execution correctness only.
-- `run_evolving_task0_sweep.py`: fixed-order, seed-0, 90-epoch MsPacman
-  acquisition pilot for one of four preregistered single-LR profiles. It omits
-  held-out-final evaluation and stops at the first boundary.
+- `run_evolving_task0_sweep.py`: fixed-order, seed-0 MsPacman acquisition
+  launcher for the preregistered single-LR profiles or the 120/150/180/240
+  duration profiles. It omits held-out-final evaluation and stops at the
+  declared first-task boundary.
 - `select_evolving_task0_profile.py`: require and rank the unchanged control
-  plus all four Task-0 profiles using only the fixed-cohort pre-consolidation
-  raw return.
+  plus a complete LR or duration family using only the fixed-cohort
+  pre-consolidation raw return. Duration selection chooses the shortest run
+  within five percent of the observed maximum.
 - `run_moe_arrow_atari.py`: task-aware MoE, CNN-FullBank, DINO-FullBank, DINO-PatchBank, and DINO-ConvBank launchers.
 - `verify_arrow_environment.py`: pinned dependency, CUDA, and Atari registration check.
 

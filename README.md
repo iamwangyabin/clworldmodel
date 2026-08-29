@@ -498,20 +498,22 @@ task-aware experimental protocol with no validated performance result. See
 losses, optimizer ownership, checkpoint contract, budgets, and claim limits.
 
 The currently authorized campaign keeps the main order fixed. A separate
-seed-0 Task-0 pilot uses the unchanged full run as a control and tests four
-single-learning-rate profiles on the spare GPUs:
+seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control
+and tests 120, 150, 180, and 240 MsPacman epochs on the spare GPUs:
 
 ```bash
 python scripts/run_evolving_task0_sweep.py \
-  --profile task0_shared_lr_1e4 \
+  --profile task0_epochs_180 \
   --seed 0 \
   --dry-run
 ```
 
 Selection uses only the fixed-cohort MsPacman raw mean recorded before boundary
-consolidation; sweep jobs never request held-out-final evaluation. See
-`docs/protocols/evolving_core_task0_hparam_sweep_v1_atari.md` for the complete
-profile table, budget, eligibility rules, and claim limits.
+consolidation; sweep jobs never request held-out-final evaluation. The shortest
+duration within five percent of the observed maximum is preferred. See
+`docs/protocols/evolving_core_task0_duration_sweep_v1_atari.md` for the complete
+budget, eligibility rule, and claim limits. The earlier LR-only design remains
+documented but was superseded before selection.
 
 ## Task-2 snapshot acquisition diagnostic
 

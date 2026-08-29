@@ -2,8 +2,11 @@
 
 ## Status
 
-Accepted as a seed-0 pilot design on 2026-08-29. No general performance claim
-exists until fresh confirmation seeds complete.
+Superseded for the active campaign by Decision 0041 on 2026-08-29 after the
+research hypothesis changed from learning-rate sensitivity to insufficient
+Task-0 acquisition duration. The four LR jobs were operator-stopped after one
+completed epoch, their artifacts were preserved, and they are not scientific
+failures or selection evidence.
 
 ## Context
 

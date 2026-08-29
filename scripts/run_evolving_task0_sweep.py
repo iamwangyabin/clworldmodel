@@ -36,6 +36,9 @@ from run_evolving_atomic_rssm import (
 
 
 PROTOCOL = "Evolving-Core-Atomic-RSSM-ARROW-v1-Task0-HParamSweep-v1"
+DURATION_PROTOCOL = (
+    "Evolving-Core-Atomic-RSSM-ARROW-v1-Task0-DurationSweep-v1"
+)
 TASK_ORDER_NAME = "mspacman-boxing-crazyclimber"
 TASK_ORDER = TASK_ORDERS[TASK_ORDER_NAME]
 SELECTION_SEED_INDEX = 0
@@ -50,17 +53,28 @@ PROFILE_OVERRIDES = {
     "task0_private_lr_3e4": {"task_private_lr": 3e-4},
     "task0_actor_lr_2e4": {"ac_lr": 2e-4},
 }
+DURATION_PROFILE_EPOCHS = {
+    "task0_epochs_120": 120,
+    "task0_epochs_150": 150,
+    "task0_epochs_180": 180,
+    "task0_epochs_240": 240,
+}
+ALL_PROFILES = (*PROFILE_OVERRIDES, *DURATION_PROFILE_EPOCHS)
 PROFILE_RATIONALE = {
     "task0_shared_lr_1e4": "test slower shared representation learning",
     "task0_shared_lr_3e4": "test faster shared representation learning",
     "task0_private_lr_3e4": "test faster private projector/atom/head learning",
     "task0_actor_lr_2e4": "test faster policy/value learning",
+    "task0_epochs_120": "test 33 percent more Task-0 acquisition",
+    "task0_epochs_150": "test 67 percent more Task-0 acquisition",
+    "task0_epochs_180": "test twice the Task-0 acquisition budget",
+    "task0_epochs_240": "test 2.67 times the Task-0 acquisition budget",
 }
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=tuple(PROFILE_OVERRIDES), required=True)
+    parser.add_argument("--profile", choices=ALL_PROFILES, required=True)
     parser.add_argument(
         "--seed",
         type=int,
@@ -79,12 +93,17 @@ def _parser() -> argparse.ArgumentParser:
 def _resolved_sweep_config(source: dict, *, profile: str) -> dict:
     """Apply exactly one declared Task-0 change and stop at its boundary."""
 
-    if profile not in PROFILE_OVERRIDES:
+    if profile not in ALL_PROFILES:
         raise ValueError(f"Unknown Task-0 sweep profile: {profile!r}")
     config = _resolved_config(source, task_order=TASK_ORDER_NAME)
-    config["epochs"] = TASK_DURATION_EPOCHS
+    task0_epochs = DURATION_PROFILE_EPOCHS.get(profile, TASK_DURATION_EPOCHS)
+    config["epochs"] = task0_epochs
     config["evolving_task0_profile"] = profile
-    config.update(PROFILE_OVERRIDES[profile])
+    config.update(PROFILE_OVERRIDES.get(profile, {}))
+    if profile in DURATION_PROFILE_EPOCHS:
+        schedule = config["esc"]["kwargs"]
+        schedule.pop("swap_sched")
+        schedule["task_durations"] = [task0_epochs, 90, 90]
     return config
 
 
@@ -123,7 +142,7 @@ def _budget_manifest(config: dict) -> dict:
     online_updates = int(config["epochs"]) * int(config["steps_per_batch"])
     consolidation_updates = int(config["boundary_consolidation_steps"])
     return {
-        "task_duration_epochs": TASK_DURATION_EPOCHS,
+        "task_duration_epochs": int(config["epochs"]),
         "tasks_trained": 1,
         "raw_environment_frames": raw_frames_per_epoch * int(config["epochs"]),
         "online_world_model_updates": online_updates,
@@ -179,12 +198,16 @@ def _selection_candidate(
         raise ValueError("Task-0 raw return mean must be finite")
     if payload.get("heldout_final_data_used") is not False:
         raise ValueError("Task-0 selection artifact must exclude held-out-final data")
+    profile = config["evolving_task0_profile"]
+    duration_sweep = profile in DURATION_PROFILE_EPOCHS
     return {
         "schema_version": 1,
-        "artifact_kind": "evolving_core_task0_hparam_candidate",
-        "protocol": PROTOCOL,
-        "profile": config["evolving_task0_profile"],
-        "profile_overrides": PROFILE_OVERRIDES[config["evolving_task0_profile"]],
+        "artifact_kind": "evolving_core_task0_sweep_candidate",
+        "protocol": launch["protocol"],
+        "selection_family": "duration" if duration_sweep else "learning_rate",
+        "profile": profile,
+        "profile_overrides": PROFILE_OVERRIDES.get(profile, {}),
+        "task0_acquisition_epochs": int(config["epochs"]),
         "profile_log_distance_from_fixed_v1": _profile_distance(config),
         "project_git_commit": launch["project_git"]["commit"],
         "seed_index": launch["seed_index"],
@@ -197,8 +220,12 @@ def _selection_candidate(
         "source_artifact": str(path),
         "eligible": True,
         "heldout_final_data_used": False,
-        "selection_tie_break": (
-            "smaller log-distance from fixed_v1, then lexical profile name"
+        "selection_rule": (
+            "shortest duration within five percent of the best raw mean, then "
+            "higher raw mean and lexical profile name"
+            if duration_sweep
+            else "maximum raw mean; exact ties use smaller log-distance from "
+            "fixed_v1, then lexical profile name"
         ),
     }
 
@@ -213,6 +240,8 @@ def main() -> int:
     source_path = _config_path("original", args.seed)
     source = _verify_primary_config(source_path, "original", args.seed)
     config = _resolved_sweep_config(source, profile=args.profile)
+    duration_sweep = args.profile in DURATION_PROFILE_EPOCHS
+    protocol = DURATION_PROTOCOL if duration_sweep else PROTOCOL
     python = args.python.expanduser().resolve()
     output_dir = (
         args.output_dir.expanduser().resolve()
@@ -242,7 +271,7 @@ def main() -> int:
     launch = {
         "schema_version": 1,
         "method": "Evolving-Core Atomic RSSM",
-        "protocol": PROTOCOL,
+        "protocol": protocol,
         "classification": "pilot",
         "status": "dry_run" if args.dry_run else "launching",
         "project_git": project_git,
@@ -256,15 +285,24 @@ def main() -> int:
         "task_agnostic_claimed": False,
         "from_scratch": True,
         "sweep_profile": args.profile,
+        "selection_family": "duration" if duration_sweep else "learning_rate",
         "profile_rationale": PROFILE_RATIONALE[args.profile],
-        "profile_overrides": PROFILE_OVERRIDES[args.profile],
+        "profile_overrides": PROFILE_OVERRIDES.get(args.profile, {}),
+        "task0_acquisition_epochs": int(config["epochs"]),
         "selection_metric": "Task0 pre-consolidation fixed-validation raw mean",
-        "selection_tie_break": (
-            "smaller log-distance from fixed_v1, then lexical profile name"
+        "selection_rule": (
+            "shortest duration within five percent of the best raw mean, then "
+            "higher raw mean and lexical profile name"
+            if duration_sweep
+            else "maximum raw mean; exact ties use smaller log-distance from "
+            "fixed_v1, then lexical profile name"
         ),
         "heldout_final_data_used_for_selection": False,
         "post_selection_requirement": (
-            "launch the selected profile from scratch for the fixed 270-epoch "
+            "launch the selected duration from scratch for the fixed-order full "
+            "curriculum; confirmation seeds remain required"
+            if duration_sweep
+            else "launch the selected profile from scratch for the fixed 270-epoch "
             "MsPacman-Boxing-CrazyClimber protocol; confirmation seeds remain required"
         ),
         "budgets": _budget_manifest(config),

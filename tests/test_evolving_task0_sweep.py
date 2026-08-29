@@ -29,6 +29,7 @@ if torch is not None:
     from run_evolving_atomic_rssm import _resolved_config
     from run_evolving_task0_sweep import (
         BASELINE_HPARAMETERS,
+        DURATION_PROFILE_EPOCHS,
         PROFILE_OVERRIDES,
         TASK_ORDER,
         _budget_manifest,
@@ -88,6 +89,33 @@ class EvolvingTask0SweepTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "stop exactly"):
             Config.from_dict(data)
 
+    def test_duration_profiles_change_only_task0_acquisition_budget(self) -> None:
+        for profile, duration in DURATION_PROFILE_EPOCHS.items():
+            with self.subTest(profile=profile):
+                data = _resolved_sweep_config(self._source(), profile=profile)
+                config = Config.from_dict(data)
+                self.assertEqual(config.epochs, duration)
+                self.assertEqual(config.evolving_task0_profile, profile)
+                self.assertNotIn("swap_sched", data["esc"]["kwargs"])
+                self.assertEqual(
+                    data["esc"]["kwargs"]["task_durations"],
+                    [duration, 90, 90],
+                )
+                self.assertEqual(
+                    {
+                        name: data[name] for name in BASELINE_HPARAMETERS
+                    },
+                    BASELINE_HPARAMETERS,
+                )
+
+    def test_duration_profile_rejects_schedule_drift(self) -> None:
+        data = _resolved_sweep_config(
+            self._source(), profile="task0_epochs_180"
+        )
+        data["esc"]["kwargs"]["task_durations"][0] = 179
+        with self.assertRaisesRegex(ValueError, "exact task durations"):
+            Config.from_dict(data)
+
     def test_profile_rejects_undeclared_parameter_drift(self) -> None:
         data = _resolved_sweep_config(
             self._source(), profile="task0_shared_lr_1e4"
@@ -110,6 +138,18 @@ class EvolvingTask0SweepTests(unittest.TestCase):
         self.assertEqual(budget["online_memory_sequences"], 0)
         self.assertEqual(budget["consolidation_sequences"], 16_000)
         self.assertFalse(budget["heldout_final_evaluation_performed"])
+
+    def test_duration_budget_scales_samples_and_updates_explicitly(self) -> None:
+        config = _resolved_sweep_config(
+            self._source(), profile="task0_epochs_180"
+        )
+        budget = _budget_manifest(config)
+        self.assertEqual(budget["task_duration_epochs"], 180)
+        self.assertEqual(budget["raw_environment_frames"], 11_796_480)
+        self.assertEqual(budget["online_world_model_updates"], 180_000)
+        self.assertEqual(budget["total_world_model_optimizer_steps"], 181_000)
+        self.assertEqual(budget["actor_critic_updates"], 144_000)
+        self.assertEqual(budget["online_current_sequences"], 2_880_000)
 
     def test_sweep_command_never_requests_heldout_final(self) -> None:
         command = _training_command(
@@ -144,6 +184,7 @@ class EvolvingTask0SweepTests(unittest.TestCase):
                     {
                         "evolving_task0_profile": profile,
                         "epochs": 270 if profile == "fixed_v1" else 90,
+                        "esc": {"kwargs": {"swap_sched": 90}},
                     }
                 )
                 if profile == "fixed_v1":
@@ -192,6 +233,79 @@ class EvolvingTask0SweepTests(unittest.TestCase):
             selection["winner"]["profile"], "task0_shared_lr_3e4"
         )
         self.assertEqual(selection["winner"]["score"], 20.0)
+        self.assertFalse(selection["heldout_final_data_read"])
+
+    def test_duration_selection_prefers_shortest_near_best_budget(self) -> None:
+        scores = {
+            "fixed_v1": 100.0,
+            "task0_epochs_120": 120.0,
+            "task0_epochs_150": 124.0,
+            "task0_epochs_180": 125.0,
+            "task0_epochs_240": 123.0,
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate_dirs = []
+            for profile, score in scores.items():
+                duration = DURATION_PROFILE_EPOCHS.get(profile, 90)
+                run_dir = root / profile
+                validation_dir = run_dir / "evolving_core_consolidation"
+                validation_dir.mkdir(parents=True)
+                schedule = (
+                    {"swap_sched": 90}
+                    if profile == "fixed_v1"
+                    else {"task_durations": [duration, 90, 90]}
+                )
+                config = {
+                    **BASELINE_HPARAMETERS,
+                    "evolving_task0_profile": profile,
+                    "epochs": 270 if profile == "fixed_v1" else duration,
+                    "esc": {"kwargs": schedule},
+                }
+                (run_dir / "launch.json").write_text(
+                    json.dumps(
+                        {
+                            "task_order": list(TASK_ORDER),
+                            "seed_index": 0,
+                            "project_git": {"commit": profile},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (run_dir / "resolved_training_config.json").write_text(
+                    json.dumps(config), encoding="utf-8"
+                )
+                (validation_dir / "task_00_pre_validation.json").write_text(
+                    json.dumps(
+                        {
+                            "validation": {
+                                "raw_mean": [score],
+                                "task_seeds": [12345],
+                            },
+                            "rollouts_per_task": 16,
+                            "heldout_final_data_used": False,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (run_dir / "final_evaluation.json").write_text(
+                    json.dumps({"raw_mean": [1_000_000.0]}), encoding="utf-8"
+                )
+                if profile != "fixed_v1":
+                    (run_dir / "run_status.json").write_text(
+                        json.dumps({"complete": True}), encoding="utf-8"
+                    )
+                candidate_dirs.append(run_dir)
+
+            selection = _select(candidate_dirs, family="duration")
+
+        self.assertEqual(selection["maximum_observed_score"], 125.0)
+        self.assertEqual(selection["near_best_score_threshold"], 118.75)
+        self.assertEqual(selection["winner"]["profile"], "task0_epochs_120")
+        self.assertEqual(
+            [row["task0_acquisition_epochs"] for row in selection["learning_curve"]],
+            [90, 120, 150, 180, 240],
+        )
         self.assertFalse(selection["heldout_final_data_read"])
 
 

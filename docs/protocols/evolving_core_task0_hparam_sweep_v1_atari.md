@@ -1,5 +1,9 @@
 # Evolving-Core Task-0 Hyperparameter Sweep v1 (Atari)
 
+> **Campaign status:** superseded by the Task-0 duration sweep before any LR
+> candidate completed epoch 1. Partial artifacts are preserved as operator-
+> stopped diagnostics and are not used for selection.
+
 ## Scope
 
 This is a seed-0 acquisition pilot for the fixed curriculum

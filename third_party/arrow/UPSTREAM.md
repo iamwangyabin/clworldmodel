@@ -420,6 +420,20 @@ documented here, covered by focused parity tests, and followed by regenerating
     tie break. Focused tests cover single-field config isolation, exact Task-0
     budgets, final-evaluation exclusion, pre-validation persistence on safe
     rollback, and selection behavior.
+47. Add the separately named, fixed-order
+    `Evolving-Core-Atomic-RSSM-ARROW-v1-Task0-DurationSweep-v1` resource-scaling
+    pilot. Four profiles keep every fixed-v1 optimizer and model setting but
+    replace the 90-epoch Task-0 duration with exactly 120, 150, 180, or 240;
+    later declared durations remain 90 and each pilot must stop at its first
+    boundary. Raw frames, online world-model updates, Actor-Critic updates, and
+    sampled sequences scale explicitly with duration while Replay capacity is
+    unchanged. Selection requires the original 90-epoch control plus all four
+    candidates, uses only the fixed-cohort pre-consolidation raw mean, and
+    chooses the shortest duration within five percent of the observed maximum.
+    The preceding LR-only jobs were operator-stopped and excluded when the
+    hypothesis changed to insufficient acquisition time. Focused tests cover
+    exact schedule isolation, resource ledgers, boundary stopping, complete-set
+    validation, held-out exclusion, and duration-curve selection.
 
 ## Known issues at import
 

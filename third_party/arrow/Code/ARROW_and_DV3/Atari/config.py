@@ -78,6 +78,10 @@ EvolvingTask0Profile = Literal[
     "task0_shared_lr_3e4",
     "task0_private_lr_3e4",
     "task0_actor_lr_2e4",
+    "task0_epochs_120",
+    "task0_epochs_150",
+    "task0_epochs_180",
+    "task0_epochs_240",
 ]
 
 
@@ -545,6 +549,10 @@ class Config(Serialisable):
                 "task0_actor_lr_2e4": {
                     "ac_lr": 2e-4,
                 },
+                "task0_epochs_120": {},
+                "task0_epochs_150": {},
+                "task0_epochs_180": {},
+                "task0_epochs_240": {},
             }
             if self.evolving_task0_profile not in task0_profile_overrides:
                 raise ValueError(
@@ -578,7 +586,27 @@ class Config(Serialisable):
                     raise ValueError(
                         "Evolving-Core Task-0 sweeps require a sequential schedule"
                     )
-                if self.epochs != sequential_task_durations[0]:
+                task0_profile_epochs = {
+                    "task0_shared_lr_1e4": 90,
+                    "task0_shared_lr_3e4": 90,
+                    "task0_private_lr_3e4": 90,
+                    "task0_actor_lr_2e4": 90,
+                    "task0_epochs_120": 120,
+                    "task0_epochs_150": 150,
+                    "task0_epochs_180": 180,
+                    "task0_epochs_240": 240,
+                }
+                expected_task_durations = (
+                    task0_profile_epochs[self.evolving_task0_profile],
+                    90,
+                    90,
+                )
+                if sequential_task_durations != expected_task_durations:
+                    raise ValueError(
+                        "Evolving-Core Task-0 sweep profile requires exact task "
+                        f"durations {expected_task_durations}"
+                    )
+                if self.epochs != expected_task_durations[0]:
                     raise ValueError(
                         "Evolving-Core Task-0 sweep profiles must stop exactly at "
                         "the first task boundary"
