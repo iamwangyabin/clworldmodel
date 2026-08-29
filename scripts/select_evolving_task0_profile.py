@@ -14,6 +14,7 @@ from run_evolving_task0_sweep import (
     BASELINE_HPARAMETERS,
     DURATION_PROFILE_EPOCHS,
     DURATION_PROTOCOL,
+    ENV16_PROTOCOL,
     PROFILE_OVERRIDES,
     PROTOCOL,
     TASK_ORDER,
@@ -82,6 +83,9 @@ def _candidate_from_run(run_dir: Path) -> dict[str, Any]:
     if launch.get("seed_index") != 0:
         raise ValueError(f"Run {run_dir} is not the preregistered seed-0 pilot")
     expected_task0_epochs = DURATION_PROFILE_EPOCHS.get(profile, 90)
+    launch_protocol = launch.get("protocol")
+    n_sync = int(config.get("n_sync", 4))
+    gen_seq_len = int(config.get("gen_seq_len", 4096))
     schedule = config.get("esc", {}).get("kwargs", {})
     task_durations = schedule.get("task_durations")
     actual_task0_epochs = (
@@ -94,7 +98,10 @@ def _candidate_from_run(run_dir: Path) -> dict[str, Any]:
             f"Run {run_dir} has Task-0 duration {actual_task0_epochs}, "
             f"expected {expected_task0_epochs}"
         )
-    if profile != "fixed_v1":
+    requires_standalone_completion = (
+        profile != "fixed_v1" or launch_protocol == ENV16_PROTOCOL
+    )
+    if requires_standalone_completion:
         status = _load_json(run_dir / "run_status.json")
         if status.get("complete") is not True:
             raise ValueError(f"Sweep run is not complete and eligible: {run_dir}")
@@ -143,6 +150,10 @@ def _candidate_from_run(run_dir: Path) -> dict[str, Any]:
         "profile": profile,
         "run_dir": str(run_dir),
         "project_git_commit": launch.get("project_git", {}).get("commit"),
+        "protocol": launch_protocol,
+        "collection_envs": n_sync,
+        "decisions_per_environment_per_epoch": gen_seq_len,
+        "decisions_per_epoch": n_sync * gen_seq_len,
         "score": score,
         "score_name": "task0_pre_consolidation_raw_return_mean",
         "task0_acquisition_epochs": expected_task0_epochs,
@@ -175,6 +186,37 @@ def _select(
             f"missing={sorted(expected_profiles - observed_profiles)}, "
             f"unexpected={sorted(observed_profiles - expected_profiles)}"
         )
+    env16_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate["protocol"] == ENV16_PROTOCOL
+    ]
+    if env16_candidates:
+        if len(env16_candidates) != len(candidates):
+            raise ValueError(
+                "EnvParallel16 selection cannot mix protocols or legacy controls"
+            )
+        collection_settings = {
+            (
+                candidate["collection_envs"],
+                candidate["decisions_per_environment_per_epoch"],
+                candidate["decisions_per_epoch"],
+            )
+            for candidate in candidates
+        }
+        if collection_settings != {(16, 1024, 16_384)}:
+            raise ValueError(
+                "EnvParallel16 candidates require n_sync=16, gen_seq_len=1024, "
+                "and 16,384 decisions per epoch"
+            )
+        commits = {
+            candidate["project_git_commit"] for candidate in candidates
+        }
+        if len(commits) != 1 or None in commits:
+            raise ValueError(
+                "EnvParallel16 candidates must use one recorded project commit"
+            )
+        protocol = ENV16_PROTOCOL
     cohorts = {
         tuple(candidate["validation_task_seeds"]) for candidate in candidates
     }
@@ -228,6 +270,22 @@ def _select(
         "selection_metric": "task0_pre_consolidation_raw_return_mean",
         "maximize": True,
         "validation_task_seeds": list(next(iter(cohorts))),
+        "collection_envs": (
+            candidates[0]["collection_envs"]
+            if len({candidate["collection_envs"] for candidate in candidates}) == 1
+            else None
+        ),
+        "decisions_per_environment_per_epoch": (
+            candidates[0]["decisions_per_environment_per_epoch"]
+            if len(
+                {
+                    candidate["decisions_per_environment_per_epoch"]
+                    for candidate in candidates
+                }
+            )
+            == 1
+            else None
+        ),
         "heldout_final_data_read": False,
         "selection_rule": selection_rule,
         "maximum_observed_score": maximum_score,
