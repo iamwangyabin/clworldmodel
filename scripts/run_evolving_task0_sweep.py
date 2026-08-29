@@ -149,7 +149,7 @@ def _profile_distance(config: dict) -> float:
 
     return float(
         sum(
-            abs(math.log(float(config[name]) / baseline))
+            abs(math.log(float(config.get(name, baseline)) / baseline))
             for name, baseline in BASELINE_HPARAMETERS.items()
         )
     )

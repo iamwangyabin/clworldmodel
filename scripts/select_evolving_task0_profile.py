@@ -44,7 +44,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _profile_distance(config: dict[str, Any]) -> float:
     return float(
         sum(
-            abs(math.log(float(config[name]) / baseline))
+            abs(math.log(float(config.get(name, baseline)) / baseline))
             for name, baseline in BASELINE_HPARAMETERS.items()
         )
     )
@@ -60,9 +60,9 @@ def _candidate_from_run(run_dir: Path) -> dict[str, Any]:
     expected_hparams = dict(BASELINE_HPARAMETERS)
     expected_hparams.update(PROFILE_OVERRIDES.get(profile, {}))
     mismatches = {
-        name: (config.get(name), expected)
+        name: (config.get(name, BASELINE_HPARAMETERS[name]), expected)
         for name, expected in expected_hparams.items()
-        if config.get(name) != expected
+        if config.get(name, BASELINE_HPARAMETERS[name]) != expected
     }
     if mismatches:
         raise ValueError(f"Run {run_dir} drifted from profile {profile}: {mismatches}")

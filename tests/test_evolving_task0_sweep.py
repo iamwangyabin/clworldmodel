@@ -55,7 +55,9 @@ class EvolvingTask0SweepTests(unittest.TestCase):
                 "ALE_Seaquest,ALE_Enduro-s0-arrow.json"
             )
         )
-        return Config.from_file(path).to_dict()
+        # Match the launcher input exactly: published JSON may omit schema
+        # defaults that a round-trip through Config.to_dict() would materialize.
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def test_each_profile_changes_exactly_one_preregistered_hyperparameter(self) -> None:
         fixed = _resolved_config(
@@ -67,6 +69,7 @@ class EvolvingTask0SweepTests(unittest.TestCase):
                 config = Config.from_dict(data)
                 self.assertEqual(config.epochs, 90)
                 self.assertEqual(config.evolving_task0_profile, profile)
+                self.assertEqual(data["ac_lr"], config.ac_lr)
                 self.assertEqual(
                     tuple(task.name for task in config.esc.env_configs), TASK_ORDER
                 )
@@ -143,6 +146,10 @@ class EvolvingTask0SweepTests(unittest.TestCase):
                         "epochs": 270 if profile == "fixed_v1" else 90,
                     }
                 )
+                if profile == "fixed_v1":
+                    # The already-running legacy control predates explicit
+                    # materialization of the schema-default Actor LR.
+                    config.pop("ac_lr")
                 (run_dir / "launch.json").write_text(
                     json.dumps(
                         {

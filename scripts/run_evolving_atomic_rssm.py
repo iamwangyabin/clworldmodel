@@ -122,6 +122,7 @@ def _resolved_config(source: dict, *, task_order: str) -> dict:
             "replay_observation_dtype": "uint8",
             "random_policy": "new",
             "actor_network": "mlp",
+            "ac_lr": 1e-4,
             "fresh_ac": False,
             "evaluation_seed_protocol": "fixed_validation_heldout_final",
             "evaluation_task_seed_offset": 0,
