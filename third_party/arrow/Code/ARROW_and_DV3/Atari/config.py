@@ -72,6 +72,13 @@ EvaluationSeedProtocol = Literal[
 ComputeDType = Literal["float32", "bfloat16"]
 ReplayObservationDType = Literal["float32", "uint8"]
 DataParallelWorldSize = Literal[1, 2, 4]
+EvolvingTask0Profile = Literal[
+    "fixed_v1",
+    "task0_shared_lr_1e4",
+    "task0_shared_lr_3e4",
+    "task0_private_lr_3e4",
+    "task0_actor_lr_2e4",
+]
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -320,6 +327,7 @@ class Config(Serialisable):
     task_mechanism_max_validation_drop: float = 0.05
     # Evolving-Core Atomic RSSM is intentionally configured independently of
     # the frozen-base MB/REC methods above.
+    evolving_task0_profile: EvolvingTask0Profile = "fixed_v1"
     evolving_shared_core: bool = False
     first_task_shared_core_lr: float = 2e-4
     shared_core_lr: float = 1e-4
@@ -500,6 +508,7 @@ class Config(Serialisable):
         if not 0 <= self.task_mechanism_max_validation_drop < 1:
             raise ValueError("task_mechanism_max_validation_drop must lie in [0, 1)")
         evolving_defaults = {
+            "evolving_task0_profile": "fixed_v1",
             "evolving_shared_core": False,
             "first_task_shared_core_lr": 2e-4,
             "shared_core_lr": 1e-4,
@@ -522,13 +531,38 @@ class Config(Serialisable):
             "full_task_rssm_experts": False,
         }
         if is_evolving_atomic:
+            task0_profile_overrides = {
+                "fixed_v1": {},
+                "task0_shared_lr_1e4": {
+                    "first_task_shared_core_lr": 1e-4,
+                },
+                "task0_shared_lr_3e4": {
+                    "first_task_shared_core_lr": 3e-4,
+                },
+                "task0_private_lr_3e4": {
+                    "task_private_lr": 3e-4,
+                },
+                "task0_actor_lr_2e4": {
+                    "ac_lr": 2e-4,
+                },
+            }
+            if self.evolving_task0_profile not in task0_profile_overrides:
+                raise ValueError(
+                    "Unknown Evolving-Core Task-0 profile: "
+                    f"{self.evolving_task0_profile!r}"
+                )
             expected_evolving = {
                 **evolving_defaults,
+                "evolving_task0_profile": self.evolving_task0_profile,
                 "evolving_shared_core": True,
                 "task_private_heads": True,
                 "task_private_actor_critic": True,
                 "task_atomic_routes": True,
+                "ac_lr": 1e-4,
             }
+            expected_evolving.update(
+                task0_profile_overrides[self.evolving_task0_profile]
+            )
             mismatches = {
                 name: (getattr(self, name), expected)
                 for name, expected in expected_evolving.items()
@@ -539,6 +573,16 @@ class Config(Serialisable):
                     "Evolving-Core Atomic RSSM requires its fixed optimizer, "
                     f"replay, interface, and topology settings: {mismatches}"
                 )
+            if self.evolving_task0_profile != "fixed_v1":
+                if sequential_task_durations is None:
+                    raise ValueError(
+                        "Evolving-Core Task-0 sweeps require a sequential schedule"
+                    )
+                if self.epochs != sequential_task_durations[0]:
+                    raise ValueError(
+                        "Evolving-Core Task-0 sweep profiles must stop exactly at "
+                        "the first task boundary"
+                    )
             if self.current_batch_n + self.memory_batch_n != self.mb_n_size:
                 raise ValueError(
                     "Evolving-Core current and memory sequence counts must sum "

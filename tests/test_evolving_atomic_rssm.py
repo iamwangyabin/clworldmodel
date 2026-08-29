@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import random
 import sys
 import unittest
@@ -567,10 +568,24 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
                     log_dir=Path(directory),
                     writer=writer,
                 )
+            pre_validation = json.loads(
+                (
+                    Path(directory)
+                    / "evolving_core_consolidation"
+                    / "task_00_pre_validation.json"
+                ).read_text(encoding="utf-8")
+            )
 
         torch.testing.assert_close(world_model.core, before)
         self.assertEqual(optimizer.state_dict(), optimizer_before)
         self.assertEqual(world_model.activated_task, 0)
+        self.assertEqual(
+            pre_validation["artifact_kind"],
+            "evolving_core_pre_consolidation_validation",
+        )
+        self.assertEqual(pre_validation["validation"]["raw_mean"], [1.0])
+        self.assertEqual(pre_validation["consolidation_updates_completed"], 0)
+        self.assertFalse(pre_validation["heldout_final_data_used"])
 
 
 if __name__ == "__main__":

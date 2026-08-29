@@ -129,6 +129,7 @@ def _resolved_config(source: dict, *, task_order: str) -> dict:
             "residual_consolidation": "none",
             "shared_core_mode": "evolving_replay_protected",
             "independent_expert_original_task_index": None,
+            "evolving_task0_profile": "fixed_v1",
             "evolving_shared_core": True,
             "first_task_shared_core_lr": 2e-4,
             "shared_core_lr": 1e-4,

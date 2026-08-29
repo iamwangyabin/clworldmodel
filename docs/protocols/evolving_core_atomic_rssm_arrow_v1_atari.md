@@ -102,8 +102,9 @@ uint8 CPU file-backed storage; actions, rewards, continuation, reset, task-id,
 priority, and indexing overhead are reported separately. Evaluation
 transitions never enter Replay or affect optimization.
 
-The first campaign compares plain shared ARROW, FullBank, frozen MB/REC, and
-this method on all three declared orders. Reports retain raw per-task returns,
+The currently authorized campaign uses only the main MsPacman, Boxing,
+CrazyClimber order; the two declared order checks remain dormant capabilities
+and are not part of this campaign. Reports retain raw per-task returns,
 acquisition curves, final average performance, forgetting, shared-core drift,
 per-component conflict rates, and atom-reuse ablations. A smoke or one seed is
 execution/pilot evidence only, never a reproduction or superiority claim.

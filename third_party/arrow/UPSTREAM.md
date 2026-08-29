@@ -405,6 +405,21 @@ documented here, covered by focused parity tests, and followed by regenerating
     isolation, Replay purity, gradient projection/ownership, persistent Adam,
     complete checkpoint and mmap round trips, consolidation rollback, launcher
     orders/budgets, and existing MB/REC parity.
+46. Add the separately named, fixed-order
+    `Evolving-Core-Atomic-RSSM-ARROW-v1-Task0-HParamSweep-v1` pilot without
+    changing `fixed_v1`. Four strict profiles each modify exactly one Task-0
+    learning rate (low/high shared core, high task-private, or high
+    Actor-Critic), retain seed 0 and the MsPacman-first schedule, and must stop
+    at its 90-epoch boundary. The trainer atomically persists the fixed-cohort
+    raw return immediately before any boundary-consolidation gradient, so a
+    consolidation failure cannot erase the selection observation and
+    post-consolidation or held-out-final data cannot enter ranking. The
+    launcher records matched acquisition/update/Replay budgets and omits final
+    evaluation; the selector requires the unchanged control plus all four
+    profiles, identical validation seeds, and the preregistered deterministic
+    tie break. Focused tests cover single-field config isolation, exact Task-0
+    budgets, final-evaluation exclusion, pre-validation persistence on safe
+    rollback, and selection behavior.
 
 ## Known issues at import
 

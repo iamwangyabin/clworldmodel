@@ -2130,6 +2130,46 @@ def _consolidate_evolving_shared_core(
     pre_raw_mean, pre_raw_std = _raw_return_statistics(
         config.esc.env_configs[:seen_count], pre_scaled_mean, pre_scaled_std
     )
+    # Persist the selection observation before any consolidation gradient is
+    # taken.  A failed consolidation must not erase the completed online
+    # acquisition result or tempt a sweep to fall back to held-out-final data.
+    pre_validation = recursive_python_scalars(
+        {
+            "schema_version": 1,
+            "artifact_kind": "evolving_core_pre_consolidation_validation",
+            "epoch": epoch,
+            "completed_epochs": epoch + 1,
+            "completed_task_id": completed_task_id,
+            "world_model_updates": global_step,
+            "seed_cohort": "fixed_validation",
+            "rollouts_per_task": 16,
+            "validation": {
+                "task_seeds": list(seen_validation_seeds),
+                "scaled_mean": pre_scaled_mean,
+                "scaled_std": pre_scaled_std,
+                "raw_mean": pre_raw_mean,
+                "raw_std": pre_raw_std,
+            },
+            "selection_metric": (
+                "validation.raw_mean[completed_task_id]"
+                if completed_task_id == 0
+                else None
+            ),
+            "evaluation_transitions_enter_replay": False,
+            "consolidation_updates_completed": 0,
+            "heldout_final_data_used": False,
+        }
+    )
+    output_dir = log_dir / "evolving_core_consolidation"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pre_validation_path = output_dir / (
+        f"task_{completed_task_id:02d}_pre_validation.json"
+    )
+    pre_validation_temporary = pre_validation_path.with_suffix(".json.tmp")
+    pre_validation_temporary.write_text(
+        json.dumps(pre_validation, indent=2) + "\n", encoding="utf-8"
+    )
+    os.replace(pre_validation_temporary, pre_validation_path)
 
     losses: list[float] = []
     rollback = False
@@ -2242,8 +2282,6 @@ def _consolidate_evolving_shared_core(
             "evaluation_transitions_enter_replay": False,
         }
     )
-    output_dir = log_dir / "evolving_core_consolidation"
-    output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"task_{completed_task_id:02d}_boundary.json"
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
