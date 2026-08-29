@@ -55,6 +55,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--wm-steps", type=int, default=50)
     parser.add_argument("--actor-warmup", type=int, default=5)
     parser.add_argument("--actor-steps", type=int, default=100)
+    parser.add_argument("--compile-world-model-loss", action="store_true")
     return parser
 
 
@@ -142,7 +143,14 @@ def _actor_replay(config) -> MultiTypeReplay:
     return replay
 
 
-def _world_model_benchmark(config, device: torch.device, warmup: int, steps: int) -> dict:
+def _world_model_benchmark(
+    config,
+    device: torch.device,
+    warmup: int,
+    steps: int,
+    *,
+    compile_loss: bool,
+) -> dict:
     world_model = _world_model(config, device)
     world_model.activate_task_expert(0)
     boundary_teacher = copy.deepcopy(world_model).eval()
@@ -174,6 +182,13 @@ def _world_model_benchmark(config, device: torch.device, warmup: int, steps: int
     actor_bank = SimpleNamespace(
         get=lambda task_id: SimpleNamespace(ac=SimpleNamespace(actor=actor))
     )
+    if compile_loss:
+        torch._dynamo.config.cache_size_limit = 64
+        world_model.compute_loss_and_trace = torch.compile(
+            world_model.compute_loss_and_trace,
+            dynamic=False,
+            mode="reduce-overhead",
+        )
     signature = inspect.signature(train._evolving_world_model_update)
     supports_deferred_diagnostics = "materialize_diagnostics" in signature.parameters
 
@@ -221,6 +236,7 @@ def _world_model_benchmark(config, device: torch.device, warmup: int, steps: int
         "seconds": elapsed,
         "milliseconds_per_step": elapsed * 1000.0 / steps,
         "updates_per_second": steps / elapsed,
+        "compiled_loss": compile_loss,
         "deferred_diagnostics_fast_path": supports_deferred_diagnostics,
         "returned_diagnostic_count": len(diagnostics),
         "scalars": {
@@ -293,7 +309,11 @@ def main() -> int:
     started_at = datetime.now(timezone.utc)
     torch.cuda.reset_peak_memory_stats(device)
     world_model = _world_model_benchmark(
-        config, device, args.wm_warmup, args.wm_steps
+        config,
+        device,
+        args.wm_warmup,
+        args.wm_steps,
+        compile_loss=args.compile_world_model_loss,
     )
     actor = _actor_benchmark(config, device, args.actor_warmup, args.actor_steps)
     completed_at = datetime.now(timezone.utc)
