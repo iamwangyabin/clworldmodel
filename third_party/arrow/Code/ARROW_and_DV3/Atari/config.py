@@ -69,6 +69,10 @@ TaskMechanismCapacityProfile = Literal[
     "expanded_640",
     "compact_128_128_64",
 ]
+TaskMechanismParameterization = Literal[
+    "dense_private",
+    "shared_frozen_down_film",
+]
 EvaluationSeedProtocol = Literal[
     "advancing",
     "fixed_validation_heldout_final",
@@ -324,6 +328,7 @@ class Config(Serialisable):
     task_mechanism_bank: bool = False
     task_mechanism_reuse: bool = True
     task_mechanism_capacity_profile: TaskMechanismCapacityProfile = "matched_512"
+    task_mechanism_parameterization: TaskMechanismParameterization = "dense_private"
     task_mechanism_recurrent_width: int = 512
     task_mechanism_representation_width: int = 512
     task_mechanism_transition_width: int = 256
@@ -503,6 +508,23 @@ class Config(Serialisable):
             raise ValueError(
                 "compact_128_128_64 is validated only for Evolving-Core"
             )
+        if self.task_mechanism_parameterization not in {
+            "dense_private",
+            "shared_frozen_down_film",
+        }:
+            raise ValueError(
+                "Unknown mechanism parameterization: "
+                f"{self.task_mechanism_parameterization!r}"
+            )
+        if self.task_mechanism_parameterization == "shared_frozen_down_film":
+            if not is_evolving_atomic:
+                raise ValueError(
+                    "shared_frozen_down_film is validated only for Evolving-Core"
+                )
+            if self.task_mechanism_capacity_profile != "matched_512":
+                raise ValueError(
+                    "shared_frozen_down_film preserves the matched_512 hidden widths"
+                )
         if not isinstance(self.task_mechanism_bank, bool) or not isinstance(
             self.task_mechanism_reuse, bool
         ):
@@ -1019,6 +1041,10 @@ class Config(Serialisable):
                 "Disabling mechanism reuse requires CNN-MechanismBank-ARROW"
             )
         if not uses_mechanism_bank:
+            if self.task_mechanism_parameterization != "dense_private":
+                raise ValueError(
+                    "Mechanism parameterization requires a named mechanism method"
+                )
             observed_atom_settings = (
                 self.task_mechanism_num_atoms,
                 self.task_mechanism_reuse_probe_epochs,

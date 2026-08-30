@@ -19,6 +19,8 @@ class ResidualMechanism(nn.Module):
         hidden_features: int,
         residual_scale: float = 0.1,
         num_atoms: int = 1,
+        shared_down: nn.Linear | None = None,
+        hidden_film: bool = False,
     ) -> None:
         super().__init__()
         if min(in_features, out_features, hidden_features) < 1:
@@ -36,16 +38,56 @@ class ResidualMechanism(nn.Module):
         self.residual_scale = float(residual_scale)
         self.num_atoms = int(num_atoms)
         self.atom_width = self.hidden_features // self.num_atoms
+        self.uses_shared_down = shared_down is not None
+        self.hidden_film = bool(hidden_film)
+        if shared_down is not None and (
+            shared_down.in_features != self.in_features
+            or shared_down.out_features != self.hidden_features
+        ):
+            raise ValueError(
+                "The shared down projection must match mechanism input/hidden widths"
+            )
+        if self.uses_shared_down != self.hidden_film:
+            raise ValueError(
+                "The shared-down parameterization requires private hidden FiLM"
+            )
         self.norm = nn.LayerNorm(self.in_features, eps=1e-3)
-        self.down = nn.Linear(self.in_features, self.hidden_features)
+        if shared_down is None:
+            self.down = nn.Linear(self.in_features, self.hidden_features)
+            object.__setattr__(self, "_shared_down", None)
+        else:
+            # MechanismBank owns and serializes the common projection exactly
+            # once. Bypass Module.__setattr__ here so this non-owning reference
+            # does not duplicate state_dict entries for every task.
+            self.register_module("down", None)
+            object.__setattr__(self, "_shared_down", shared_down)
+        if self.hidden_film:
+            self.hidden_scale = nn.Parameter(torch.ones(self.hidden_features))
+            self.hidden_shift = nn.Parameter(torch.zeros(self.hidden_features))
+        else:
+            self.register_parameter("hidden_scale", None)
+            self.register_parameter("hidden_shift", None)
         self.up = nn.Linear(self.hidden_features, self.out_features)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         self.norm.reset_parameters()
-        self.down.reset_parameters()
+        if self.down is not None:
+            self.down.reset_parameters()
+        if self.hidden_scale is not None:
+            nn.init.ones_(self.hidden_scale)
+        if self.hidden_shift is not None:
+            nn.init.zeros_(self.hidden_shift)
         nn.init.zeros_(self.up.weight)
         nn.init.zeros_(self.up.bias)
+
+    def down_projection(self) -> nn.Linear:
+        if self.down is not None:
+            return self.down
+        shared_down = self._shared_down
+        if shared_down is None:
+            raise RuntimeError("A shared-down mechanism lost its bank-owned projection")
+        return shared_down
 
     def hidden_features_for(self, inputs: torch.Tensor) -> torch.Tensor:
         if inputs.shape[-1] != self.in_features:
@@ -53,7 +95,10 @@ class ResidualMechanism(nn.Module):
                 f"Expected {self.in_features} mechanism features, "
                 f"got {inputs.shape[-1]}"
             )
-        return F.silu(self.down(self.norm(inputs)))
+        hidden = self.down_projection()(self.norm(inputs))
+        if self.hidden_scale is not None:
+            hidden = hidden * self.hidden_scale + self.hidden_shift
+        return F.silu(hidden)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         hidden = self.hidden_features_for(inputs)
@@ -80,6 +125,13 @@ class ResidualMechanism(nn.Module):
             "num_atoms": self.num_atoms,
             "atom_width": self.atom_width,
             "residual_scale": self.residual_scale,
+            "parameterization": (
+                "shared_frozen_down_film"
+                if self.uses_shared_down
+                else "dense_private"
+            ),
+            "shared_down": self.uses_shared_down,
+            "hidden_film": self.hidden_film,
             "parameters": sum(parameter.numel() for parameter in self.parameters()),
         }
 
@@ -198,6 +250,7 @@ class MechanismBank(nn.Module):
         reuse_enabled: bool = True,
         num_atoms: int = 1,
         include_task0: bool = False,
+        parameterization: str = "dense_private",
     ) -> None:
         super().__init__()
         if num_tasks < 2:
@@ -211,6 +264,20 @@ class MechanismBank(nn.Module):
         self.reuse_enabled = bool(reuse_enabled)
         self.num_atoms = int(num_atoms)
         self.include_task0 = bool(include_task0)
+        if parameterization not in {
+            "dense_private",
+            "shared_frozen_down_film",
+        }:
+            raise ValueError(
+                f"Unknown mechanism parameterization: {parameterization!r}"
+            )
+        self.parameterization = parameterization
+        self.shared_down: nn.Linear | None
+        if self.parameterization == "shared_frozen_down_film":
+            self.shared_down = nn.Linear(self.in_features, self.hidden_features)
+            self.shared_down.requires_grad_(False)
+        else:
+            self.shared_down = None
         self._recording_task_id: int | None = None
         self._recorded_atom_norm_sum: torch.Tensor | None = None
         self._recorded_correction_norm_sum: torch.Tensor | None = None
@@ -222,6 +289,8 @@ class MechanismBank(nn.Module):
                 hidden_features=self.hidden_features,
                 residual_scale=self.residual_scale,
                 num_atoms=self.num_atoms,
+                shared_down=self.shared_down,
+                hidden_film=self.shared_down is not None,
             )
             for _ in range(
                 self.num_tasks if self.include_task0 else self.num_tasks - 1
@@ -338,6 +407,8 @@ class MechanismBank(nn.Module):
         if phase not in {"full", "reuse_probe"}:
             raise ValueError(f"Unknown mechanism phase: {phase!r}")
         self.requires_grad_(False)
+        if self.shared_down is not None:
+            self.shared_down.requires_grad_(False)
         current_index = self._mechanism_index(task_index)
         if current_index is None:
             return
@@ -524,6 +595,11 @@ class MechanismBank(nn.Module):
             sum(parameter.numel() for parameter in route.parameters())
             for route in self.routes
         ]
+        shared_down_parameters = (
+            0
+            if self.shared_down is None
+            else sum(parameter.numel() for parameter in self.shared_down.parameters())
+        )
         return {
             "kind": "task_residual_mechanism_bank",
             "num_tasks": self.num_tasks,
@@ -535,8 +611,23 @@ class MechanismBank(nn.Module):
             "residual_scale": self.residual_scale,
             "reuse_enabled": self.reuse_enabled,
             "include_task0": self.include_task0,
+            "parameterization": self.parameterization,
+            "shared_down_parameters": shared_down_parameters,
+            "shared_down_trainable_parameters": (
+                0
+                if self.shared_down is None
+                else sum(
+                    parameter.numel()
+                    for parameter in self.shared_down.parameters()
+                    if parameter.requires_grad
+                )
+            ),
             "mechanism_parameters_per_task": mechanism_parameters,
             "mechanism_parameters_per_later_task": mechanism_parameters,
             "route_parameters_per_later_task": route_parameters,
-            "parameters": sum(mechanism_parameters) + sum(route_parameters),
+            "parameters": (
+                shared_down_parameters
+                + sum(mechanism_parameters)
+                + sum(route_parameters)
+            ),
         }

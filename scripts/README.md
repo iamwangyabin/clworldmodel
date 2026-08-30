@@ -43,6 +43,10 @@ contains experiment-facing code.
   launcher for the preregistered single-LR profiles or the 120/150/180/240
   duration profiles. It omits held-out-final evaluation and stops at the
   declared first-task boundary.
+- `run_evolving_shared_down_task0.py`: seed-0 acquisition gate for the
+  full-width shared-frozen-down plus private LayerNorm/FiLM/up mechanism. It
+  allocates all six original-order routes, trains only MsPacman for 90 epochs,
+  and omits held-out-final evaluation.
 - `select_evolving_task0_profile.py`: require and rank the unchanged control
   plus a complete LR or duration family using only the fixed-cohort
   pre-consolidation raw return. Duration selection chooses the shortest run

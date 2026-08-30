@@ -128,7 +128,9 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
         return data
 
     @staticmethod
-    def _world_model() -> WorldModel:
+    def _world_model(
+        mechanism_parameterization: str = "dense_private",
+    ) -> WorldModel:
         class WideEmbedder(nn.Module):
             output_size = 4096
 
@@ -162,6 +164,7 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
             task_mechanism_representation_width=8,
             task_mechanism_transition_width=8,
             task_mechanism_num_atoms=4,
+            task_mechanism_parameterization=mechanism_parameterization,
             task_symmetric_mechanisms=True,
             image_embedder=WideEmbedder(),
         )
@@ -238,6 +241,67 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
             wm._head_for(wm.reward_fc, wm.reward_experts, 0),
             wm._head_for(wm.reward_fc, wm.reward_experts, 1),
         )
+
+    def test_shared_down_world_model_keeps_basis_out_of_optimizer_ownership(
+        self,
+    ) -> None:
+        wm = self._world_model("shared_frozen_down_film")
+        banks = (
+            wm.rssm.recurrent_mechanism_bank,
+            wm.rssm.representation_mechanism_bank,
+            wm.rssm.transition_mechanism_bank,
+        )
+        shared_down_ids = {
+            id(parameter)
+            for bank in banks
+            for parameter in bank.shared_down.parameters()
+        }
+        self.assertEqual(
+            wm.rssm.task_mechanism_parameterization,
+            "shared_frozen_down_film",
+        )
+        self.assertTrue(shared_down_ids)
+        self.assertTrue(
+            all(
+                id(parameter) not in shared_down_ids
+                for task_id in range(3)
+                for parameter in (
+                    *wm.private_parameters(task_id),
+                    *wm.route_parameters(task_id),
+                )
+            )
+        )
+        self.assertTrue(
+            all(
+                id(parameter) not in shared_down_ids
+                for parameters in wm.shared_parameter_groups().values()
+                for parameter in parameters
+            )
+        )
+
+        wm.activate_task_expert(0)
+        self.assertTrue(
+            all(
+                not parameter.requires_grad
+                for bank in banks
+                for parameter in bank.shared_down.parameters()
+            )
+        )
+        self.assertTrue(
+            all(
+                parameter.requires_grad
+                for parameter in wm.private_parameters(0)
+            )
+        )
+
+        copied = copy.deepcopy(wm)
+        for bank in (
+            copied.rssm.recurrent_mechanism_bank,
+            copied.rssm.representation_mechanism_bank,
+            copied.rssm.transition_mechanism_bank,
+        ):
+            for mechanism in bank.mechanisms:
+                self.assertIs(mechanism.down_projection(), bank.shared_down)
 
     def test_task_activation_keeps_shared_core_and_only_current_private_plastic(self) -> None:
         wm = self._world_model()

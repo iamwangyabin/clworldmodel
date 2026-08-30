@@ -456,6 +456,19 @@ documented here, covered by focused parity tests, and followed by regenerating
     values. Focused launcher tests require exact four-field isolation, reject
     the profile outside the complete six-task curriculum, and verify the
     declared mechanism parameter ledger.
+50. Add the opt-in `shared_frozen_down_film` mechanism parameterization for the
+    separately named Evolving-Core original-six route allocation. Each
+    recurrent/posterior/prior mechanism bank registers one full-width down
+    projection, freezes it at seeded initialization, and shares it across every
+    task. Each task retains private LayerNorm, hidden feature-wise scale/shift,
+    zero-initialized up projection, and the unchanged four-atom route. The
+    `dense_private` default, `512/512/256` interfaces, replay, optimizer budgets,
+    Actor-Critics, and all previous named methods remain unchanged. A seed-0,
+    90-epoch MsPacman acquisition gate allocates all six routes but deliberately
+    omits held-out-final evaluation before any complete curriculum is attempted.
+    Focused tests cover single-registration checkpoint state, frozen-gradient
+    ownership, zero effect, lossless atom sums, reset isolation, strict config
+    isolation, and exact shared/private parameter accounting.
 
 ## Known issues at import
 

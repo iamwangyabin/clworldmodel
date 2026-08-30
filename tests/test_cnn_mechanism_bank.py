@@ -141,6 +141,135 @@ class CnnMechanismBankTests(unittest.TestCase):
             3,
         )
 
+    def test_shared_frozen_down_is_single_full_width_basis_with_private_film(
+        self,
+    ) -> None:
+        torch.manual_seed(29)
+        bank = MechanismBank(
+            num_tasks=3,
+            in_features=8,
+            out_features=6,
+            hidden_features=8,
+            num_atoms=4,
+            include_task0=True,
+            parameterization="shared_frozen_down_film",
+        )
+        self.assertIsNotNone(bank.shared_down)
+        for mechanism in bank.mechanisms:
+            self.assertIs(mechanism.down_projection(), bank.shared_down)
+            self.assertIsNone(mechanism.down)
+            self.assertEqual(tuple(mechanism.hidden_scale.shape), (8,))
+            self.assertEqual(tuple(mechanism.hidden_shift.shape), (8,))
+
+        state_keys = tuple(bank.state_dict())
+        self.assertEqual(
+            [name for name in state_keys if name.endswith("shared_down.weight")],
+            ["shared_down.weight"],
+        )
+        self.assertFalse(
+            any("mechanisms." in name and ".down." in name for name in state_keys)
+        )
+        self.assertTrue(
+            all(not parameter.requires_grad for parameter in bank.shared_down.parameters())
+        )
+
+        inputs = torch.randn(5, 8)
+        torch.testing.assert_close(
+            bank(inputs, 0), torch.zeros(5, 6), rtol=0, atol=0
+        )
+        bank.activate_task(1)
+        self.assertTrue(
+            all(
+                parameter.requires_grad
+                for parameter in bank.mechanism_for(1).parameters()
+            )
+        )
+        self.assertTrue(
+            all(not parameter.requires_grad for parameter in bank.shared_down.parameters())
+        )
+        loss = bank(inputs, 1).square().sum() + bank(inputs, 1).sum()
+        loss.backward()
+        mechanism = bank.mechanism_for(1)
+        self.assertIsNotNone(mechanism.up.weight.grad)
+        self.assertIsNone(bank.shared_down.weight.grad)
+
+        with torch.no_grad():
+            mechanism.up.weight.normal_()
+            mechanism.up.bias.normal_()
+        output = mechanism(inputs)
+        torch.testing.assert_close(
+            mechanism.atom_outputs(inputs).sum(dim=-2), output
+        )
+        shared_before = {
+            name: tensor.detach().clone()
+            for name, tensor in bank.shared_down.state_dict().items()
+        }
+        task0_before = {
+            name: tensor.detach().clone()
+            for name, tensor in bank.mechanism_for(0).state_dict().items()
+        }
+        bank.reset_task(1)
+        for name, expected in shared_before.items():
+            torch.testing.assert_close(
+                bank.shared_down.state_dict()[name], expected, rtol=0, atol=0
+            )
+        for name, expected in task0_before.items():
+            torch.testing.assert_close(
+                bank.mechanism_for(0).state_dict()[name], expected, rtol=0, atol=0
+            )
+
+    def test_shared_frozen_down_production_parameter_budget_is_exact(self) -> None:
+        banks = (
+            MechanismBank(
+                num_tasks=6,
+                in_features=512,
+                out_features=512,
+                hidden_features=512,
+                num_atoms=4,
+                include_task0=True,
+                parameterization="shared_frozen_down_film",
+            ),
+            MechanismBank(
+                num_tasks=6,
+                in_features=4096 + 512,
+                out_features=32 * 32,
+                hidden_features=512,
+                num_atoms=4,
+                include_task0=True,
+                parameterization="shared_frozen_down_film",
+            ),
+            MechanismBank(
+                num_tasks=6,
+                in_features=512,
+                out_features=32 * 32,
+                hidden_features=256,
+                num_atoms=4,
+                include_task0=True,
+                parameterization="shared_frozen_down_film",
+            ),
+        )
+        reports = [bank.parameter_report() for bank in banks]
+        self.assertEqual(
+            [report["mechanism_parameters_per_task"][0] for report in reports],
+            [264_704, 535_552, 264_704],
+        )
+        self.assertEqual(
+            [report["shared_down_parameters"] for report in reports],
+            [262_656, 2_359_808, 131_328],
+        )
+        self.assertEqual(
+            sum(
+                report["mechanism_parameters_per_task"][0]
+                for report in reports
+            ),
+            1_064_960,
+        )
+        self.assertEqual(
+            sum(report["shared_down_parameters"] for report in reports),
+            2_753_792,
+        )
+        self.assertEqual(sum(report["parameters"] for report in reports), 9_143_732)
+
     def test_zero_effect_and_route_gradient_contract(self) -> None:
         bank = MechanismBank(
             num_tasks=3,

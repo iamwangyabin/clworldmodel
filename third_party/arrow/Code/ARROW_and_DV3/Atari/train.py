@@ -892,6 +892,9 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
             wm.rssm.task_mechanism_bank_enabled
         ),
         "rssm_task_mechanism_reuse": wm.rssm.task_mechanism_reuse,
+        "rssm_task_mechanism_parameterization": (
+            wm.rssm.task_mechanism_parameterization
+        ),
         "rssm_task_symmetric_mechanisms": wm.rssm.task_symmetric_mechanisms,
         "rssm_task_mechanism_banks": mechanism_banks,
         "rssm_task_mechanism_parameters_per_later_task": (
@@ -3101,6 +3104,18 @@ if __name__ == "__main__":
             "old_policy_retention=frozen_route_imagination "
             f"current_fraction={config.dino_fullbank_current_task_fraction}"
         )
+    elif config.continual_method == "evolving_atomic_rssm_arrow":
+        print(
+            "Evolving-Core Atomic RSSM routing: "
+            f"tasks={config.rssm_num_experts} actor_bank=per_task "
+            "base=continually_updated_shared_cnn_rssm "
+            "private=projector_qfp_atoms_heads_actor_critic "
+            f"widths={config.task_mechanism_recurrent_width}/"
+            f"{config.task_mechanism_representation_width}/"
+            f"{config.task_mechanism_transition_width} "
+            f"parameterization={config.task_mechanism_parameterization} "
+            f"reuse={config.task_mechanism_reuse}"
+        )
     elif config.continual_method == "cnn_mechanism_bank_arrow":
         print(
             "CNN-MechanismBank-ARROW routing: "
@@ -3124,6 +3139,7 @@ if __name__ == "__main__":
             f"{config.task_mechanism_representation_width}/"
             f"{config.task_mechanism_transition_width} "
             f"atoms={config.task_mechanism_num_atoms} "
+            f"parameterization={config.task_mechanism_parameterization} "
             f"reuse_probe_epochs={config.task_mechanism_reuse_probe_epochs} "
             f"route_lr_scale={config.task_mechanism_route_lr_scale} "
             f"current_fraction={config.dino_fullbank_current_task_fraction}"
@@ -3270,6 +3286,9 @@ if __name__ == "__main__":
         task_mechanism_transition_width=config.task_mechanism_transition_width,
         task_mechanism_residual_scale=config.task_mechanism_residual_scale,
         task_mechanism_num_atoms=config.task_mechanism_num_atoms,
+        task_mechanism_parameterization=(
+            config.task_mechanism_parameterization
+        ),
         task_symmetric_mechanisms=config.task_atomic_routes,
     ).to(device)
     resume_world_model_opened: list[str] = []
