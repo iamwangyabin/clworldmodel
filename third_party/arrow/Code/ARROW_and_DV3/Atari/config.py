@@ -64,7 +64,11 @@ ActorNetwork = Literal[
 ]
 ActorCriticOptimizer = Literal["adam", "laprop"]
 ActorCriticSchedule = Literal["constant", "task_cosine_decay"]
-TaskMechanismCapacityProfile = Literal["matched_512", "expanded_640"]
+TaskMechanismCapacityProfile = Literal[
+    "matched_512",
+    "expanded_640",
+    "compact_128_128_64",
+]
 EvaluationSeedProtocol = Literal[
     "advancing",
     "fixed_validation_heldout_final",
@@ -486,10 +490,18 @@ class Config(Serialisable):
         if self.task_mechanism_capacity_profile not in {
             "matched_512",
             "expanded_640",
+            "compact_128_128_64",
         }:
             raise ValueError(
                 "Unknown mechanism capacity profile: "
                 f"{self.task_mechanism_capacity_profile!r}"
+            )
+        if (
+            self.task_mechanism_capacity_profile == "compact_128_128_64"
+            and not is_evolving_atomic
+        ):
+            raise ValueError(
+                "compact_128_128_64 is validated only for Evolving-Core"
             )
         if not isinstance(self.task_mechanism_bank, bool) or not isinstance(
             self.task_mechanism_reuse, bool
@@ -918,11 +930,11 @@ class Config(Serialisable):
                     raise ValueError(
                         "CNN-MechanismBank disables every RSSM LoRA/output-adapter path"
                     )
-                expected_mechanism_settings = (
-                    (True, 640, 640, 320, 0.1)
-                    if self.task_mechanism_capacity_profile == "expanded_640"
-                    else (True, 512, 512, 256, 0.1)
-                )
+                expected_mechanism_settings = {
+                    "matched_512": (True, 512, 512, 256, 0.1),
+                    "expanded_640": (True, 640, 640, 320, 0.1),
+                    "compact_128_128_64": (True, 128, 128, 64, 0.1),
+                }[self.task_mechanism_capacity_profile]
                 observed_mechanism_settings = (
                     self.task_mechanism_bank,
                     self.task_mechanism_recurrent_width,

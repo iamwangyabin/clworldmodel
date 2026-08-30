@@ -446,6 +446,16 @@ documented here, covered by focused parity tests, and followed by regenerating
     before any old artifact is touched. Focused tests cover config isolation,
     complete-pair gating, preservation on incomplete writes, rolling cleanup,
     six-task budgets, and the launch storage gate.
+49. Add the opt-in `compact_128_128_64` mechanism-capacity profile for the
+    separately named original-six Evolving-Core pilot. It changes only the
+    recurrent/posterior/prior residual bottlenecks from `512/512/256` to
+    `128/128/64`; fixed RSSM interfaces, four-atom routing, zero-effect
+    initialization, private heads, independent Actor-Critics, replay,
+    optimizers, budgets, and evaluation remain unchanged. The existing
+    `matched_512` default and all baseline configurations retain their prior
+    values. Focused launcher tests require exact four-field isolation, reject
+    the profile outside the complete six-task curriculum, and verify the
+    declared mechanism parameter ledger.
 
 ## Known issues at import
 

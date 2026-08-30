@@ -30,11 +30,15 @@ contains experiment-facing code.
   projectors/atoms/heads, independent Actor-Critics, replay-protected
   component gradients, and boundary consolidation. It supports the three
   predeclared three-task orders plus the separately named original-six-task
-  seed-0 pilot, and always disables world-model compilation.
+  seed-0 pilot. The explicit `compact_128_128_64` original-six profile is a
+  separately named mechanism-capacity ablation; the default remains the
+  `512/512/256` protocol. The launcher always disables world-model compilation.
 - `smoke_evolving_atomic_rssm.py`: target-CUDA, production-shaped synthetic
   update covering the fixed 12-current/4-memory split, component projection,
-  frozen old private state, and shared/private/route Adam steps. It performs no
-  environment interaction and is evidence of execution correctness only.
+  frozen old private state, and shared/private/route Adam steps. Its explicit
+  compact-mechanism profile allocates the complete six-task compact topology.
+  It performs no environment interaction and is evidence of execution
+  correctness only.
 - `run_evolving_task0_sweep.py`: fixed-order, seed-0 MsPacman acquisition
   launcher for the preregistered single-LR profiles or the 120/150/180/240
   duration profiles. It omits held-out-final evaluation and stops at the

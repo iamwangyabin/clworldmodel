@@ -35,6 +35,10 @@ PROTOCOL = "Evolving-Core-Atomic-RSSM-ARROW-v1-Atari-TaskAware"
 ORIGINAL_SIX_TASK_PROTOCOL = (
     "Evolving-Core-Atomic-RSSM-ARROW-v2-OriginalSix-Atari-TaskAware-Pilot"
 )
+COMPACT_MECHANISM_ORIGINAL_SIX_PROTOCOL = (
+    "Evolving-Core-Atomic-RSSM-CompactMechanism-128-128-64-ARROW-v1-"
+    "OriginalSix-Atari-TaskAware-Pilot"
+)
 TASK_ORDERS = {
     "mspacman-boxing-crazyclimber": (
         "ALE/MsPacman-v5",
@@ -61,16 +65,110 @@ TASK_ORDERS = {
     ),
 }
 TASK_DURATION_EPOCHS = 90
-MECHANISM_WIDTHS = (512, 512, 256)
+DEFAULT_MECHANISM_PROFILE = "matched_512"
+COMPACT_MECHANISM_PROFILE = "compact_128_128_64"
+MECHANISM_PROFILE_WIDTHS = {
+    DEFAULT_MECHANISM_PROFILE: (512, 512, 256),
+    COMPACT_MECHANISM_PROFILE: (128, 128, 64),
+}
 ORIGINAL_SIX_MINIMUM_FREE_BYTES = 48 * 1024**3
 
 
-def _protocol_for_task_order(task_order: str) -> str:
+def _validate_mechanism_profile(task_order: str, mechanism_profile: str) -> None:
     if task_order not in TASK_ORDERS:
         raise ValueError(f"Unknown Evolving-Core task order: {task_order!r}")
+    if mechanism_profile not in MECHANISM_PROFILE_WIDTHS:
+        raise ValueError(
+            f"Unknown Evolving-Core mechanism profile: {mechanism_profile!r}"
+        )
+    if (
+        mechanism_profile == COMPACT_MECHANISM_PROFILE
+        and task_order != "arrow-original-six"
+    ):
+        raise ValueError(
+            "The compact 128/128/64 mechanism capacity ablation is fixed to "
+            "the complete ARROW original-six order"
+        )
+
+
+def _protocol_for_task_order(
+    task_order: str, mechanism_profile: str = DEFAULT_MECHANISM_PROFILE
+) -> str:
+    _validate_mechanism_profile(task_order, mechanism_profile)
+    if mechanism_profile == COMPACT_MECHANISM_PROFILE:
+        return COMPACT_MECHANISM_ORIGINAL_SIX_PROTOCOL
     if task_order == "arrow-original-six":
         return ORIGINAL_SIX_TASK_PROTOCOL
     return PROTOCOL
+
+
+def _residual_mechanism_parameters(
+    *, in_features: int, out_features: int, hidden_features: int
+) -> int:
+    """Return LayerNorm/down/up parameters for one residual mechanism."""
+
+    return (
+        2 * in_features
+        + in_features * hidden_features
+        + hidden_features
+        + hidden_features * out_features
+        + out_features
+    )
+
+
+def _mechanism_capacity_manifest(
+    *, task_count: int, mechanism_profile: str
+) -> dict[str, object]:
+    """Record fixed Atari RSSM capacity before allocating the full model."""
+
+    if task_count < 1:
+        raise ValueError("task_count must be positive")
+    if mechanism_profile not in MECHANISM_PROFILE_WIDTHS:
+        raise ValueError(
+            f"Unknown Evolving-Core mechanism profile: {mechanism_profile!r}"
+        )
+    recurrent_width, representation_width, transition_width = (
+        MECHANISM_PROFILE_WIDTHS[mechanism_profile]
+    )
+    per_task = {
+        "recurrent": _residual_mechanism_parameters(
+            in_features=512,
+            out_features=512,
+            hidden_features=recurrent_width,
+        ),
+        "representation_posterior": _residual_mechanism_parameters(
+            in_features=4096 + 512,
+            out_features=32 * 32,
+            hidden_features=representation_width,
+        ),
+        "transition_prior": _residual_mechanism_parameters(
+            in_features=512,
+            out_features=32 * 32,
+            hidden_features=transition_width,
+        ),
+    }
+    per_task_total = sum(per_task.values())
+    route_parameters = 3 * 4 * sum(range(task_count))
+    return {
+        "profile": mechanism_profile,
+        "widths": {
+            "recurrent": recurrent_width,
+            "representation_posterior": representation_width,
+            "transition_prior": transition_width,
+        },
+        "fixed_interfaces": {
+            "recurrent": [512, 512],
+            "representation_posterior": [4608, 1024],
+            "transition_prior": [512, 1024],
+        },
+        "atoms_per_mechanism": 4,
+        "parameters_per_task": {**per_task, "total": per_task_total},
+        "private_mechanism_parameters": task_count * per_task_total,
+        "reuse_route_parameters": route_parameters,
+        "mechanism_and_route_parameters": (
+            task_count * per_task_total + route_parameters
+        ),
+    }
 
 
 def _existing_ancestor(path: Path) -> Path:
@@ -126,6 +224,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--classification", choices=("pilot", "official"), default="pilot"
     )
+    parser.add_argument(
+        "--mechanism-profile",
+        choices=tuple(MECHANISM_PROFILE_WIDTHS),
+        default=DEFAULT_MECHANISM_PROFILE,
+        help="Explicit mechanism-capacity preset; the default preserves v1/v2.",
+    )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
@@ -134,11 +238,16 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolved_config(source: dict, *, task_order: str) -> dict:
+def _resolved_config(
+    source: dict,
+    *,
+    task_order: str,
+    mechanism_profile: str = DEFAULT_MECHANISM_PROFILE,
+) -> dict:
     """Compose the fixed named protocol without changing existing baselines."""
 
-    if task_order not in TASK_ORDERS:
-        raise ValueError(f"Unknown Evolving-Core task order: {task_order!r}")
+    _validate_mechanism_profile(task_order, mechanism_profile)
+    mechanism_widths = MECHANISM_PROFILE_WIDTHS[mechanism_profile]
     config = copy.deepcopy(source)
     by_name = {
         task["name"]: task for task in config["esc"]["env_configs"]
@@ -169,10 +278,10 @@ def _resolved_config(source: dict, *, task_order: str) -> dict:
             "task_recurrent_output_adapter_features": 0,
             "task_mechanism_bank": True,
             "task_mechanism_reuse": True,
-            "task_mechanism_capacity_profile": "matched_512",
-            "task_mechanism_recurrent_width": MECHANISM_WIDTHS[0],
-            "task_mechanism_representation_width": MECHANISM_WIDTHS[1],
-            "task_mechanism_transition_width": MECHANISM_WIDTHS[2],
+            "task_mechanism_capacity_profile": mechanism_profile,
+            "task_mechanism_recurrent_width": mechanism_widths[0],
+            "task_mechanism_representation_width": mechanism_widths[1],
+            "task_mechanism_transition_width": mechanism_widths[2],
             "task_mechanism_residual_scale": 0.1,
             "task_mechanism_num_atoms": 4,
             "task_mechanism_reuse_probe_epochs": 0,
@@ -323,18 +432,32 @@ def main() -> int:
     )
     source_path = _config_path("original", args.seed)
     source = _verify_primary_config(source_path, "original", args.seed)
-    config = _resolved_config(source, task_order=args.task_order)
+    config = _resolved_config(
+        source,
+        task_order=args.task_order,
+        mechanism_profile=args.mechanism_profile,
+    )
     task_count = len(TASK_ORDERS[args.task_order])
-    protocol = _protocol_for_task_order(args.task_order)
+    protocol = _protocol_for_task_order(
+        args.task_order, mechanism_profile=args.mechanism_profile
+    )
     if args.task_order == "arrow-original-six" and args.classification != "pilot":
         raise ValueError("The original-six Evolving-Core campaign is pilot-only")
     python = args.python.expanduser().resolve()
+    mechanism_output_suffix = (
+        ""
+        if args.mechanism_profile == DEFAULT_MECHANISM_PROFILE
+        else f"_{args.mechanism_profile}"
+    )
     output_dir = (
         args.output_dir.expanduser().resolve()
         if args.output_dir is not None
         else ROOT
         / "runs"
-        / f"evolving_atomic_rssm_{args.task_order}_s{args.seed}_{args.classification}"
+        / (
+            f"evolving_atomic_rssm_{args.task_order}{mechanism_output_suffix}_"
+            f"s{args.seed}_{args.classification}"
+        )
     )
     config_path = output_dir / "resolved_training_config.json"
     task_snapshot_dir = output_dir / "task_boundary_snapshots"
@@ -356,7 +479,11 @@ def main() -> int:
     )
     launch = {
         "schema_version": 1,
-        "method": "Evolving-Core Atomic RSSM",
+        "method": (
+            "Evolving-Core Atomic RSSM"
+            if args.mechanism_profile == DEFAULT_MECHANISM_PROFILE
+            else "Evolving-Core Atomic RSSM Compact Mechanism 128/128/64"
+        ),
         "protocol": protocol,
         "classification": args.classification,
         "status": "dry_run" if args.dry_run else "launching",
@@ -372,6 +499,14 @@ def main() -> int:
         "source_task1_snapshot": None,
         "shared_core": "CNN plus posterior/recurrent/prior RSSM; always plastic",
         "private_state": "per-task projector, Q/F/P atoms, heads, actor-critic",
+        "mechanism_capacity": _mechanism_capacity_manifest(
+            task_count=task_count,
+            mechanism_profile=args.mechanism_profile,
+        ),
+        "capacity_control_profile": DEFAULT_MECHANISM_PROFILE,
+        "capacity_ablation_only": (
+            args.mechanism_profile != DEFAULT_MECHANISM_PROFILE
+        ),
         "gradient_rule": "per-component conflicting-current-direction projection",
         "interface_distillation": {
             "posterior_kl": config["interface_q_scale"],

@@ -28,11 +28,15 @@ if torch is not None:
     sys.path.insert(0, str(VENDORED_ATARI))
     from config import Config
     from run_evolving_atomic_rssm import (
+        COMPACT_MECHANISM_ORIGINAL_SIX_PROTOCOL,
+        COMPACT_MECHANISM_PROFILE,
+        DEFAULT_MECHANISM_PROFILE,
         ORIGINAL_SIX_MINIMUM_FREE_BYTES,
         ORIGINAL_SIX_TASK_PROTOCOL,
         PROTOCOL,
         TASK_ORDERS,
         _budget_manifest,
+        _mechanism_capacity_manifest,
         _protocol_for_task_order,
         _resolved_config,
         _storage_preflight,
@@ -106,6 +110,102 @@ class EvolvingAtomicRssmLauncherTests(unittest.TestCase):
         self.assertEqual(
             _protocol_for_task_order("mspacman-boxing-crazyclimber"), PROTOCOL
         )
+
+    def test_compact_profile_changes_only_mechanism_capacity(self) -> None:
+        matched_data = _resolved_config(
+            self._source(), task_order="arrow-original-six"
+        )
+        compact_data = _resolved_config(
+            self._source(),
+            task_order="arrow-original-six",
+            mechanism_profile=COMPACT_MECHANISM_PROFILE,
+        )
+        differing_keys = {
+            key
+            for key in matched_data
+            if matched_data[key] != compact_data[key]
+        }
+        self.assertEqual(
+            differing_keys,
+            {
+                "task_mechanism_capacity_profile",
+                "task_mechanism_recurrent_width",
+                "task_mechanism_representation_width",
+                "task_mechanism_transition_width",
+            },
+        )
+        compact = Config.from_dict(compact_data)
+        self.assertEqual(
+            compact.task_mechanism_capacity_profile,
+            COMPACT_MECHANISM_PROFILE,
+        )
+        self.assertEqual(
+            (
+                compact.task_mechanism_recurrent_width,
+                compact.task_mechanism_representation_width,
+                compact.task_mechanism_transition_width,
+            ),
+            (128, 128, 64),
+        )
+        self.assertEqual(
+            _protocol_for_task_order(
+                "arrow-original-six",
+                mechanism_profile=COMPACT_MECHANISM_PROFILE,
+            ),
+            COMPACT_MECHANISM_ORIGINAL_SIX_PROTOCOL,
+        )
+        self.assertEqual(
+            _protocol_for_task_order(
+                "arrow-original-six",
+                mechanism_profile=DEFAULT_MECHANISM_PROFILE,
+            ),
+            ORIGINAL_SIX_TASK_PROTOCOL,
+        )
+
+    def test_compact_profile_has_exact_declared_parameter_reduction(self) -> None:
+        compact = _mechanism_capacity_manifest(
+            task_count=6,
+            mechanism_profile=COMPACT_MECHANISM_PROFILE,
+        )
+        matched = _mechanism_capacity_manifest(
+            task_count=6,
+            mechanism_profile=DEFAULT_MECHANISM_PROFILE,
+        )
+
+        self.assertEqual(
+            compact["parameters_per_task"],
+            {
+                "recurrent": 132_736,
+                "representation_posterior": 731_264,
+                "transition_prior": 100_416,
+                "total": 964_416,
+            },
+        )
+        self.assertEqual(compact["private_mechanism_parameters"], 5_786_496)
+        self.assertEqual(compact["reuse_route_parameters"], 180)
+        self.assertEqual(compact["mechanism_and_route_parameters"], 5_786_676)
+        self.assertEqual(matched["mechanism_and_route_parameters"], 22_897_332)
+
+    def test_compact_profile_rejects_shorter_curricula(self) -> None:
+        with self.assertRaisesRegex(ValueError, "complete ARROW original-six"):
+            _resolved_config(
+                self._source(),
+                task_order="mspacman-boxing-crazyclimber",
+                mechanism_profile=COMPACT_MECHANISM_PROFILE,
+            )
+
+    def test_compact_profile_is_not_a_baseline_side_effect(self) -> None:
+        invalid = self._source()
+        invalid.update(
+            {
+                "task_mechanism_capacity_profile": COMPACT_MECHANISM_PROFILE,
+                "task_mechanism_recurrent_width": 128,
+                "task_mechanism_representation_width": 128,
+                "task_mechanism_transition_width": 64,
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "only for Evolving-Core"):
+            Config.from_dict(invalid)
 
     def test_budget_ledger_separates_online_and_consolidation_compute(self) -> None:
         config = _resolved_config(
