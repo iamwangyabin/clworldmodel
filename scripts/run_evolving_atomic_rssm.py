@@ -21,6 +21,7 @@ from launcher_support import (
 )
 from run_arrow_ar50_atari import (
     ARROW_ROOT,
+    FASTKAN_AC_STABLE_CONFIG_OVERRIDES,
     ROOT,
     SEEDS,
     THREAD_ENV_KEYS,
@@ -34,6 +35,12 @@ from summarize_continual_metrics import build_run_report
 
 
 FORMAL_TASK0_PROFILE = "fixed_v2"
+PRIVATE_MLP_BEHAVIOR = "private_mlp"
+SHARED_FASTKAN_STABLE_BEHAVIOR = "shared_fastkan_stable"
+BEHAVIOR_PROFILES = (
+    PRIVATE_MLP_BEHAVIOR,
+    SHARED_FASTKAN_STABLE_BEHAVIOR,
+)
 FIXED_TASK0_PROFILE_LRS = {
     "fixed_v1": 2e-4,
     "fixed_v2": 3e-4,
@@ -42,6 +49,10 @@ PROTOCOLS = {
     "fixed_v1": "Evolving-Core-Atomic-RSSM-ARROW-v1-Atari-TaskAware",
     "fixed_v2": "Evolving-Core-Atomic-RSSM-ARROW-v2-Atari-TaskAware",
 }
+SHARED_FASTKAN_PROTOCOL = (
+    "Evolving-Core-SharedFrozenDown-SharedFastKANAC-StableTargets-ARROW-v1-"
+    "ThreeTask-Atari-TaskAware-Pilot"
+)
 TASK_ORDERS = {
     "mspacman-boxing-crazyclimber": (
         "ALE/MsPacman-v5",
@@ -62,6 +73,20 @@ TASK_ORDERS = {
 TASK_DURATION_EPOCHS = 90
 TASK_COUNT = 3
 MECHANISM_WIDTHS = (512, 512, 256)
+
+# Exact FP32 online parameter counts for the fixed 64x64 Atari topology.  The
+# launcher records these prospective counts and the trainer independently
+# writes runtime tensor accounting for every actual run.
+ARROW_WORLD_MODEL_PARAMETERS = 19_498_853
+TASK_PROJECTOR_PARAMETERS = 34_240
+TASK_MECHANISM_PARAMETERS = 3_816_192
+SHARED_FROZEN_DOWN_PARAMETERS = 2_753_792
+TASK_SHARED_DOWN_PRIVATE_MECHANISM_PARAMETERS = 1_064_960
+TASK_PRIVATE_HEAD_ADDITION_PARAMETERS = 8_562_629
+MLP_ACTOR_PARAMETERS = 797_202
+MLP_CRITIC_PARAMETERS = 917_759
+FASTKAN_ACTOR_PARAMETERS = 793_692
+FASTKAN_CRITIC_PARAMETERS = 906_978
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -84,6 +109,16 @@ def _parser() -> argparse.ArgumentParser:
             "default; fixed_v1 remains available for exact reproduction."
         ),
     )
+    parser.add_argument(
+        "--behavior-profile",
+        choices=BEHAVIOR_PROFILES,
+        default=PRIVATE_MLP_BEHAVIOR,
+        help=(
+            "private_mlp exactly reproduces Evolving-Core v1/v2 behavior banks; "
+            "shared_fastkan_stable selects the separately named shared-frozen-"
+            "down world model plus shared FastKAN Actor/Critic with replay rehearsal."
+        ),
+    )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
@@ -97,6 +132,7 @@ def _resolved_config(
     *,
     task_order: str,
     task0_profile: str = FORMAL_TASK0_PROFILE,
+    behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
 ) -> dict:
     """Compose the fixed named protocol without changing existing baselines."""
 
@@ -105,6 +141,16 @@ def _resolved_config(
     if task0_profile not in FIXED_TASK0_PROFILE_LRS:
         raise ValueError(
             f"Unknown full-curriculum Task-0 profile: {task0_profile!r}"
+        )
+    if behavior_profile not in BEHAVIOR_PROFILES:
+        raise ValueError(f"Unknown behavior profile: {behavior_profile!r}")
+    if (
+        behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
+        and task0_profile != "fixed_v2"
+    ):
+        raise ValueError(
+            "Shared-Frozen-Down + Shared FastKAN inherits the fixed_v2 Task-0 "
+            "world-model optimizer profile"
         )
     config = copy.deepcopy(source)
     by_name = {
@@ -136,6 +182,7 @@ def _resolved_config(
             "task_mechanism_bank": True,
             "task_mechanism_reuse": True,
             "task_mechanism_capacity_profile": "matched_512",
+            "task_mechanism_parameterization": "dense_private",
             "task_mechanism_recurrent_width": MECHANISM_WIDTHS[0],
             "task_mechanism_representation_width": MECHANISM_WIDTHS[1],
             "task_mechanism_transition_width": MECHANISM_WIDTHS[2],
@@ -176,12 +223,30 @@ def _resolved_config(
             "boundary_consolidation_steps": 1000,
             "boundary_consolidation_lr": 2e-5,
             "boundary_max_return_drop": 0.05,
+            "evolving_shared_behavior_current_task_fraction": 1.0,
             "task_private_heads": True,
             "task_private_actor_critic": True,
             "task_atomic_routes": True,
             "full_task_rssm_experts": False,
         }
     )
+    if behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR:
+        config.update(FASTKAN_AC_STABLE_CONFIG_OVERRIDES)
+        config.update(
+            {
+                "continual_method": "evolving_atomic_rssm_shared_fastkan_arrow",
+                "task_mechanism_parameterization": "shared_frozen_down_film",
+                "fresh_ac": False,
+                "task_private_actor_critic": False,
+                "evolving_shared_behavior_current_task_fraction": 0.75,
+                "shared_actor_imagination_distillation": False,
+                "shared_actor_distill_scale": 0.0,
+                "shared_actor_distill_interval": 1,
+                "shared_actor_distill_n_sync": 1,
+                "shared_actor_distill_burnin_steps": 0,
+                "shared_actor_distill_steps": 1,
+            }
+        )
     for replay_config in config["replay_buffers"]:
         replay_config["rb_device"] = "cpu"
     return config
@@ -215,6 +280,158 @@ def _training_command(
     ]
 
 
+def _behavior_update_budget(config: dict) -> dict[str, int]:
+    """Return exact routed Actor-Critic update counts without adding steps."""
+
+    updates_per_epoch = int(config["ac_train_steps"])
+    current_fraction = float(
+        config.get("evolving_shared_behavior_current_task_fraction", 1.0)
+    )
+    totals = {task_id: 0 for task_id in range(TASK_COUNT)}
+    for current_task_id in range(TASK_COUNT):
+        if current_task_id == 0 or current_fraction == 1.0:
+            allocation = {current_task_id: updates_per_epoch}
+        else:
+            current_updates = int(updates_per_epoch * current_fraction + 0.5)
+            old_total = updates_per_epoch - current_updates
+            quotient, remainder = divmod(old_total, current_task_id)
+            allocation = {
+                task_id: quotient + int(task_id < remainder)
+                for task_id in range(current_task_id)
+            }
+            allocation[current_task_id] = current_updates
+        for task_id, updates in allocation.items():
+            totals[task_id] += TASK_DURATION_EPOCHS * updates
+    return {str(task_id): updates for task_id, updates in totals.items()}
+
+
+def _parameter_manifest(config: dict) -> dict:
+    """Analytic ledger for the fixed three-task online inference topology."""
+
+    task_count = len(config["esc"]["env_configs"])
+    if task_count != TASK_COUNT:
+        raise ValueError(
+            f"Expected {TASK_COUNT} Evolving-Core tasks, got {task_count}"
+        )
+    mechanism_parameterization = config["task_mechanism_parameterization"]
+    if mechanism_parameterization == "shared_frozen_down_film":
+        shared_mechanism_parameters = SHARED_FROZEN_DOWN_PARAMETERS
+        private_mechanism_parameters = (
+            TASK_SHARED_DOWN_PRIVATE_MECHANISM_PARAMETERS
+        )
+    elif mechanism_parameterization == "dense_private":
+        shared_mechanism_parameters = 0
+        private_mechanism_parameters = TASK_MECHANISM_PARAMETERS
+    else:
+        raise ValueError(
+            "Unknown mechanism parameterization in parameter ledger: "
+            f"{mechanism_parameterization!r}"
+        )
+    mechanism_parameters = shared_mechanism_parameters + sum(
+        private_mechanism_parameters + 12 * task_id
+        for task_id in range(task_count)
+    )
+    world_model_parameters = (
+        ARROW_WORLD_MODEL_PARAMETERS
+        + task_count * TASK_PROJECTOR_PARAMETERS
+        + mechanism_parameters
+        + (task_count - 1) * TASK_PRIVATE_HEAD_ADDITION_PARAMETERS
+    )
+    shared_fastkan = (
+        config["continual_method"]
+        == "evolving_atomic_rssm_shared_fastkan_arrow"
+    )
+    mlp_pair = MLP_ACTOR_PARAMETERS + MLP_CRITIC_PARAMETERS
+    fastkan_pair = FASTKAN_ACTOR_PARAMETERS + FASTKAN_CRITIC_PARAMETERS
+    behavior_parameters = fastkan_pair if shared_fastkan else task_count * mlp_pair
+    online_parameters = world_model_parameters + behavior_parameters
+    matched_world_model_private_mlp_parameters = (
+        world_model_parameters + task_count * mlp_pair
+    )
+    dense_v2_world_model_parameters = (
+        ARROW_WORLD_MODEL_PARAMETERS
+        + task_count * TASK_PROJECTOR_PARAMETERS
+        + sum(
+            TASK_MECHANISM_PARAMETERS + 12 * task_id
+            for task_id in range(task_count)
+        )
+        + (task_count - 1) * TASK_PRIVATE_HEAD_ADDITION_PARAMETERS
+    )
+    dense_v2_online_parameters = (
+        dense_v2_world_model_parameters + task_count * mlp_pair
+    )
+    arrow_online_parameters = ARROW_WORLD_MODEL_PARAMETERS + mlp_pair
+    per_task_world_model_additions = {
+        str(task_id): (
+            TASK_PROJECTOR_PARAMETERS
+            + private_mechanism_parameters
+            + 12 * task_id
+            + (
+                TASK_PRIVATE_HEAD_ADDITION_PARAMETERS if task_id > 0 else 0
+            )
+        )
+        for task_id in range(task_count)
+    }
+    runtime_verification_artifacts = [
+        "model_parameter_accounting.json",
+        "actor_critic_parameter_accounting.json",
+    ]
+    if shared_fastkan:
+        runtime_verification_artifacts.append(
+            "shared_behavior_replay_accounting.json"
+        )
+    result = {
+        "schema_version": 1,
+        "scope": (
+            "online inference parameters; FP32 master weights; excludes optimizer "
+            "state, gradients, activations, Replay, and boundary world-model teachers"
+        ),
+        "world_model_parameters": world_model_parameters,
+        "mechanism_parameterization": mechanism_parameterization,
+        "shared_frozen_down_parameters": shared_mechanism_parameters,
+        "behavior_parameters": behavior_parameters,
+        "online_parameters": online_parameters,
+        "fp32_parameter_bytes": online_parameters * 4,
+        "per_task_world_model_additions": per_task_world_model_additions,
+        "per_later_task_behavior_growth": 0 if shared_fastkan else mlp_pair,
+        "runtime_verification_artifacts": runtime_verification_artifacts,
+        "comparison_to_matched_world_model_private_mlp": {
+            "reference_parameters": matched_world_model_private_mlp_parameters,
+            "difference": (
+                online_parameters - matched_world_model_private_mlp_parameters
+            ),
+            "relative_difference": (
+                online_parameters / matched_world_model_private_mlp_parameters
+                - 1.0
+            ),
+        },
+        "comparison_to_dense_evolving_v2_private_mlp": {
+            "reference_parameters": dense_v2_online_parameters,
+            "difference": online_parameters - dense_v2_online_parameters,
+            "relative_difference": (
+                online_parameters / dense_v2_online_parameters - 1.0
+            ),
+        },
+        "comparison_to_arrow_50": {
+            "reference_parameters": arrow_online_parameters,
+            "difference": online_parameters - arrow_online_parameters,
+            "relative_difference": online_parameters / arrow_online_parameters - 1.0,
+        },
+    }
+    if shared_fastkan:
+        result["training_only_behavior_copies"] = {
+            "ema_slow_critic_parameters": FASTKAN_CRITIC_PARAMETERS,
+            "transient_previous_boundary_actor_parameters": (
+                FASTKAN_ACTOR_PARAMETERS
+            ),
+            "peak_behavior_parameters_excluding_optimizer": (
+                fastkan_pair + FASTKAN_CRITIC_PARAMETERS + FASTKAN_ACTOR_PARAMETERS
+            ),
+            "common_evolving_boundary_world_model_teacher_excluded": True,
+        }
+    return result
+
+
 def _budget_manifest(config: dict) -> dict:
     decisions_per_epoch = int(config["n_sync"]) * int(config["gen_seq_len"])
     raw_frames_per_epoch = decisions_per_epoch * int(config["env_repeat"])
@@ -232,6 +449,9 @@ def _budget_manifest(config: dict) -> dict:
         + consolidation_updates,
         "actor_critic_updates": int(config["epochs"])
         * int(config["ac_train_steps"]),
+        "actor_critic_updates_by_task_route": _behavior_update_budget(config),
+        "actor_critic_update_budget_fixed": True,
+        "shared_behavior_rehearsal_adds_optimizer_steps": False,
         "online_current_sequences": task_updates * 16
         + (TASK_COUNT - 1) * task_updates * 12,
         "online_memory_sequences": (TASK_COUNT - 1) * task_updates * 4,
@@ -260,6 +480,7 @@ def main() -> int:
         source,
         task_order=args.task_order,
         task0_profile=args.task0_profile,
+        behavior_profile=args.behavior_profile,
     )
     python = args.python.expanduser().resolve()
     output_dir = (
@@ -268,7 +489,11 @@ def main() -> int:
         else ROOT
         / "runs"
         / (
-            f"evolving_atomic_rssm_{args.task0_profile}_{args.task_order}_"
+            f"evolving_atomic_rssm_{args.task0_profile}_"
+            f"{args.task_order}_s{args.seed}_{args.classification}"
+            if args.behavior_profile == PRIVATE_MLP_BEHAVIOR
+            else f"evolving_atomic_rssm_{args.task0_profile}_"
+            f"{args.behavior_profile}_{args.task_order}_"
             f"s{args.seed}_{args.classification}"
         )
     )
@@ -292,8 +517,16 @@ def main() -> int:
     )
     launch = {
         "schema_version": 1,
-        "method": "Evolving-Core Atomic RSSM",
-        "protocol": PROTOCOLS[args.task0_profile],
+        "method": (
+            "Evolving-Core Shared Frozen Down + Shared FastKAN Actor-Critic"
+            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
+            else "Evolving-Core Atomic RSSM"
+        ),
+        "protocol": (
+            SHARED_FASTKAN_PROTOCOL
+            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
+            else PROTOCOLS[args.task0_profile]
+        ),
         "classification": args.classification,
         "status": "dry_run" if args.dry_run else "launching",
         "project_git": project_git,
@@ -305,9 +538,36 @@ def main() -> int:
         "task_identity_exposed_to_agent": True,
         "task_agnostic_claimed": False,
         "from_scratch": True,
+        "behavior_profile": args.behavior_profile,
         "source_task1_snapshot": None,
-        "shared_core": "CNN plus posterior/recurrent/prior RSSM; always plastic",
-        "private_state": "per-task projector, Q/F/P atoms, heads, actor-critic",
+        "shared_core": (
+            "CNN plus posterior/recurrent/prior RSSM stays plastic; each Q/F/P "
+            "bank also owns one frozen full-width down basis"
+            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
+            else "CNN plus posterior/recurrent/prior RSSM; always plastic"
+        ),
+        "private_state": (
+            "per-task projector, Q/F/P LayerNorm-FiLM-up modules, and heads; "
+            "no task-private behavior"
+            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
+            else "per-task projector, Q/F/P atoms, heads, actor-critic"
+        ),
+        "behavior_topology": (
+            {
+                "actor_critic": "one cross-task width-53 FastKAN pair",
+                "stable_targets": True,
+                "current_old_update_split": [0.75, 0.25],
+                "old_task_selection": "uniform over completed task routes",
+                "extra_optimizer_updates": 0,
+            }
+            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
+            else {
+                "actor_critic": "one independent MLP pair per task",
+                "stable_targets": False,
+                "current_old_update_split": [1.0, 0.0],
+                "extra_optimizer_updates": 0,
+            }
+        ),
         "gradient_rule": "per-component conflicting-current-direction projection",
         "interface_distillation": {
             "posterior_kl": config["interface_q_scale"],
@@ -315,6 +575,7 @@ def main() -> int:
             "frozen_old_actor_kl": config["interface_actor_scale"],
         },
         "budgets": _budget_manifest(config),
+        "parameter_budget": _parameter_manifest(config),
         "resolved_training_config": str(config_path),
         "output_dir": str(output_dir),
         "replay_mmap_root": (
@@ -363,11 +624,14 @@ def main() -> int:
     required = [
         "save_wm.pt",
         "save_ac.pt",
-        "save_ac_bank.pt",
         "final_evaluation.json",
         "model_parameter_accounting.json",
         "actor_critic_parameter_accounting.json",
     ]
+    if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR:
+        required.append("shared_behavior_replay_accounting.json")
+    else:
+        required.append("save_ac_bank.pt")
     for task_id in range(TASK_COUNT):
         required.extend(
             [

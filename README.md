@@ -520,6 +520,32 @@ result. See `docs/protocols/evolving_core_atomic_rssm_arrow_v2_atari.md` for
 the promotion evidence and claim limits, and the v1 protocol for the unchanged
 model, loss, ownership, checkpoint, and budget contract.
 
+The separately named Shared-Frozen-Down + Shared FastKAN option keeps the
+`fixed_v2` Evolving-Core optimizer/loss contract, uses one frozen full-width
+down basis per Q/F/P bank with private LayerNorm/FiLM/up state, and replaces
+the three private MLP Actor-Critics with one cross-task width-53 FastKAN
+Actor/Critic using StableTargets. Its fixed 800 behavior updates per epoch are
+reallocated to 75% current-route and 25% uniformly split old-route Replay on
+later tasks; no optimizer steps are added:
+
+```bash
+python scripts/run_evolving_atomic_rssm.py \
+  --task-order mspacman-boxing-crazyclimber \
+  --task0-profile fixed_v2 \
+  --behavior-profile shared_fastkan_stable \
+  --seed 0 \
+  --classification pilot \
+  --dry-run
+```
+
+For three tasks, the online total is prospectively `44,376,209` parameters:
+`3,444,213` fewer than a matched Shared-Frozen-Down model with three private
+MLP pairs, `8,944,117` fewer than dense Evolving-Core v2, and `23,162,395` more
+than plain ARROW. This configuration has not yet produced a performance
+result. See
+`docs/protocols/evolving_core_shared_frozen_down_shared_fastkan_arrow_v1_atari.md`
+for exact mechanism, target, Replay, checkpoint, parameter, and claim semantics.
+
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control
 and tests 120, 150, 180, and 240 MsPacman epochs on the spare GPUs:

@@ -223,6 +223,7 @@ def _policy(config: dict[str, Any], final_path: Path) -> str:
         "cnn_mechanism_bank_arrow",
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
+        "evolving_atomic_rssm_shared_fastkan_arrow",
         "dino_fullbank_arrow",
         "dino_patchbank_arrow",
         "dino_convbank_arrow",

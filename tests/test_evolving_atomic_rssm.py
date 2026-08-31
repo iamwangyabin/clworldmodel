@@ -128,7 +128,9 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
         return data
 
     @staticmethod
-    def _world_model() -> WorldModel:
+    def _world_model(
+        mechanism_parameterization: str = "dense_private",
+    ) -> WorldModel:
         class WideEmbedder(nn.Module):
             output_size = 4096
 
@@ -162,6 +164,7 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
             task_mechanism_representation_width=8,
             task_mechanism_transition_width=8,
             task_mechanism_num_atoms=4,
+            task_mechanism_parameterization=mechanism_parameterization,
             task_symmetric_mechanisms=True,
             image_embedder=WideEmbedder(),
         )
@@ -223,6 +226,67 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
             wm._head_for(wm.reward_fc, wm.reward_experts, 0),
             wm._head_for(wm.reward_fc, wm.reward_experts, 1),
         )
+
+    def test_shared_down_world_model_keeps_basis_out_of_optimizer_ownership(
+        self,
+    ) -> None:
+        wm = self._world_model("shared_frozen_down_film")
+        banks = (
+            wm.rssm.recurrent_mechanism_bank,
+            wm.rssm.representation_mechanism_bank,
+            wm.rssm.transition_mechanism_bank,
+        )
+        shared_down_ids = {
+            id(parameter)
+            for bank in banks
+            for parameter in bank.shared_down.parameters()
+        }
+        self.assertEqual(
+            wm.rssm.task_mechanism_parameterization,
+            "shared_frozen_down_film",
+        )
+        self.assertTrue(shared_down_ids)
+        self.assertTrue(
+            all(
+                id(parameter) not in shared_down_ids
+                for task_id in range(3)
+                for parameter in (
+                    *wm.private_parameters(task_id),
+                    *wm.route_parameters(task_id),
+                )
+            )
+        )
+        self.assertTrue(
+            all(
+                id(parameter) not in shared_down_ids
+                for parameters in wm.shared_parameter_groups().values()
+                for parameter in parameters
+            )
+        )
+
+        wm.activate_task_expert(0)
+        self.assertTrue(
+            all(
+                not parameter.requires_grad
+                for bank in banks
+                for parameter in bank.shared_down.parameters()
+            )
+        )
+        self.assertTrue(
+            all(
+                parameter.requires_grad
+                for parameter in wm.private_parameters(0)
+            )
+        )
+
+        copied = copy.deepcopy(wm)
+        for bank in (
+            copied.rssm.recurrent_mechanism_bank,
+            copied.rssm.representation_mechanism_bank,
+            copied.rssm.transition_mechanism_bank,
+        ):
+            for mechanism in bank.mechanisms:
+                self.assertIs(mechanism.down_projection(), bank.shared_down)
 
     def test_task_activation_keeps_shared_core_and_only_current_private_plastic(self) -> None:
         wm = self._world_model()
@@ -455,6 +519,157 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
         self.assertEqual(counters["world_model_updates"], 17)
         self.assertEqual(counters["actor_critic_updates"], 11)
         self.assertEqual(counters["raw_environment_frames"], 101)
+
+    def test_shared_fastkan_checkpoint_restores_optimizer_target_teacher_and_rng(
+        self,
+    ) -> None:
+        class TinyActorCritic(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.actor = nn.Linear(3, 2)
+                self.critic = nn.Linear(3, 4)
+
+        config = SimpleNamespace(
+            uses_evolving_atomic_rssm=True,
+            uses_replay_rehearsed_shared_behavior=True,
+            to_dict=lambda: {
+                "continual_method": (
+                    "evolving_atomic_rssm_shared_fastkan_arrow"
+                )
+            },
+        )
+        world_model = nn.Linear(2, 2)
+        teacher = copy.deepcopy(world_model)
+        shared_optimizer = torch.optim.Adam([world_model.weight], lr=1e-4)
+        private_optimizers = {
+            0: torch.optim.Adam([world_model.bias], lr=2e-4)
+        }
+        actor_critic = TinyActorCritic()
+        actor_optimizer = torch.optim.Adam(actor_critic.parameters(), lr=4e-5)
+        slow_critic = copy.deepcopy(actor_critic.critic).eval()
+        slow_critic.requires_grad_(False)
+        aco = SimpleNamespace(
+            ac=actor_critic,
+            opt=actor_optimizer,
+            slow_critic=slow_critic,
+            return_scale_ema=torch.tensor(2.5),
+            return_mean_ema=torch.tensor(-0.75),
+        )
+        for optimizer, loss in (
+            (shared_optimizer, world_model.weight.square().sum()),
+            (private_optimizers[0], world_model.bias.square().sum()),
+            (
+                actor_optimizer,
+                sum(parameter.square().sum() for parameter in actor_critic.parameters()),
+            ),
+        ):
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+
+        fifo = FifoReplay(2, 4, 4, "cpu", store_task_ids=True)
+        ltdm = LongTermReplay(2, 4, 4, "cpu", store_task_ids=True)
+        replay = MultiTypeReplay(fifo, ltdm, sampling_weights=(0.5, 0.5))
+        np.random.seed(71)
+        replay.add(*self._replay_batch(2, 2, 0), task_id=0)
+        schedule = SimpleNamespace(_step=4)
+        generators = [np.random.default_rng(seed) for seed in range(5)]
+        shared_behavior_rng = generators[1]
+        expected_actor = copy.deepcopy(actor_critic.actor.state_dict())
+        expected_slow_critic = copy.deepcopy(slow_critic.state_dict())
+        expected_scale = aco.return_scale_ema.clone()
+        expected_mean = aco.return_mean_ema.clone()
+
+        with TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "shared_boundary.pt"
+            train._save_evolving_resumable_checkpoint(
+                checkpoint,
+                config=config,
+                wm=world_model,
+                boundary_teacher=teacher,
+                shared_optimizer=shared_optimizer,
+                private_optimizers=private_optimizers,
+                route_optimizers={},
+                actor_critic_bank=None,
+                aco=aco,
+                shared_behavior_update_rng=shared_behavior_rng,
+                shared_behavior_replay_updates={0: 11},
+                replay_buffer=replay,
+                environment_schedule=schedule,
+                epoch=4,
+                current_task_id=0,
+                world_model_updates=17,
+                actor_critic_updates=11,
+                total_env_steps=101,
+                task_update_rng=generators[0],
+                collection_environment_seed_rng=generators[2],
+                validation_environment_seed_rng=generators[3],
+                final_environment_seed_rng=generators[4],
+            )
+            payload = torch.load(
+                checkpoint, map_location="cpu", weights_only=False
+            )
+            self.assertEqual(payload["schema_version"], 2)
+            self.assertIn("shared_actor_critic", payload["optimizers"])
+            self.assertIn("shared_behavior", payload)
+            self.assertIn("shared_behavior_update", payload["rng"])
+            self.assertEqual(
+                payload["counters"]["actor_critic_updates_by_task_route"],
+                {"0": 11},
+            )
+
+            expected_next_route = int(shared_behavior_rng.integers(0, 1_000_000))
+            with torch.no_grad():
+                for parameter in actor_critic.parameters():
+                    parameter.add_(10)
+                for parameter in slow_critic.parameters():
+                    parameter.sub_(10)
+            aco.return_scale_ema = torch.tensor(-1.0)
+            aco.return_mean_ema = torch.tensor(3.0)
+            shared_behavior_rng.integers(0, 1_000_000, size=10)
+
+            restored = train._restore_evolving_resumable_checkpoint(
+                checkpoint,
+                config=config,
+                wm=world_model,
+                boundary_teacher=teacher,
+                shared_optimizer=shared_optimizer,
+                private_optimizers=private_optimizers,
+                route_optimizers={},
+                actor_critic_bank=None,
+                actor_critic_factory=lambda _task_id: None,
+                aco=aco,
+                shared_behavior_update_rng=shared_behavior_rng,
+                replay_buffer=replay,
+                environment_schedule=schedule,
+                task_update_rng=generators[0],
+                collection_environment_seed_rng=generators[2],
+                validation_environment_seed_rng=generators[3],
+                final_environment_seed_rng=generators[4],
+            )
+
+        for name, expected in expected_actor.items():
+            torch.testing.assert_close(actor_critic.actor.state_dict()[name], expected)
+            torch.testing.assert_close(
+                restored["shared_actor_teacher"].state_dict()[name], expected
+            )
+        for name, expected in expected_slow_critic.items():
+            torch.testing.assert_close(slow_critic.state_dict()[name], expected)
+        torch.testing.assert_close(aco.return_scale_ema, expected_scale)
+        torch.testing.assert_close(aco.return_mean_ema, expected_mean)
+        self.assertEqual(restored["shared_actor_teacher_seen_tasks"], 1)
+        self.assertEqual(restored["shared_behavior_replay_updates"], {0: 11})
+        self.assertFalse(restored["shared_actor_teacher"].training)
+        self.assertTrue(
+            all(
+                not parameter.requires_grad
+                for parameter in restored["shared_actor_teacher"].parameters()
+            )
+        )
+        self.assertEqual(
+            int(shared_behavior_rng.integers(0, 1_000_000)),
+            expected_next_route,
+        )
 
     def test_mmap_checkpoint_asset_is_not_mutated_after_restore(self) -> None:
         with TemporaryDirectory() as directory:

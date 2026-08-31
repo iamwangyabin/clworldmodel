@@ -951,6 +951,7 @@ def train_ac_from_wm(
     protect_residual_updates: bool = False,
     feature_cache: Optional[object] = None,
     task_id: Optional[int] = None,
+    task_id_schedule: Optional[Sequence[int]] = None,
     actor_teacher: Optional[nn.Module] = None,
     actor_distill_task_ids: Sequence[int] = (),
     actor_distill_scale: float = 0.0,
@@ -960,6 +961,16 @@ def train_ac_from_wm(
     actor_distill_steps: int = 1,
     distributed_context: Optional[object] = None,
 ) -> tuple[ActorCriticOpt, torch.Tensor, dict[str, float]]:
+    if task_id_schedule is not None:
+        if task_id is not None:
+            raise ValueError("task_id and task_id_schedule are mutually exclusive")
+        if len(task_id_schedule) != steps:
+            raise ValueError(
+                "Actor-critic task schedule must contain exactly one task id per "
+                f"optimizer update: {len(task_id_schedule)} != {steps}"
+            )
+        if any(scheduled_task_id < 0 for scheduled_task_id in task_id_schedule):
+            raise ValueError("Actor-critic task schedule ids must be non-negative")
     if aco is None:
         aco = build_actor_critic_opt(
             wm,
@@ -1090,6 +1101,11 @@ def train_ac_from_wm(
         )
     progbar = trange(steps, desc="Train AC from WM",disable=True)
     for step in progbar:
+        rollout_task_id = (
+            int(task_id_schedule[step])
+            if task_id_schedule is not None
+            else task_id
+        )
         target_value = None
         if use_slow_critic_targets:
             target_value = lambda state: ac.value(state, critic=aco.slow_critic)
@@ -1104,7 +1120,7 @@ def train_ac_from_wm(
             target_value=target_value,
             corrected_terminal_bootstrap=corrected_imagination_bootstrap,
             feature_cache=feature_cache,
-            task_id=task_id,
+            task_id=rollout_task_id,
         )
 
         statistics_returns = (

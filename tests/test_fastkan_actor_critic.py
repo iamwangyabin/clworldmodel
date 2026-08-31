@@ -21,7 +21,12 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on the GPU host
 if torch is not None:
     sys.path.insert(0, str(PROJECT_SRC))
     sys.path.insert(0, str(VENDORED_ATARI))
-    from ac import ActorCritic, dream_rollout, replay_lambda_returns
+    from ac import (
+        ActorCritic,
+        dream_rollout,
+        replay_lambda_returns,
+        train_ac_from_wm,
+    )
     from clworldmodel.models.fast_kan import (
         FastKANActor,
         FastKANCritic,
@@ -99,6 +104,33 @@ class FastKANActorCriticTests(unittest.TestCase):
         self.assertAlmostEqual(rbf.bandwidth, 4.0 / 7.0)
         basis = rbf(rbf.centers)
         torch.testing.assert_close(torch.diagonal(basis), torch.ones(8))
+
+    def test_actor_training_route_schedule_has_one_id_per_optimizer_step(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly one task id"):
+            train_ac_from_wm(
+                None,
+                None,
+                steps=2,
+                n_sync=1,
+                task_id_schedule=(0,),
+            )
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            train_ac_from_wm(
+                None,
+                None,
+                steps=1,
+                n_sync=1,
+                task_id=0,
+                task_id_schedule=(0,),
+            )
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            train_ac_from_wm(
+                None,
+                None,
+                steps=1,
+                n_sync=1,
+                task_id_schedule=(-1,),
+            )
 
     def test_layer_is_vectorized_and_both_branches_receive_gradients(self) -> None:
         torch.manual_seed(7)

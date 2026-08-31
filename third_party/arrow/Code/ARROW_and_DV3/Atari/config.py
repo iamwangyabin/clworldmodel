@@ -35,6 +35,7 @@ ContinualMethod = Literal[
     "cnn_mechanism_bank_arrow",
     "rec_rssm_arrow",
     "evolving_atomic_rssm_arrow",
+    "evolving_atomic_rssm_shared_fastkan_arrow",
     "dino_fullbank_arrow",
     "dino_patchbank_arrow",
     "dino_convbank_arrow",
@@ -65,6 +66,10 @@ ActorNetwork = Literal[
 ActorCriticOptimizer = Literal["adam", "laprop"]
 ActorCriticSchedule = Literal["constant", "task_cosine_decay"]
 TaskMechanismCapacityProfile = Literal["matched_512", "expanded_640"]
+TaskMechanismParameterization = Literal[
+    "dense_private",
+    "shared_frozen_down_film",
+]
 EvaluationSeedProtocol = Literal[
     "advancing",
     "fixed_validation_heldout_final",
@@ -320,6 +325,7 @@ class Config(Serialisable):
     task_mechanism_bank: bool = False
     task_mechanism_reuse: bool = True
     task_mechanism_capacity_profile: TaskMechanismCapacityProfile = "matched_512"
+    task_mechanism_parameterization: TaskMechanismParameterization = "dense_private"
     task_mechanism_recurrent_width: int = 512
     task_mechanism_representation_width: int = 512
     task_mechanism_transition_width: int = 256
@@ -349,6 +355,7 @@ class Config(Serialisable):
     boundary_consolidation_steps: int = 1000
     boundary_consolidation_lr: float = 2e-5
     boundary_max_return_drop: float = 0.05
+    evolving_shared_behavior_current_task_fraction: float = 1.0
     task_private_heads: bool = False
     task_private_actor_critic: bool = False
     task_atomic_routes: bool = False
@@ -459,6 +466,7 @@ class Config(Serialisable):
             "cnn_mechanism_bank_arrow",
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -476,9 +484,14 @@ class Config(Serialisable):
             self.continual_method == "cnn_mechanism_bank_arrow"
         )
         is_rec_rssm = self.continual_method == "rec_rssm_arrow"
-        is_evolving_atomic = (
-            self.continual_method == "evolving_atomic_rssm_arrow"
+        is_evolving_shared_fastkan = (
+            self.continual_method
+            == "evolving_atomic_rssm_shared_fastkan_arrow"
         )
+        is_evolving_atomic = self.continual_method in {
+            "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_fastkan_arrow",
+        }
         uses_mechanism_bank = (
             is_cnn_mechanism_bank or is_rec_rssm or is_evolving_atomic
         )
@@ -489,6 +502,37 @@ class Config(Serialisable):
             raise ValueError(
                 "Unknown mechanism capacity profile: "
                 f"{self.task_mechanism_capacity_profile!r}"
+            )
+        if self.task_mechanism_parameterization not in {
+            "dense_private",
+            "shared_frozen_down_film",
+        }:
+            raise ValueError(
+                "Unknown mechanism parameterization: "
+                f"{self.task_mechanism_parameterization!r}"
+            )
+        if self.task_mechanism_parameterization == "shared_frozen_down_film":
+            if not is_evolving_atomic:
+                raise ValueError(
+                    "shared_frozen_down_film is validated only for Evolving-Core"
+                )
+            if self.task_mechanism_capacity_profile != "matched_512":
+                raise ValueError(
+                    "shared_frozen_down_film preserves the matched_512 hidden widths"
+                )
+        expected_evolving_parameterization = (
+            "shared_frozen_down_film"
+            if is_evolving_shared_fastkan
+            else "dense_private"
+        )
+        if (
+            is_evolving_atomic
+            and self.task_mechanism_parameterization
+            != expected_evolving_parameterization
+        ):
+            raise ValueError(
+                "The named Evolving-Core method requires mechanism "
+                f"parameterization={expected_evolving_parameterization!r}"
             )
         if not isinstance(self.task_mechanism_bank, bool) or not isinstance(
             self.task_mechanism_reuse, bool
@@ -530,6 +574,7 @@ class Config(Serialisable):
             "boundary_consolidation_steps": 1000,
             "boundary_consolidation_lr": 2e-5,
             "boundary_max_return_drop": 0.05,
+            "evolving_shared_behavior_current_task_fraction": 1.0,
             "task_private_heads": False,
             "task_private_actor_critic": False,
             "task_atomic_routes": False,
@@ -568,10 +613,14 @@ class Config(Serialisable):
                 "evolving_task0_profile": self.evolving_task0_profile,
                 "evolving_shared_core": True,
                 "task_private_heads": True,
-                "task_private_actor_critic": True,
+                "task_private_actor_critic": not is_evolving_shared_fastkan,
                 "task_atomic_routes": True,
-                "ac_lr": 1e-4,
+                "ac_lr": 4e-5 if is_evolving_shared_fastkan else 1e-4,
             }
+            if is_evolving_shared_fastkan:
+                expected_evolving[
+                    "evolving_shared_behavior_current_task_fraction"
+                ] = 0.75
             expected_evolving.update(
                 task0_profile_overrides[self.evolving_task0_profile]
             )
@@ -631,6 +680,16 @@ class Config(Serialisable):
                 )
             if self.memory_loss_scale < 0:
                 raise ValueError("memory_loss_scale must be non-negative")
+            if not 0 < self.evolving_shared_behavior_current_task_fraction <= 1:
+                raise ValueError(
+                    "Evolving-Core shared-behavior current-task fraction must lie "
+                    "in (0, 1]"
+                )
+            if is_evolving_shared_fastkan and self.evolving_task0_profile != "fixed_v2":
+                raise ValueError(
+                    "Evolving-Core Shared-Frozen-Down + Shared FastKAN inherits "
+                    "the fixed_v2 Task-0 profile"
+                )
             if min(
                 self.interface_q_scale,
                 self.interface_h_scale,
@@ -650,7 +709,7 @@ class Config(Serialisable):
             if evolving_nondefault:
                 raise ValueError(
                     "Evolving-Core settings require "
-                    "continual_method='evolving_atomic_rssm_arrow': "
+                    "a named evolving_atomic_rssm continual method: "
                     f"{evolving_nondefault}"
                 )
         is_dino_fullbank = self.continual_method == "dino_fullbank_arrow"
@@ -955,9 +1014,17 @@ class Config(Serialisable):
                 )
                 if (is_rec_rssm or is_evolving_atomic) and not self.task_mechanism_reuse:
                     raise ValueError("Atomic RSSM requires atom reuse")
-                if self.fresh_ac is not False or self.actor_network != "mlp":
+                if self.fresh_ac is not False:
                     raise ValueError(
-                        "CNN-MechanismBank requires independent fresh MLP actor-critics"
+                        "CNN-MechanismBank methods require persistent actor-critics"
+                    )
+                expected_actor_network = (
+                    "fast_kan_ac_stable" if is_evolving_shared_fastkan else "mlp"
+                )
+                if self.actor_network != expected_actor_network:
+                    raise ValueError(
+                        "The named mechanism protocol requires actor_network="
+                        f"'{expected_actor_network}'"
                     )
             else:
                 expected_ranks = (
@@ -996,6 +1063,10 @@ class Config(Serialisable):
                 "Disabling mechanism reuse requires CNN-MechanismBank-ARROW"
             )
         if not uses_mechanism_bank:
+            if self.task_mechanism_parameterization != "dense_private":
+                raise ValueError(
+                    "Mechanism parameterization requires a named mechanism method"
+                )
             observed_atom_settings = (
                 self.task_mechanism_num_atoms,
                 self.task_mechanism_reuse_probe_epochs,
@@ -1668,6 +1739,7 @@ class Config(Serialisable):
             "cnn_mechanism_bank_arrow",
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1697,6 +1769,7 @@ class Config(Serialisable):
             "cnn_mechanism_bank_arrow",
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1706,7 +1779,19 @@ class Config(Serialisable):
 
     @property
     def uses_shared_actor(self) -> bool:
-        return self.continual_method == "cnn_compact_shared_actor_arrow"
+        return self.continual_method in {
+            "cnn_compact_shared_actor_arrow",
+            "evolving_atomic_rssm_shared_fastkan_arrow",
+        }
+
+    @property
+    def uses_replay_rehearsed_shared_behavior(self) -> bool:
+        """Whether one shared actor-critic rehearses task-routed replay."""
+
+        return (
+            self.continual_method
+            == "evolving_atomic_rssm_shared_fastkan_arrow"
+        )
 
     @property
     def uses_task_private_heads(self) -> bool:
@@ -1716,13 +1801,19 @@ class Config(Serialisable):
 
     @property
     def uses_full_task_rssm_experts(self) -> bool:
-        if self.continual_method == "evolving_atomic_rssm_arrow":
+        if self.continual_method in {
+            "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_fastkan_arrow",
+        }:
             return self.full_task_rssm_experts
         return self.uses_full_task_experts
 
     @property
     def uses_evolving_atomic_rssm(self) -> bool:
-        return self.continual_method == "evolving_atomic_rssm_arrow"
+        return self.continual_method in {
+            "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_fastkan_arrow",
+        }
 
     def get_env_schedule(self) -> EnvironmentSchedule:
         return self.esc.env_schedule_type(
