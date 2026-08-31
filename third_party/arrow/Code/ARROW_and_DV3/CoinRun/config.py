@@ -27,6 +27,7 @@ from replay import FifoReplay, LongTermReplay, MultiTypeReplay, Replay
 T = TypeVar("T", bound="Serialisable")
 
 ArrowReplayCapacityRatio = Literal["50-50", "25-75", "75-25"]
+ReplayObservationDType = Literal["float32", "uint8"]
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -208,6 +209,7 @@ class Config(Serialisable):
 
     action_space: int = 18
     replay_buffers: list[RbConfig] = field(default_factory=list)
+    replay_observation_dtype: ReplayObservationDType = "float32"
     # ARROW only: split of total capacity 2 * data_n_max between FifoReplay vs LongTermReplay
     arrow_replay_capacity_ratio: ArrowReplayCapacityRatio = "50-50"
 
@@ -223,6 +225,11 @@ class Config(Serialisable):
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
         assert self.env_repeat == 1, "Env repeat disabled for procgen"
+        if self.replay_observation_dtype not in {"float32", "uint8"}:
+            raise ValueError(
+                "replay_observation_dtype must be 'float32' or 'uint8', got "
+                f"{self.replay_observation_dtype!r}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -257,11 +264,23 @@ class Config(Serialisable):
                 for rc in self.replay_buffers
             )
             replays = [
-                rc.rb_type(self.data_t, _arrow_n(rc), self.action_space, rc.rb_device)
+                rc.rb_type(
+                    self.data_t,
+                    _arrow_n(rc),
+                    self.action_space,
+                    rc.rb_device,
+                    observation_dtype=self.replay_observation_dtype,
+                )
                 for rc in self.replay_buffers
             ]
             return MultiTypeReplay(*replays, sampling_weights=sampling_weights)
         if self.algorithm == "dv3" or self.algorithm == "sac":
             rc = self.replay_buffers[0]
-            return rc.rb_type(self.data_t, self.sac_dv3_data_n_max, self.action_space, rc.rb_device)
+            return rc.rb_type(
+                self.data_t,
+                self.sac_dv3_data_n_max,
+                self.action_space,
+                rc.rb_device,
+                observation_dtype=self.replay_observation_dtype,
+            )
         #self.sac_dv3_data_n_max

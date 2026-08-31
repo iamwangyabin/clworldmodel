@@ -87,9 +87,15 @@ def _print_replay_buffer_debug(config: Config, buf) -> None:
         for i, sub in enumerate(buf.replays):
             sw = buf.sampling_weights[i]
             nv = getattr(sub, "n_valid", None)
+            tensors = (sub.acts, sub.obss, sub.rews, sub.conts, sub.resets)
+            allocated_bytes = sum(
+                tensor.numel() * tensor.element_size() for tensor in tensors
+            )
             print(
                 f"[replay]   [{i}] {type(sub).__name__}: t={sub.t} n={sub.n} "
-                f"n_valid={nv} sampling_weight={sw}"
+                f"n_valid={nv} sampling_weight={sw} "
+                f"device={sub.obss.device} observation_dtype={sub.obss.dtype} "
+                f"allocated={_bytes_to_gib(allocated_bytes):.3f} GiB"
             )
     else:
         dv3_max = getattr(config, "sac_dv3_data_n_max", None)

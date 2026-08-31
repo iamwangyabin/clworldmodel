@@ -435,6 +435,16 @@ documented here, covered by focused parity tests, and followed by regenerating
     exact schedule isolation, resource ledgers, boundary stopping, complete-set
     validation, held-out exclusion, and duration-curve selection.
 
+48. Add an opt-in CoinRun replay observation dtype so the full published
+    ARROW-50 trajectory capacity can run on a 24-GiB accelerator without
+    placing the complete replay in VRAM. The published default remains float32.
+    The storage-optimized profile keeps FIFO/LTDM capacity, retention, RNG, and
+    whole-minibatch selection unchanged while storing source pixels as uint8 on
+    CPU and decoding only sampled minibatches to the existing float32 `[0, 1]`
+    model interface. Focused tests cover exact source-pixel round trips, FIFO
+    wraparound, LTDM random-key parity, byte accounting, default isolation, and
+    invalid-value rejection.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from
