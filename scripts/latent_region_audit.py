@@ -13,10 +13,10 @@ from typing import Any
 
 import numpy as np
 
+from artifact_io import sha256_file as _sha256, write_json_atomic as _write_json_atomic
 from component_forgetting_audit import (
     _load_dataset,
     _model_bundle,
-    _sha256,
     load_snapshot_specs,
 )
 
@@ -30,17 +30,6 @@ def _torch() -> Any:
     except ModuleNotFoundError as error:
         raise RuntimeError("Run the latent audit in the pinned PyTorch environment") from error
     return torch
-
-
-def _write_json_atomic(path: Path, value: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, delete=False
-    ) as temporary:
-        json.dump(value, temporary, indent=2, ensure_ascii=False)
-        temporary.write("\n")
-        temporary_path = Path(temporary.name)
-    os.replace(temporary_path, path)
 
 
 def _write_npz_atomic(path: Path, arrays: dict[str, np.ndarray]) -> None:

@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "record_id": "cnn-fullbank-task0-180e-gate-s0",
+  "run_id": "cnn_fullbank_arrow_v1_task1_t180_x4_fullupdates_fixed_eval_fp32cont_guard_bf16_uint8_dp4_shm_seed0_20260824_run1",
+  "method": "CNN-FullBank-ARROW-v1 180-epoch x4-full-update Task-0 gate",
+  "protocol": "CNN-FullBank-ARROW-v1 Task-0 180-epoch x4-full-update acquisition gate",
+  "evidence_level": "pilot",
+  "classification": "single_task_acquisition_gate",
+  "status": "complete",
+  "recorded_at_utc": "2026-08-31T12:36:20Z",
+  "project_git": {
+    "commit": "be29e713e67465805f0af5e35085c151fb25e4d2",
+    "clean": true,
+    "upstream": "codex/karrow"
+  },
+  "seed": {
+    "id": 0,
+    "value": 123456789
+  },
+  "task_awareness": "task_aware",
+  "task_order": [
+    "ALE/MsPacman-v5"
+  ],
+  "completion": {
+    "total_task_count": 1,
+    "completed_task_count": 1,
+    "completed_epochs": 180,
+    "final_evaluation_performed": true,
+    "return_code": 0,
+    "finished_at_utc": "2026-08-24T23:51:03.799494+00:00"
+  },
+  "evaluation": {
+    "metric": "raw_environment_return",
+    "policy": "deterministic_argmax_and_latent_mode",
+    "cohort_protocol": "heldout_final",
+    "evaluation_transitions_enter_replay": false,
+    "checkpoints": [
+      {
+        "checkpoint_id": "heldout-final",
+        "stage": "heldout_final_acquisition_gate",
+        "completed_epochs": 180,
+        "completed_task_count": 1,
+        "cohort": "heldout_final",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2418.75,
+            "raw_return_std": 227.3454145128069
+          }
+        ]
+      }
+    ]
+  },
+  "headline": {
+    "summary": "Held-out seed-0 MsPacman raw return 2418.75 ± 227.345; acquisition gate passed."
+  },
+  "budgets": {
+    "completed_epochs": 180
+  },
+  "comparability": {
+    "direct_comparison_group": null,
+    "claim": "Single-task task-aware acquisition gate only; progression evidence, not a continual-retention or fair-superiority result.",
+    "limitations": [
+      "The original ARROW run used an advancing evaluation cohort, FP32, one device, a 90-epoch task duration, and the original global batch. This gate supports progression to an explicitly extra-sample/compute pilot, not a fair superiority claim.",
+      "Only one seed was evaluated."
+    ]
+  },
+  "source_artifacts": [
+    {
+      "role": "curated_source_result",
+      "name": "cnn_fullbank_task1_gate_seed0_20260824.json",
+      "repository_path": "docs/protocols/references/cnn_fullbank_task1_gate_seed0_20260824.json",
+      "sha256": "d5c83bb6410e465a697c29d95179f7a2d36c78d14feb17ebb8a5b6f6e14c6f7c"
+    },
+    {
+      "role": "early_guard_json",
+      "name": "early_guard_json",
+      "sha256": "e2643b2a39ca0ca56d8b08da53111fc34119d6416df1021844ae80216821b288",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "final_evaluation_json",
+      "name": "final_evaluation_json",
+      "sha256": "d3bfab09c6920850cc856a230d6ebdb7f4d35ff77c3481180a94682f10d2872e",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "run_status_json",
+      "name": "run_status_json",
+      "sha256": "f38256558b5271daa744ee0732fa93511b8f5de9ee077789e64748a98db34b81",
+      "repository_copy_excluded": true
+    }
+  ],
+  "notes": [
+    "The held-out final cohort was not used for periodic validation or selection.",
+    "Weights and snapshots named by the source artifact are not copied into this registry."
+  ]
+}

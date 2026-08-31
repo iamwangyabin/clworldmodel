@@ -107,6 +107,85 @@ class EnvironmentSeedingTests(unittest.TestCase):
             (1e-4, 3e-4, 1),
         )
 
+    def test_variable_task_durations_drive_schedule_boundaries_and_actor_age(
+        self,
+    ) -> None:
+        templates = [lambda: index for index in range(3)]
+        schedule = generate_trajectory.SequentialEnvironments(
+            1,
+            templates,
+            task_durations=[90, 120, 120],
+        )
+        self.assertEqual(schedule.current_task_index(), 0)
+        self.assertTrue(schedule.is_new_env())
+        for _ in range(89):
+            schedule.step()
+        self.assertEqual(schedule.current_task_index(), 0)
+        self.assertFalse(schedule.is_new_env())
+        schedule.step()
+        self.assertEqual(schedule.current_task_index(), 1)
+        self.assertTrue(schedule.is_new_env())
+        for _ in range(120):
+            schedule.step()
+        self.assertEqual(schedule.current_task_index(), 2)
+        self.assertTrue(schedule.is_new_env())
+
+        config = SimpleNamespace(
+            esc=SimpleNamespace(
+                kwargs={"task_durations": [90, 120, 120]},
+                env_configs=[object(), object(), object()],
+            ),
+            ac_schedule="task_cosine_decay",
+            ac_lr=2e-4,
+            ac_entropy_scale=3e-4,
+            ac_decay_start_task_epoch=60,
+            ac_decay_end_task_epoch=120,
+            ac_final_lr=5e-5,
+            ac_final_entropy_scale=3e-4,
+        )
+        self.assertEqual(
+            train._sequential_task_position(config, 90),
+            (1, 1),
+        )
+        self.assertEqual(
+            train._sequential_task_position(config, 209),
+            (1, 120),
+        )
+        self.assertEqual(
+            train._sequential_task_position(config, 210),
+            (2, 1),
+        )
+        self.assertEqual(
+            train._actor_critic_schedule_values(config, 209),
+            (5e-5, 3e-4, 120),
+        )
+        self.assertEqual(
+            train._actor_critic_schedule_values(config, 210),
+            (2e-4, 3e-4, 1),
+        )
+
+        config.esc.env_schedule_type = (
+            generate_trajectory.SequentialEnvironments
+        )
+        config.esc.env_configs = [
+            SimpleNamespace(name=f"task-{index}", rew_scale=1.0)
+            for index in range(3)
+        ]
+        self.assertEqual(
+            train._task_boundary_metadata(config, 209),
+            {
+                "boundary_index": 2,
+                "task_index": 1,
+                "task_name": "task-1",
+                "task_reward_scale": 1.0,
+            },
+        )
+        self.assertIsNone(train._task_boundary_metadata(config, 210))
+        self.assertEqual(
+            train._task_boundary_metadata(config, 329)["task_index"],
+            2,
+        )
+
     def test_task_bank_evaluation_snapshot_is_atomic_and_non_resumable(self) -> None:
         class FakeConfig:
             algorithm = "arrow"

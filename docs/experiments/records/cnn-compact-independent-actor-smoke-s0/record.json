@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "record_id": "cnn-compact-independent-actor-smoke-s0",
+  "run_id": "cnn_projector_rssm_compact_lora_arrow_v2_task1strongseeded_smoke_t092_single_gpu_r32_32_16_bf16_uint8_seed0_cpu12_taskaware_c8a4f7c_20260827_run1",
+  "method": "CNN-Projector-RSSM-CompactLoRA-ARROW-v2",
+  "protocol": "CNN-Projector-RSSM-CompactLoRA-ARROW-v2-Task1SnapshotSeeded-Atari-TaskAware",
+  "evidence_level": "smoke",
+  "classification": "snapshot_seeded_incremental_smoke",
+  "status": "complete",
+  "recorded_at_utc": "2026-08-31T12:36:20Z",
+  "project_git": {
+    "commit": "c8a4f7ca5142614a77f5a269da99593f72f6fb23",
+    "clean": true,
+    "upstream": "origin/codex/cnn-compact-shared-actor",
+    "ahead": 0,
+    "behind": 0
+  },
+  "seed": {
+    "id": 0,
+    "value": 123456789
+  },
+  "task_awareness": "task_aware",
+  "task_order": [
+    "ALE/MsPacman-v5",
+    "ALE/Boxing-v5"
+  ],
+  "completion": {
+    "total_task_count": 2,
+    "completed_task_count": 1,
+    "completed_epochs": 92,
+    "final_evaluation_performed": true,
+    "return_code": 0,
+    "started_at_utc": "2026-08-27T12:35:09.630984+00:00",
+    "finished_at_utc": "2026-08-27T12:41:02.383272+00:00"
+  },
+  "evaluation": {
+    "metric": "raw_environment_return",
+    "policy": "deterministic_argmax_and_latent_mode",
+    "cohort_protocol": "heldout_final",
+    "evaluation_transitions_enter_replay": false,
+    "checkpoints": [
+      {
+        "checkpoint_id": "heldout-smoke",
+        "stage": "heldout_after_partial_task_smoke",
+        "completed_epochs": 92,
+        "completed_task_count": 1,
+        "cohort": "heldout_final",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2595.625,
+            "raw_return_std": 491.7820750850929
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": -41.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      }
+    ]
+  },
+  "headline": {
+    "summary": "Held-out seed-0 raw returns: MsPacman 2595.62; Boxing -41. Smoke only; no performance claim."
+  },
+  "budgets": {
+    "source_completed_task1_epochs": 90,
+    "new_training_epochs": 2,
+    "new_raw_environment_frames": 131072,
+    "new_world_model_updates": 1000,
+    "new_actor_critic_updates": 800,
+    "replay_initial_state": "empty",
+    "source_replay_reused": false
+  },
+  "parameter_accounting": {
+    "rssm_lora_ranks": {
+      "recurrent": 32,
+      "representation": 32,
+      "transition": 16
+    },
+    "rssm_adapter_parameters_per_later_task": 643648,
+    "projector_parameters_per_later_task": 34240,
+    "world_model_parameters": 37979887,
+    "actor_critic_topology_at_epoch_92": "per_task_actor_critic_bank",
+    "initialized_actor_critic_task_ids": [
+      0,
+      1
+    ],
+    "actor_critic_parameters_at_epoch_92": 3431970,
+    "aggregate_model_plus_initialized_actor_critic_parameters_at_epoch_92": 41411857
+  },
+  "comparability": {
+    "direct_comparison_group": null,
+    "claim": "Smoke execution evidence only; no performance comparison is allowed.",
+    "limitations": [
+      "The FullBank pilot uses half the original ARROW optimizer updates and twice the sampled-frame use per task.",
+      "The snapshot-seeded methods restart Replay, optimizers, RNG, and schedule state at Boxing and are not equivalent resumes.",
+      "The two high-capacity LoRA runs use different Task-1 source snapshots, so their raw returns must not be treated as a controlled seed comparison.",
+      "The compact independent-Actor result is a two-epoch target-GPU smoke only.",
+      "The current task received only two epochs in this smoke."
+    ]
+  },
+  "source_artifacts": [
+    {
+      "role": "curated_source_result",
+      "name": "cnn_incremental_seed0_results_20260827.json",
+      "repository_path": "docs/protocols/references/cnn_incremental_seed0_results_20260827.json",
+      "sha256": "5300227d384289b7259bd784121ae345e29cc9f2f725a2ae0718339e333c6a99"
+    },
+    {
+      "role": "actor_critic_parameter_accounting",
+      "name": "actor_critic_parameter_accounting.json",
+      "sha256": "874585701b45c32a36a2698c9904c67a36054593962ca8f1fb219cddfa274227",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "evaluation_seed_manifest",
+      "name": "evaluation_seed_manifest.json",
+      "sha256": "3736cfa01ff32141d9babb61bc675edd0a60fa6b95dbcc20958086483271f3f6",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "final_evaluation",
+      "name": "final_evaluation.json",
+      "sha256": "3211884f1a2cba56414f6574be7e9614eb57d99553f937a982758a32a30572c6",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "launch",
+      "name": "launch.json",
+      "sha256": "eeb089b68657b8a417083b05a51283c5776a24bcaaae311305e1f15aaeb6fc22",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "model_parameter_accounting",
+      "name": "model_parameter_accounting.json",
+      "sha256": "a90e36d2353272184298e0bbd62eae45dd37851afdbb0d394d21695786700183",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "resolved_training_config",
+      "name": "resolved_training_config.json",
+      "sha256": "6982da735411992f0aaba830c02ad311182e58c338c28fb15f1b82f24c410dfb",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "run_status",
+      "name": "run_status.json",
+      "sha256": "c9349c4b9b0555c2538980316a7398582b243a5578b40979dd1e72b853ddcafc",
+      "repository_copy_excluded": true
+    }
+  ],
+  "notes": [
+    "Evaluation transitions did not enter Replay.",
+    "The aggregate source artifact intentionally excludes weights, checkpoints, Replay storage, TensorBoard events, and full training logs."
+  ]
+}

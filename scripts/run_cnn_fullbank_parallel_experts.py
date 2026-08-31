@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from git_provenance import git_state, require_synced_training_git_state
+from launcher_support import write_json as _write_json_atomic
 from run_arrow_ar50_atari import ROOT
 from run_moe_arrow_atari import INDEPENDENT_EXPERT_PROFILE
 
@@ -33,12 +34,6 @@ TASKS = (
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
 
 
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:

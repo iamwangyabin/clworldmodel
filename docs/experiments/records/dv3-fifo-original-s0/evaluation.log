@@ -1,0 +1,32 @@
+# Curated evaluation-only excerpt; full training log is intentionally excluded from Git.
+# source_sha256=7ff0e5281f8d187e0b017853ec2cc9a4969641cece5ab9926d27673d99f05933
+Eval for epoch:  90
+Eval means: [100.625, 2.0625, 3.4666667381922402, 15.25, 47.5, 0.0]
+Eval stds: [26.781231767788427, 8.22700393521238, 0.14907114518803452, 3.929058411375428, 26.80951323690902, 0.0]
+[cuda-mem] epoch_end_90 | device=0 (P1.gpu.large) allocated=24.40 GiB reserved=26.18 GiB peak_allocated=25.48 GiB peak_reserved=26.18 GiB suggested_slurm_gpu_mem=30.11 GiB
+[stage-time] epoch=90 collect=25.056s eval=166.149s world_model=57.209s actor=44.909s overhead=0.021s total=293.344s
+Eval for epoch:  180
+Eval means: [28.71875, 89.6875, 2.485714418547494, 4.125, 46.875, 0.0]
+Eval stds: [19.7151343753346, 3.196066918886399, 0.6446008318331014, 4.270172713134681, 14.017288432503628, 0.0]
+[cuda-mem] epoch_end_180 | device=0 (P1.gpu.large) allocated=24.40 GiB reserved=26.18 GiB peak_allocated=25.48 GiB peak_reserved=26.18 GiB suggested_slurm_gpu_mem=30.11 GiB
+[stage-time] epoch=180 collect=24.695s eval=157.063s world_model=62.001s actor=50.001s overhead=0.012s total=293.772s
+Eval for epoch:  270
+Eval means: [10.5, -3.8125, 96.20000505447388, 2.125, 0.0, 0.0]
+Eval stds: [0.0, 5.865351119072072, 22.37638315710058, 1.653594569415369, 0.0, 0.0]
+[cuda-mem] epoch_end_270 | device=0 (P1.gpu.large) allocated=24.41 GiB reserved=26.18 GiB peak_allocated=25.48 GiB peak_reserved=26.18 GiB suggested_slurm_gpu_mem=30.11 GiB
+[stage-time] epoch=270 collect=22.606s eval=185.524s world_model=54.733s actor=45.474s overhead=0.012s total=308.349s
+Eval for epoch:  360
+Eval means: [21.3125, -1.5, 1.066666692495346, 607.75, 117.5, 0.0625]
+Eval stds: [18.29521368418527, 7.305819598101229, 0.19720269805757962, 59.55197309913417, 41.4578098794425, 0.16535945694153692]
+[cuda-mem] epoch_end_360 | device=0 (P1.gpu.large) allocated=24.41 GiB reserved=26.18 GiB peak_allocated=25.48 GiB peak_reserved=26.18 GiB suggested_slurm_gpu_mem=30.11 GiB
+[stage-time] epoch=360 collect=21.795s eval=169.278s world_model=51.237s actor=43.094s overhead=0.015s total=285.418s
+Eval for epoch:  450
+Eval means: [12.34375, -17.875, 0.24285714966910227, 1.0, 343.3333333333333, 0.75]
+Eval stds: [9.061799541895638, 8.499080832654787, 0.04948717035503677, 3.0, 45.411696975803736, 1.118033988749895]
+[cuda-mem] epoch_end_450 | device=0 (P1.gpu.large) allocated=24.41 GiB reserved=26.18 GiB peak_allocated=25.48 GiB peak_reserved=26.18 GiB suggested_slurm_gpu_mem=30.11 GiB
+[stage-time] epoch=450 collect=26.682s eval=194.013s world_model=56.737s actor=46.093s overhead=0.014s total=323.539s
+Eval for epoch:  540
+Eval means: [17.25, -19.875, 0.342857155416693, 12.125, 219.375, 81.85714285714286]
+Eval stds: [6.912398281349246, 13.378504213849917, 0.17612612726849802, 4.768057780690163, 65.04505649932207, 9.448031865020829]
+[cuda-mem] epoch_end_540 | device=0 (P1.gpu.large) allocated=24.40 GiB reserved=26.18 GiB peak_allocated=25.48 GiB peak_reserved=26.18 GiB suggested_slurm_gpu_mem=30.11 GiB
+[analysis-snapshot] reason=final epoch=540 path=/gemini/code/clworldmodel/runs/dv3_fifo_original_s0_analysis/analysis_snapshots/final_epoch_0540.pt sha256=c60f4057a5099aac6e2bb706bb78d760c5b1d70bd0842265df497407d64e34a7

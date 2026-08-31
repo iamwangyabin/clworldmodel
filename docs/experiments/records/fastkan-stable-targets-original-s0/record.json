@@ -1,0 +1,454 @@
+{
+  "schema_version": 1,
+  "record_id": "fastkan-stable-targets-original-s0",
+  "run_id": "arrow_fastkan_ac_stable_targets_ar50_continual_original_s0",
+  "method": "ARROW-FastKANAC-StableTargets-50",
+  "protocol": "ARROW-FastKANAC-StableTargets-50 Atari protocol",
+  "evidence_level": "pilot",
+  "classification": "actor-critic-continual-retention-pilot",
+  "status": "complete",
+  "recorded_at_utc": "2026-08-31T12:36:20Z",
+  "project_git": {
+    "commit": "66fc0bc0b253c1e74a9ff69a60c66d25f2a42b72",
+    "clean": true,
+    "upstream": "origin/codex/kan-ac-continual",
+    "ahead": 0,
+    "behind": 0
+  },
+  "seed": {
+    "id": 0,
+    "value": 123456789
+  },
+  "task_awareness": "task_agnostic",
+  "task_order": [
+    "ALE/MsPacman-v5",
+    "ALE/Boxing-v5",
+    "ALE/CrazyClimber-v5",
+    "ALE/Frostbite-v5",
+    "ALE/Seaquest-v5",
+    "ALE/Enduro-v5"
+  ],
+  "completion": {
+    "total_task_count": 6,
+    "completed_task_count": 6,
+    "completed_epochs": 540,
+    "final_evaluation_performed": false,
+    "return_code": 0,
+    "started_at_utc": "2026-08-18T11:17:50.101670+00:00",
+    "finished_at_utc": "2026-08-19T08:48:14.794184+00:00"
+  },
+  "evaluation": {
+    "metric": "raw_environment_return",
+    "policy": "stochastic",
+    "cohort_protocol": "advancing",
+    "evaluation_transitions_enter_replay": false,
+    "checkpoints": [
+      {
+        "checkpoint_id": "task-boundary-01",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 90,
+        "completed_task_count": 1,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2075.625,
+            "raw_return_std": 573.0179834656151
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": -4.6875,
+            "raw_return_std": 7.670713379471299
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 9477.777904934354,
+            "raw_return_std": 1664.5172970374542
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 135.0,
+            "raw_return_std": 70.178344238091
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "task-boundary-02",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 180,
+        "completed_task_count": 2,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1610.625,
+            "raw_return_std": 703.3888393875751
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 82.9375,
+            "raw_return_std": 6.169164753027755
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 3400.000035762787,
+            "raw_return_std": 0.00010323827311807139
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3.75,
+            "raw_return_std": 7.806247497997997
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "task-boundary-03",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 270,
+        "completed_task_count": 3,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1626.25,
+            "raw_return_std": 606.7008632761289
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 86.6875,
+            "raw_return_std": 9.251477922472711
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 58060.002517700195,
+            "raw_return_std": 27985.183167845735
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 65.625,
+            "raw_return_std": 54.88268738864743
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 5.0,
+            "raw_return_std": 8.660254037844387
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.375,
+            "raw_return_std": 0.9921567416492215
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "task-boundary-04",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 360,
+        "completed_task_count": 4,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1359.375,
+            "raw_return_std": 242.2929206043792
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 84.625,
+            "raw_return_std": 4.922842166878804
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 50477.77960035536,
+            "raw_return_std": 12764.863160679784
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 263.125,
+            "raw_return_std": 17.218721642444887
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 46.25,
+            "raw_return_std": 44.563858674939716
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 2.875,
+            "raw_return_std": 2.8912583765550943
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "task-boundary-05",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 450,
+        "completed_task_count": 5,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1342.5,
+            "raw_return_std": 226.45363763914236
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 82.9375,
+            "raw_return_std": 10.151777861537358
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 40610.00118255615,
+            "raw_return_std": 9769.589683756585
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 256.875,
+            "raw_return_std": 14.882351124738321
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 793.3333333333334,
+            "raw_return_std": 53.748384988657
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "task-boundary-06",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 540,
+        "completed_task_count": 6,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1501.875,
+            "raw_return_std": 466.7469703972378
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 86.875,
+            "raw_return_std": 5.677532474587882
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 36036.363254893906,
+            "raw_return_std": 12296.138708496203
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 260.0,
+            "raw_return_std": 15.811388300841896
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 736.9230769230769,
+            "raw_return_std": 72.2585757896454
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 64.0,
+            "raw_return_std": 14.352700094407323
+          }
+        ]
+      }
+    ]
+  },
+  "headline": {
+    "summary": "Matched six-task seed-0 FastKAN boundary: MsPacman 1501.88; Boxing 86.875; CrazyClimber 36036.4; Frostbite 260; Seaquest 736.923; Enduro 64."
+  },
+  "derived_metrics": {
+    "schema_version": "arrow-paper-v1",
+    "forgetting": 0.11415178029650229,
+    "forward_transfer": null,
+    "acc": 0.8274860803198004,
+    "min_acc": 0.792280195051089,
+    "wc_acc": 0.6753085531229603,
+    "source": "docs/protocols/references/local_s0_continual_metric_comparison_v1.json",
+    "source_sha256": "7821cb5e57c9ef56a794fd35922b97cd040abf7d762e61bb35108857ce85556c"
+  },
+  "budgets": {
+    "task_duration_epochs": [
+      90,
+      90,
+      90,
+      90,
+      90,
+      90
+    ],
+    "n_sync": 4,
+    "collection_sequence_length": 4096,
+    "frame_repeat": 4,
+    "world_model_updates_per_epoch": 1000,
+    "actor_critic_updates_per_epoch": 800,
+    "world_model_batch_time": 32,
+    "world_model_batch_sequences": 16,
+    "replay_sequence_slots": 1024,
+    "replay_sequence_length": 512,
+    "replay_transition_capacity": 524288
+  },
+  "comparability": {
+    "direct_comparison_group": "original-six-s0-matched-advancing-stochastic-v1",
+    "claim": "Direct local comparison is valid inside this matched single-seed diagnostic group; it is not an official multi-seed ranking.",
+    "limitations": [
+      "single-seed record; the paper table reports median [IQR] across five seeds"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "role": "derived_metric_report",
+      "name": "local_s0_continual_metric_comparison_v1.json",
+      "repository_path": "docs/protocols/references/local_s0_continual_metric_comparison_v1.json",
+      "sha256": "7821cb5e57c9ef56a794fd35922b97cd040abf7d762e61bb35108857ce85556c"
+    },
+    {
+      "role": "launch_manifest",
+      "name": "launch.json",
+      "sha256": "cc0e67de73b0f211e673bf6c56694e115e98f636320a3e623f9c7880180eec6f"
+    },
+    {
+      "role": "resolved_config",
+      "name": "resolved_training_config.json",
+      "sha256": "4cb1922715261b0a9da28c346016678d9366f090d628c6a968b6d681344d6716"
+    },
+    {
+      "role": "full_training_log",
+      "name": "train.log",
+      "sha256": "453d5ce9e65f896d9eb1840f739bf46150bbe2e61c8454ad04d63ac3a7edb842",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "run_status",
+      "name": "run_status.json",
+      "sha256": "d5a309617405da8fa8f4aa2fe948bb1816383a87421885219e486cf86dd77a87"
+    }
+  ],
+  "notes": [
+    "Actor-critic continual-retention pilot; a single seed is insufficient for an official method claim.",
+    "The epoch-540 row is the final scheduled periodic evaluation, not a separately held-out cohort."
+  ],
+  "parameter_accounting": {
+    "model_parameter_accounting": {
+      "schema_version": 1,
+      "observation_objective": "reconstruction",
+      "world_model": {
+        "parameters": 19498853,
+        "trainable_parameters": 19498853,
+        "parameter_bytes": 77995412
+      },
+      "observation_head_name": "decoder",
+      "observation_head": {
+        "parameters": 6985667,
+        "trainable_parameters": 6985667,
+        "parameter_bytes": 27942668
+      },
+      "accounting_scope": "parameters only; excludes gradients, optimizer state, and activations"
+    },
+    "actor_critic_parameter_accounting": {
+      "schema_version": 1,
+      "actor_class": "FastKANActor",
+      "actor": {
+        "parameters": 793692,
+        "trainable_parameters": 793692,
+        "parameter_bytes": 3174768,
+        "buffers": 32,
+        "buffer_bytes": 128,
+        "parameter_and_buffer_bytes": 3174896
+      },
+      "critic_class": "FastKANCritic",
+      "critic": {
+        "parameters": 906978,
+        "trainable_parameters": 906978,
+        "parameter_bytes": 3627912,
+        "buffers": 32,
+        "buffer_bytes": 128,
+        "parameter_and_buffer_bytes": 3628040
+      },
+      "actor_critic": {
+        "parameters": 1700670,
+        "trainable_parameters": 1700670,
+        "parameter_bytes": 6802680,
+        "buffers": 319,
+        "buffer_bytes": 1276,
+        "parameter_and_buffer_bytes": 6803956
+      },
+      "accounting_scope": "parameters and persistent buffers; excludes gradients, optimizer state, and activations; slow critic is training state only",
+      "slow_critic_class": "FastKANCritic",
+      "slow_critic": {
+        "parameters": 906978,
+        "trainable_parameters": 0,
+        "parameter_bytes": 3627912,
+        "buffers": 32,
+        "buffer_bytes": 128,
+        "parameter_and_buffer_bytes": 3628040
+      }
+    }
+  }
+}

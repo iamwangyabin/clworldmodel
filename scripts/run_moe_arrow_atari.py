@@ -16,6 +16,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from git_provenance import git_state, require_synced_training_git_state
+from launcher_support import (
+    run_and_tee as _run_and_tee,
+    runtime_info as _runtime_info,
+    write_json as _write_json,
+)
 from run_arrow_ar50_atari import (
     ARROW_ROOT,
     CURRICULUM_DIRS,
@@ -25,10 +30,7 @@ from run_arrow_ar50_atari import (
     UPSTREAM_COMMIT,
     _arrow_replay_storage_budget,
     _config_path,
-    _run_and_tee,
-    _runtime_info,
     _verify_primary_config,
-    _write_json,
 )
 from run_karrow_ar50_atari import (
     DINOV3_CACHE_DTYPE,
@@ -61,8 +63,6 @@ TWO_TASK_CONTINUAL_CAMPAIGN_PROFILE = (
 THREE_TASK_CONTINUAL_CAMPAIGN_PROFILE = (
     "three-task-single-gpu-x4-double-sample-pilot-v1"
 )
-# Kept as an import-compatible alias for callers that reference the original name.
-CONTINUAL_CAMPAIGN_PROFILE = SIX_TASK_CONTINUAL_CAMPAIGN_PROFILE
 INDEPENDENT_EXPERT_PROFILE = "parallel-independent-single-gpu-v1"
 SINGLE_GPU_SPEED_EXPERT_PROFILE = "single-gpu-large-batch-90-v1"
 TASK1_GATE_EVIDENCE_PATH = (
@@ -267,6 +267,30 @@ BATCH_PROFILES = {
         classification="compute_saturation_large_batch_ablation",
         learning_rate_rule="unchanged_from_fixed_batch",
         optimizer_update_multiplier=1.0,
+    ),
+    "x4-double-sample-linear-lr": BatchProfile(
+        scale=4,
+        protocol_suffix="LargeBatchX4DoubleSampleLinearLR",
+        output_suffix="large_batch_x4_double_sample_linear_lr",
+        config_overrides={
+            "mb_n_size": 64,
+            "pretrain_mb_n_size": 64,
+            "steps_per_batch": 500,
+            "pretrain_steps": 15_000,
+            "ac_train_sync": 512,
+            "ac_train_steps": 400,
+            "wm_lr": 2e-4,
+            "ac_lr": 2e-4,
+        },
+        hypothesis=(
+            "Distributing the successful single-GPU x4 double-sample global "
+            "batches across four ranks preserves environment interaction, "
+            "optimizer updates, sampled-frame use, and learning rates while "
+            "reducing per-rank optimization work."
+        ),
+        classification="execution_matched_ddp4_large_batch_profile",
+        learning_rate_rule="matched_to_single_gpu_x4_double_sample",
+        optimizer_update_multiplier=0.5,
     ),
     "single-gpu-x4-linear-lr": BatchProfile(
         scale=4,
@@ -1124,6 +1148,7 @@ def main(*, default_method: str = "moe") -> int:
         task1_large_batch_reference = (
             args.batch_profile
             in {
+                "x4-double-sample-linear-lr",
                 "single-gpu-x4-linear-lr",
                 "single-gpu-x4-double-sample-linear-lr",
             }
@@ -1283,7 +1308,6 @@ def main(*, default_method: str = "moe") -> int:
         source_config = json.loads(json.dumps(source_config))
         source_config["esc"]["env_configs"] = [independent_task]
     tasks = source_config["esc"]["env_configs"]
-    task_names = [task["name"] for task in tasks]
     source_swap_sched = int(source_config["esc"]["kwargs"]["swap_sched"])
     swap_sched = source_swap_sched * args.task_duration_multiplier
     training_epochs = (

@@ -109,15 +109,3 @@ def protect_kan_parameter_updates(
             dtype=weight.dtype,
         )
         weight.copy_(previous + scale * (weight - previous))
-
-
-def kan_consolidation_penalty(module: nn.Module) -> torch.Tensor:
-    """Sum each adapter's anchor penalty once per optimization objective."""
-    residuals = named_kan_residuals(module)
-    if residuals:
-        return torch.stack(
-            [residual.consolidation_penalty() for residual in residuals.values()]
-        ).sum()
-    parameter = next(module.parameters(), None)
-    device = parameter.device if parameter is not None else torch.device("cpu")
-    return torch.zeros((), device=device)

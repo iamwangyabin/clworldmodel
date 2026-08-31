@@ -11,12 +11,9 @@ known route, not whether a particular LoRA optimizer can learn that route.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib
 import json
-import os
 import sys
-import tempfile
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +21,11 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from artifact_io import (
+    sha256_file as _sha256,
+    write_json_atomic_sorted as _write_json_atomic,
+    write_text_atomic as _write_text_atomic,
+)
 from git_provenance import git_state
 
 
@@ -32,28 +34,6 @@ PROJECT_SRC = ROOT / "src"
 VENDORED_ATARI = (
     ROOT / "third_party" / "arrow" / "Code" / "ARROW_and_DV3" / "Atari"
 )
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _write_text_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, delete=False
-    ) as temporary:
-        temporary.write(text)
-        temporary_path = Path(temporary.name)
-    os.replace(temporary_path, path)
-
-
-def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
-    _write_text_atomic(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
 def _vendor_modules() -> SimpleNamespace:

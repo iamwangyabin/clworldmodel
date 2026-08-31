@@ -1,0 +1,17 @@
+# Curated evaluation-only excerpt; full training log is intentionally excluded from Git.
+# source_sha256=004208756c7e2381074767a24ba84c4a216b9b43b988f084c6db27a23fe0285e
+# task_00_pre_validation.json: fixed_validation, 16 rollouts
+pre_raw_mean=[1100.0]
+pre_raw_std=[106.2426468043789]
+# task_00_boundary.json: 1000 consolidation steps, rollback=false
+post_raw_mean=[1155.0]
+post_raw_std=[275.4087870784082]
+Eval for epoch:  130
+Eval means: [59.21875, 68.0625, 7.230000066757202, 14.25, 27.5, 0.0]
+Eval stds: [10.083973593653447, 9.12735414838276, 1.650484804369519, 8.302860952707807, 26.100766272276374, 0.0]
+Eval raw means: [1184.375, 68.0625, 7230.000066757202, 71.25, 55.0, 0.0]
+Eval raw stds: [201.67947187306893, 9.12735414838276, 1650.484804369519, 41.51430476353903, 52.20153254455275, 0.0]
+# Terminal source lines:
+Starting Epoch  134
+replay.n_valid=512
+# Source directory contained neither run_status.json nor final_evaluation.json at collection time.

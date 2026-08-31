@@ -1,0 +1,818 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "curated_experiment_registry",
+  "generated_from": "docs/experiments/records/*/record.json",
+  "record_count": 13,
+  "storage_policy": {
+    "included": [
+      "structured provenance",
+      "raw per-task evaluation summaries",
+      "derived metric summaries with formulas or source references",
+      "small human-readable evaluation log excerpts",
+      "source artifact SHA256 checksums"
+    ],
+    "excluded": [
+      "model weights and inference snapshots",
+      "training and optimizer checkpoints",
+      "replay storage",
+      "TensorBoard event files",
+      "videos and full generated run directories",
+      "full training logs"
+    ]
+  },
+  "records": [
+    {
+      "record_id": "arrow-ar50-original-s0",
+      "run_id": "arrow_ar50_original_s0_analysis",
+      "method": "ARROW-50",
+      "protocol": "ARROW-50 Atari primary-method protocol",
+      "evidence_level": "diagnostic",
+      "classification": "primary-method",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 540,
+        "final_evaluation_performed": false
+      },
+      "headline": "Matched six-task seed-0 boundary: MsPacman 1195; Boxing 85.9375; CrazyClimber 35744.4; Frostbite 620.625; Seaquest 446.25; Enduro 124.125.",
+      "latest_checkpoint": {
+        "checkpoint_id": "task-boundary-06",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1195.0,
+            "raw_return_std": 169.30002953337012
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 85.9375,
+            "raw_return_std": 6.571422505820182
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 35744.445164998375,
+            "raw_return_std": 19553.296001426927
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 620.625,
+            "raw_return_std": 453.3137537898006
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 446.25,
+            "raw_return_std": 88.23795951856548
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 124.125,
+            "raw_return_std": 14.33908557056551
+          }
+        ]
+      },
+      "comparability_claim": "Direct local comparison is valid inside this matched single-seed diagnostic group; it is not an official multi-seed ranking.",
+      "record_path": "docs/experiments/records/arrow-ar50-original-s0/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-original-s0/evaluation.log",
+          "sha256": "bb9be03258673890172e6854813555c1b850954feed9dd7745b3d87d792f5626",
+          "bytes": 3286
+        },
+        {
+          "path": "docs/experiments/records/arrow-ar50-original-s0/record.json",
+          "sha256": "2e0c4a6f418bd365d343ab5c3a9d315e517a0923e6a66224b3d5b23c771e7242",
+          "bytes": 12281
+        }
+      ]
+    },
+    {
+      "record_id": "cnn-compact-independent-actor-smoke-s0",
+      "run_id": "cnn_projector_rssm_compact_lora_arrow_v2_task1strongseeded_smoke_t092_single_gpu_r32_32_16_bf16_uint8_seed0_cpu12_taskaware_c8a4f7c_20260827_run1",
+      "method": "CNN-Projector-RSSM-CompactLoRA-ARROW-v2",
+      "protocol": "CNN-Projector-RSSM-CompactLoRA-ARROW-v2-Task1SnapshotSeeded-Atari-TaskAware",
+      "evidence_level": "smoke",
+      "classification": "snapshot_seeded_incremental_smoke",
+      "status": "complete",
+      "task_awareness": "task_aware",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 2,
+        "completed_epochs": 92,
+        "final_evaluation_performed": true
+      },
+      "headline": "Held-out seed-0 raw returns: MsPacman 2595.62; Boxing -41. Smoke only; no performance claim.",
+      "latest_checkpoint": {
+        "checkpoint_id": "heldout-smoke",
+        "stage": "heldout_after_partial_task_smoke",
+        "completed_epochs": 92,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2595.625,
+            "raw_return_std": 491.7820750850929
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": -41.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      "comparability_claim": "Smoke execution evidence only; no performance comparison is allowed.",
+      "record_path": "docs/experiments/records/cnn-compact-independent-actor-smoke-s0/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/cnn-compact-independent-actor-smoke-s0/record.json",
+          "sha256": "f1381fd808ef929f50152ea79d039ca8cdafeaa580f75a8c63e9c44182af4d46",
+          "bytes": 5783
+        }
+      ]
+    },
+    {
+      "record_id": "cnn-compact-shared-actor-three-task-s0",
+      "run_id": "cnn_compact_shared_actor_arrow_v1_task1seeded_three_task_t270_single_gpu_rep32_trans32_gruout32_bf16_uint8_seed0_cpu12_taskaware_pilot_v1_e25dc71_20260827_run1",
+      "method": "CNN-Projector-CompactRSSM-SharedActor-ARROW-v1",
+      "protocol": "CNN-Projector-CompactRSSM-SharedActor-ARROW-v1-Task1SnapshotSeeded-Atari-TaskAware",
+      "evidence_level": "pilot",
+      "classification": "single_seed_snapshot_seeded_incremental_pilot",
+      "status": "complete",
+      "task_awareness": "task_aware",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 3,
+        "total_task_count": 3,
+        "completed_epochs": 270,
+        "final_evaluation_performed": true
+      },
+      "headline": "Held-out seed-0 raw returns: MsPacman 1393.12; Boxing 32.125; CrazyClimber 20400.",
+      "latest_checkpoint": {
+        "checkpoint_id": "heldout-final",
+        "stage": "heldout_final",
+        "completed_epochs": 270,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1393.125,
+            "raw_return_std": 201.48569273027798
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 32.125,
+            "raw_return_std": 10.10491835691907
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 20400.0004359654,
+            "raw_return_std": 4241.630021146824
+          }
+        ]
+      },
+      "comparability_claim": "Single-seed task-aware pilot evidence only; no fair superiority or task-agnostic claim is allowed.",
+      "record_path": "docs/experiments/records/cnn-compact-shared-actor-three-task-s0/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/cnn-compact-shared-actor-three-task-s0/record.json",
+          "sha256": "c96496569466190b68fe5301e2201cce5abbe41d05d80be554be8e5d0dbe7eaf",
+          "bytes": 6157
+        }
+      ]
+    },
+    {
+      "record_id": "cnn-fullbank-task0-180e-gate-s0",
+      "run_id": "cnn_fullbank_arrow_v1_task1_t180_x4_fullupdates_fixed_eval_fp32cont_guard_bf16_uint8_dp4_shm_seed0_20260824_run1",
+      "method": "CNN-FullBank-ARROW-v1 180-epoch x4-full-update Task-0 gate",
+      "protocol": "CNN-FullBank-ARROW-v1 Task-0 180-epoch x4-full-update acquisition gate",
+      "evidence_level": "pilot",
+      "classification": "single_task_acquisition_gate",
+      "status": "complete",
+      "task_awareness": "task_aware",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 180,
+        "final_evaluation_performed": true
+      },
+      "headline": "Held-out seed-0 MsPacman raw return 2418.75 ± 227.345; acquisition gate passed.",
+      "latest_checkpoint": {
+        "checkpoint_id": "heldout-final",
+        "stage": "heldout_final_acquisition_gate",
+        "completed_epochs": 180,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2418.75,
+            "raw_return_std": 227.3454145128069
+          }
+        ]
+      },
+      "comparability_claim": "Single-task task-aware acquisition gate only; progression evidence, not a continual-retention or fair-superiority result.",
+      "record_path": "docs/experiments/records/cnn-fullbank-task0-180e-gate-s0/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/cnn-fullbank-task0-180e-gate-s0/record.json",
+          "sha256": "61913086bcc042299a997032f8f74b71eef6e3916fa196a5c308847edf4d0c69",
+          "bytes": 3521
+        }
+      ]
+    },
+    {
+      "record_id": "cnn-fullbank-task0-x4-double-sample-gate-s0",
+      "run_id": "cnn_fullbank_arrow_v1_mspacman_t090_single_gpu_x4_double_sample_linear_lr_fixed_eval_fp32cont_bf16_uint8_seed0_speed_accuracy_pilot_v1_20260825_run1",
+      "method": "CNN-FullBank-ARROW-v1 x4-double-sample Task-0 gate",
+      "protocol": "CNN-FullBank-ARROW-v1 single-GPU x4-double-sample Task-0 acquisition gate",
+      "evidence_level": "pilot",
+      "classification": "single_gpu_extra_sample_large_batch_ablation",
+      "status": "complete",
+      "task_awareness": "task_aware",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "Held-out seed-0 MsPacman raw return 2595.62 ± 491.782; acquisition gate passed.",
+      "latest_checkpoint": {
+        "checkpoint_id": "heldout-final",
+        "stage": "heldout_final_acquisition_gate",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2595.625,
+            "raw_return_std": 491.7820750850929
+          }
+        ]
+      },
+      "comparability_claim": "Single-task task-aware acquisition gate only; progression evidence, not a continual-retention or fair-superiority result.",
+      "record_path": "docs/experiments/records/cnn-fullbank-task0-x4-double-sample-gate-s0/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/cnn-fullbank-task0-x4-double-sample-gate-s0/record.json",
+          "sha256": "3f263dc8c2dddeb7828c5101ff5b1bbb6d67a2b05c9a2ab2f745944e3745a9cb",
+          "bytes": 4605
+        }
+      ]
+    },
+    {
+      "record_id": "cnn-fullbank-three-task-s0",
+      "run_id": "cnn_fullbank_arrow_v1_three_task_t270_single_gpu_x4_double_sample_linear_lr_sequential_first3_only_fixed_eval_fp32cont_bf16_uint8_seed0_cpu12_sequential_continual_pilot_v1_20260826_run1",
+      "method": "CNN-FullBank-ARROW-v1",
+      "protocol": "CNN-FullBank-ARROW-v1-BF16AMP-Uint8Replay-SingleGPULargeBatchX4DoubleSampleLinearLR-FixedEvalAudit-ThreeTaskSingleGPUX4DoubleSamplePilotV1-Atari-TaskAware",
+      "evidence_level": "pilot",
+      "classification": "single_seed_three_task_sequential_extra_sample_pilot",
+      "status": "complete",
+      "task_awareness": "task_aware",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 3,
+        "total_task_count": 3,
+        "completed_epochs": 270,
+        "final_evaluation_performed": true
+      },
+      "headline": "Held-out seed-0 raw returns: MsPacman 1341.88; Boxing 80.0625; CrazyClimber 108675.",
+      "latest_checkpoint": {
+        "checkpoint_id": "heldout-final",
+        "stage": "heldout_final",
+        "completed_epochs": 270,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1341.875,
+            "raw_return_std": 143.6670956586789
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 80.0625,
+            "raw_return_std": 11.393357439754096
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 108675.00495910645,
+            "raw_return_std": 9953.234679668065
+          }
+        ]
+      },
+      "comparability_claim": "Single-seed task-aware pilot evidence only; no fair superiority or task-agnostic claim is allowed.",
+      "record_path": "docs/experiments/records/cnn-fullbank-three-task-s0/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/cnn-fullbank-three-task-s0/record.json",
+          "sha256": "40c1fdba01bd57add55d89e84adae4f9b1452caaec937dcaf67fe21ee99b4b5a",
+          "bytes": 5837
+        }
+      ]
+    },
+    {
+      "record_id": "cnn-projector-lora-strong-source-s0",
+      "run_id": "cnn_projector_rssm_lora_arrow_v1_task1strongseeded_three_task_t270_single_gpu_r128_128_32_bf16_uint8_seed0_cpu12_taskaware_plasticity_pilot_v1_f61feae_20260827_run1",
+      "method": "CNN-Projector-RSSM-LoRA-ARROW-v1 (strong Task-1 source)",
+      "protocol": "CNN-Projector-RSSM-LoRA-ARROW-v1-Task1SnapshotSeeded-Atari-TaskAware",
+      "evidence_level": "pilot",
+      "classification": "single_seed_snapshot_seeded_incremental_pilot",
+      "status": "complete",
+      "task_awareness": "task_aware",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 3,
+        "total_task_count": 3,
+        "completed_epochs": 270,
+        "final_evaluation_performed": true
+      },
+      "headline": "Held-out seed-0 raw returns: MsPacman 2595.62; Boxing 59.6875; CrazyClimber 15900.",
+      "latest_checkpoint": {
+        "checkpoint_id": "heldout-final",
+        "stage": "heldout_final",
+        "completed_epochs": 270,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2595.625,
+            "raw_return_std": 491.7820750850929
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 59.6875,
+            "raw_return_std": 12.25621653488547
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 15900.00057220459,
+            "raw_return_std": 624.337059334558
+          }
+        ]
+      },
+      "comparability_claim": "Single-seed task-aware pilot evidence only; no fair superiority or task-agnostic claim is allowed.",
+      "record_path": "docs/experiments/records/cnn-projector-lora-strong-source-s0/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/cnn-projector-lora-strong-source-s0/record.json",
+          "sha256": "3db4c29766536eb7ea5cb5383b8c99d5b4165e04f70f554bbf437ef933553117",
+          "bytes": 5894
+        }
+      ]
+    },
+    {
+      "record_id": "cnn-projector-lora-weak-source-s0",
+      "run_id": "cnn_projector_rssm_lora_arrow_v1_task1seeded_three_task_t270_single_gpu_r128_128_32_bf16_uint8_seed0_cpu12_taskaware_pilot_v1_caa4142_20260826_run1",
+      "method": "CNN-Projector-RSSM-LoRA-ARROW-v1 (weak Task-1 source)",
+      "protocol": "CNN-Projector-RSSM-LoRA-ARROW-v1-Task1SnapshotSeeded-Atari-TaskAware",
+      "evidence_level": "pilot",
+      "classification": "single_seed_snapshot_seeded_incremental_pilot",
+      "status": "complete",
+      "task_awareness": "task_aware",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 3,
+        "total_task_count": 3,
+        "completed_epochs": 270,
+        "final_evaluation_performed": true
+      },
+      "headline": "Held-out seed-0 raw returns: MsPacman 1341.88; Boxing 79.6875; CrazyClimber 21275.",
+      "latest_checkpoint": {
+        "checkpoint_id": "heldout-final",
+        "stage": "heldout_final",
+        "completed_epochs": 270,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1341.875,
+            "raw_return_std": 143.6670956586789
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 79.6875,
+            "raw_return_std": 8.737267521943002
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 21275.001525878906,
+            "raw_return_std": 803.4809659568026
+          }
+        ]
+      },
+      "comparability_claim": "Single-seed task-aware pilot evidence only; no fair superiority or task-agnostic claim is allowed.",
+      "record_path": "docs/experiments/records/cnn-projector-lora-weak-source-s0/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/cnn-projector-lora-weak-source-s0/record.json",
+          "sha256": "6faa8dc892cc14ea258debcffffbca28de2eebeb2805604efeeda4d543c003a7",
+          "bytes": 5886
+        }
+      ]
+    },
+    {
+      "record_id": "dv3-fifo-original-s0",
+      "run_id": "dv3_fifo_original_s0_analysis",
+      "method": "DreamerV3/FIFO",
+      "protocol": "DreamerV3/FIFO Atari matched-control protocol",
+      "evidence_level": "diagnostic",
+      "classification": "matched-control",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 540,
+        "final_evaluation_performed": false
+      },
+      "headline": "Matched six-task seed-0 control boundary: MsPacman 345; Boxing -19.875; CrazyClimber 342.857; Frostbite 60.625; Seaquest 438.75; Enduro 163.714.",
+      "latest_checkpoint": {
+        "checkpoint_id": "task-boundary-06",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 345.0,
+            "raw_return_std": 138.2479656269849
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": -19.875,
+            "raw_return_std": 13.378504213849917
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 342.857155416693,
+            "raw_return_std": 176.126127268498
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 60.625,
+            "raw_return_std": 23.840288903450812
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 438.75,
+            "raw_return_std": 130.09011299864414
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 163.71428571428572,
+            "raw_return_std": 18.896063730041657
+          }
+        ]
+      },
+      "comparability_claim": "Direct local comparison is valid inside this matched single-seed diagnostic group; it is not an official multi-seed ranking.",
+      "record_path": "docs/experiments/records/dv3-fifo-original-s0/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/dv3-fifo-original-s0/evaluation.log",
+          "sha256": "8ce0497524c1ec8dcf010953e138a86e532af4c742d153926113ded0d245be9b",
+          "bytes": 3265
+        },
+        {
+          "path": "docs/experiments/records/dv3-fifo-original-s0/record.json",
+          "sha256": "36df819088e89cf8cb9dc2cf69b8ebdec2b131359ee6512874e6055791899896",
+          "bytes": 12309
+        }
+      ]
+    },
+    {
+      "record_id": "evolving-compact-original-six-s0-partial",
+      "run_id": "compact_128_128_64_original_six_s0_pilot",
+      "method": "Evolving-Core Atomic RSSM Compact Mechanism 128/128/64",
+      "protocol": "Evolving-Core-Atomic-RSSM-CompactMechanism-128-128-64-ARROW-v1-OriginalSix-Atari-TaskAware-Pilot",
+      "evidence_level": "ablation",
+      "classification": "pilot",
+      "status": "partial",
+      "task_awareness": "task_aware",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 6,
+        "completed_epochs": 134,
+        "final_evaluation_performed": false
+      },
+      "headline": "Task-0 fixed-validation raw return improved from 1100.0 ± 106.243 before consolidation to an accepted 1155.0 ± 275.409; the run is partial during Task 1.",
+      "latest_checkpoint": {
+        "checkpoint_id": "periodic-epoch-130-partial-task-01",
+        "stage": "periodic_during_partial_boxing_training",
+        "completed_epochs": 130,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1184.375,
+            "raw_return_std": 201.67947187306893
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 68.0625,
+            "raw_return_std": 9.12735414838276
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 7230.000066757202,
+            "raw_return_std": 1650.484804369519
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 71.25,
+            "raw_return_std": 41.51430476353903
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 55.0,
+            "raw_return_std": 52.20153254455275
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      "comparability_claim": "Direct Task-0 capacity-ablation diagnostic against dense and SharedDown is valid for the same seed, fixed cohort, duration, and rollout count; later-task comparisons are incomplete.",
+      "record_path": "docs/experiments/records/evolving-compact-original-six-s0-partial/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/evolving-compact-original-six-s0-partial/evaluation.log",
+          "sha256": "b042639d99a4b2f9d0ee793252e694f02cb29c1bd41910f4b602b5edcb30082d",
+          "bytes": 962
+        },
+        {
+          "path": "docs/experiments/records/evolving-compact-original-six-s0-partial/record.json",
+          "sha256": "970a89d2cfc4cddb219dfd3cb30fb452462140624e2fe8b79a65f266f5e49e73",
+          "bytes": 8619
+        }
+      ]
+    },
+    {
+      "record_id": "evolving-dense-original-six-s0-partial",
+      "run_id": "arrow_original_six_s0_pilot",
+      "method": "Evolving-Core Atomic RSSM (dense full-width 512/512/256)",
+      "protocol": "Evolving-Core-Atomic-RSSM-ARROW-v2-OriginalSix-Atari-TaskAware-Pilot",
+      "evidence_level": "pilot",
+      "classification": "pilot",
+      "status": "partial",
+      "task_awareness": "task_aware",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 4,
+        "total_task_count": 6,
+        "completed_epochs": 404,
+        "final_evaluation_performed": false
+      },
+      "headline": "Latest accepted four-task boundary raw returns: MsPacman 2074.375; Boxing 87.5625; CrazyClimber 87457.144; Frostbite 272.5. Training is partial, not a six-task final result.",
+      "latest_checkpoint": {
+        "checkpoint_id": "periodic-epoch-400-partial-task-04",
+        "stage": "periodic_during_partial_seaquest_training",
+        "completed_epochs": 400,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1921.25,
+            "raw_return_std": 187.01186459687523
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 88.4375,
+            "raw_return_std": 4.961964706645947
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 69722.22434149847,
+            "raw_return_std": 36542.6025684483
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 274.375,
+            "raw_return_std": 4.960783708246107
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 765.3333333333334,
+            "raw_return_std": 134.1574530997895
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.125,
+            "raw_return_std": 0.33071891388307384
+          }
+        ]
+      },
+      "comparability_claim": "Direct Task-0 acquisition diagnostic against Compact and SharedDown is valid for the same seed, fixed cohort, duration, and rollout count; later-task or ARROW superiority claims are not valid.",
+      "record_path": "docs/experiments/records/evolving-dense-original-six-s0-partial/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/evolving-dense-original-six-s0-partial/evaluation.log",
+          "sha256": "5aa47ffcee83e8b36c90ea167127c82e58a60ab70a830f217f9c9b11c6100d3d",
+          "bytes": 2402
+        },
+        {
+          "path": "docs/experiments/records/evolving-dense-original-six-s0-partial/record.json",
+          "sha256": "642bddde0aea6ef02727c5a781c8e54b1e22f54bf16c6731d9fdd1cd676846ca",
+          "bytes": 17940
+        }
+      ]
+    },
+    {
+      "record_id": "evolving-shared-down-task0-s0",
+      "run_id": "shared_frozen_down_full_width_task0_s0_pilot",
+      "method": "Evolving-Core Shared Frozen Down + Private LayerNorm/FiLM/Up",
+      "protocol": "Evolving-Core-Atomic-RSSM-SharedFrozenDown-FiLM-ARROW-v1-OriginalSixRouteAllocation-Task0-Acquisition-Pilot",
+      "evidence_level": "pilot",
+      "classification": "pilot",
+      "status": "complete",
+      "task_awareness": "task_aware",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": false
+      },
+      "headline": "Task-0 fixed-validation raw return 1588.75 ± 270.228 before consolidation; the 1497.5 candidate triggered rollback, so 1588.75 was accepted.",
+      "latest_checkpoint": {
+        "checkpoint_id": "task-boundary-01-accepted",
+        "stage": "accepted_pre_consolidation_after_rollback",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1588.75,
+            "raw_return_std": 270.22849128098983
+          }
+        ]
+      },
+      "comparability_claim": "Direct Task-0 acquisition diagnostic against the dense and compact Evolving-Core controls is valid for this same seed, cohort, duration, and rollout count; no retention claim follows.",
+      "record_path": "docs/experiments/records/evolving-shared-down-task0-s0/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/evolving-shared-down-task0-s0/evaluation.log",
+          "sha256": "049df8007666c9c72057314b7cd5419fb257f77126c9851c71a4718704c2a83b",
+          "bytes": 647
+        },
+        {
+          "path": "docs/experiments/records/evolving-shared-down-task0-s0/record.json",
+          "sha256": "8182a16d5a298b15d1cb6d3aae2486dceee9df42f63e607e7dd0a133e7b4ed59",
+          "bytes": 7505
+        }
+      ]
+    },
+    {
+      "record_id": "fastkan-stable-targets-original-s0",
+      "run_id": "arrow_fastkan_ac_stable_targets_ar50_continual_original_s0",
+      "method": "ARROW-FastKANAC-StableTargets-50",
+      "protocol": "ARROW-FastKANAC-StableTargets-50 Atari protocol",
+      "evidence_level": "pilot",
+      "classification": "actor-critic-continual-retention-pilot",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 540,
+        "final_evaluation_performed": false
+      },
+      "headline": "Matched six-task seed-0 FastKAN boundary: MsPacman 1501.88; Boxing 86.875; CrazyClimber 36036.4; Frostbite 260; Seaquest 736.923; Enduro 64.",
+      "latest_checkpoint": {
+        "checkpoint_id": "task-boundary-06",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1501.875,
+            "raw_return_std": 466.7469703972378
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 86.875,
+            "raw_return_std": 5.677532474587882
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 36036.363254893906,
+            "raw_return_std": 12296.138708496203
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 260.0,
+            "raw_return_std": 15.811388300841896
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 736.9230769230769,
+            "raw_return_std": 72.2585757896454
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 64.0,
+            "raw_return_std": 14.352700094407323
+          }
+        ]
+      },
+      "comparability_claim": "Direct local comparison is valid inside this matched single-seed diagnostic group; it is not an official multi-seed ranking.",
+      "record_path": "docs/experiments/records/fastkan-stable-targets-original-s0/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/fastkan-stable-targets-original-s0/evaluation.log",
+          "sha256": "17d5969acd9e82de6c7e08de0ed0c2bc71ffa7b84289953fc267e93e02ba567f",
+          "bytes": 2634
+        },
+        {
+          "path": "docs/experiments/records/fastkan-stable-targets-original-s0/record.json",
+          "sha256": "b2c05ea7604f473c7e7ee8067fe1b83e38bd3569c79c1d38aa74c124a0145dcc",
+          "bytes": 14263
+        }
+      ]
+    }
+  ]
+}

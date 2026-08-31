@@ -31,6 +31,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils import parametrize
 
+from artifact_io import (
+    sha256_file as _sha256,
+    write_json_atomic_sorted as _write_json_atomic,
+    write_text_atomic as _write_text_atomic,
+)
 from evaluate_cnn_fullbank_oracle_lora import (
     ROOT,
     _autocast,
@@ -40,10 +45,7 @@ from evaluate_cnn_fullbank_oracle_lora import (
     _evaluate,
     _install_shared_encoder_adapter,
     _load_exact,
-    _sha256,
     _vendor_modules,
-    _write_json_atomic,
-    _write_text_atomic,
 )
 from git_provenance import git_state, require_synced_training_git_state
 

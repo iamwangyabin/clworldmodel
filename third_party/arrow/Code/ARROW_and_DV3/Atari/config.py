@@ -32,6 +32,9 @@ ContinualMethod = Literal[
     "cnn_fullbank_arrow",
     "cnn_projector_lora_arrow",
     "cnn_compact_shared_actor_arrow",
+    "cnn_mechanism_bank_arrow",
+    "rec_rssm_arrow",
+    "evolving_atomic_rssm_arrow",
     "dino_fullbank_arrow",
     "dino_patchbank_arrow",
     "dino_convbank_arrow",
@@ -47,6 +50,8 @@ SharedCoreMode = Literal[
     "task_banked_shared_adapter",
     "task1_frozen_projector_lora",
     "task1_frozen_projector_compact_rssm",
+    "task1_frozen_mechanism_bank",
+    "evolving_replay_protected",
 ]
 ActorNetwork = Literal[
     "mlp",
@@ -59,6 +64,7 @@ ActorNetwork = Literal[
 ]
 ActorCriticOptimizer = Literal["adam", "laprop"]
 ActorCriticSchedule = Literal["constant", "task_cosine_decay"]
+TaskMechanismCapacityProfile = Literal["matched_512", "expanded_640"]
 EvaluationSeedProtocol = Literal[
     "advancing",
     "fixed_validation_heldout_final",
@@ -66,6 +72,18 @@ EvaluationSeedProtocol = Literal[
 ComputeDType = Literal["float32", "bfloat16"]
 ReplayObservationDType = Literal["float32", "uint8"]
 DataParallelWorldSize = Literal[1, 2, 4]
+EvolvingTask0Profile = Literal[
+    "fixed_v1",
+    "fixed_v2",
+    "task0_shared_lr_1e4",
+    "task0_shared_lr_3e4",
+    "task0_private_lr_3e4",
+    "task0_actor_lr_2e4",
+    "task0_epochs_120",
+    "task0_epochs_150",
+    "task0_epochs_180",
+    "task0_epochs_240",
+]
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -299,6 +317,42 @@ class Config(Serialisable):
     task_lora_representation_rank: int = 0
     task_lora_transition_rank: int = 0
     task_recurrent_output_adapter_features: int = 0
+    task_mechanism_bank: bool = False
+    task_mechanism_reuse: bool = True
+    task_mechanism_capacity_profile: TaskMechanismCapacityProfile = "matched_512"
+    task_mechanism_recurrent_width: int = 512
+    task_mechanism_representation_width: int = 512
+    task_mechanism_transition_width: int = 256
+    task_mechanism_residual_scale: float = 0.1
+    task_mechanism_num_atoms: int = 1
+    task_mechanism_reuse_probe_epochs: int = 0
+    task_mechanism_route_lr_scale: float = 1.0
+    task_mechanism_consolidation_batches: int = 8
+    task_mechanism_min_contribution: float = 0.01
+    task_mechanism_max_validation_drop: float = 0.05
+    # Evolving-Core Atomic RSSM is intentionally configured independently of
+    # the frozen-base MB/REC methods above.
+    evolving_task0_profile: EvolvingTask0Profile = "fixed_v1"
+    evolving_shared_core: bool = False
+    first_task_shared_core_lr: float = 2e-4
+    shared_core_lr: float = 1e-4
+    task_private_lr: float = 2e-4
+    task_route_lr: float = 1e-3
+    current_batch_n: int = 12
+    memory_batch_n: int = 4
+    memory_loss_scale: float = 1.0
+    interface_q_scale: float = 0.1
+    interface_h_scale: float = 0.05
+    interface_actor_scale: float = 0.05
+    component_gradient_projection: bool = True
+    task_atom_output_regularization: float = 1e-4
+    boundary_consolidation_steps: int = 1000
+    boundary_consolidation_lr: float = 2e-5
+    boundary_max_return_drop: float = 0.05
+    task_private_heads: bool = False
+    task_private_actor_critic: bool = False
+    task_atomic_routes: bool = False
+    full_task_rssm_experts: bool = False
     shared_actor_imagination_distillation: bool = False
     shared_actor_distill_scale: float = 0.0
     shared_actor_distill_interval: int = 1
@@ -364,12 +418,47 @@ class Config(Serialisable):
         assert self.n_sync * self.gen_seq_len == self.data_n * self.data_t
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
+        sequential_task_durations: tuple[int, ...] | None = None
+        if self.esc.env_schedule_type is SequentialEnvironments:
+            task_durations = self.esc.kwargs.get("task_durations")
+            swap_sched = self.esc.kwargs.get("swap_sched")
+            if task_durations is not None and swap_sched is not None:
+                raise ValueError(
+                    "Sequential scheduling accepts swap_sched or task_durations, "
+                    "not both"
+                )
+            if task_durations is None:
+                if not isinstance(swap_sched, int) or swap_sched < 1:
+                    raise ValueError(
+                        "Sequential scheduling requires a positive swap_sched"
+                    )
+                sequential_task_durations = (swap_sched,) * len(
+                    self.esc.env_configs
+                )
+            else:
+                if not isinstance(task_durations, list) or len(
+                    task_durations
+                ) != len(self.esc.env_configs):
+                    raise ValueError(
+                        "task_durations must be a list matching the environment count"
+                    )
+                if any(
+                    not isinstance(duration, int) or duration < 1
+                    for duration in task_durations
+                ):
+                    raise ValueError(
+                        "task_durations must contain positive integers"
+                    )
+                sequential_task_durations = tuple(task_durations)
         if self.continual_method not in {
             "none",
             "moe_arrow",
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
             "cnn_compact_shared_actor_arrow",
+            "cnn_mechanism_bank_arrow",
+            "rec_rssm_arrow",
+            "evolving_atomic_rssm_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -383,6 +472,187 @@ class Config(Serialisable):
         is_cnn_compact_shared_actor = (
             self.continual_method == "cnn_compact_shared_actor_arrow"
         )
+        is_cnn_mechanism_bank = (
+            self.continual_method == "cnn_mechanism_bank_arrow"
+        )
+        is_rec_rssm = self.continual_method == "rec_rssm_arrow"
+        is_evolving_atomic = (
+            self.continual_method == "evolving_atomic_rssm_arrow"
+        )
+        uses_mechanism_bank = (
+            is_cnn_mechanism_bank or is_rec_rssm or is_evolving_atomic
+        )
+        if self.task_mechanism_capacity_profile not in {
+            "matched_512",
+            "expanded_640",
+        }:
+            raise ValueError(
+                "Unknown mechanism capacity profile: "
+                f"{self.task_mechanism_capacity_profile!r}"
+            )
+        if not isinstance(self.task_mechanism_bank, bool) or not isinstance(
+            self.task_mechanism_reuse, bool
+        ):
+            raise ValueError("Mechanism-bank enable/reuse settings must be booleans")
+        if not isinstance(self.task_mechanism_num_atoms, int) or (
+            self.task_mechanism_num_atoms < 1
+        ):
+            raise ValueError("task_mechanism_num_atoms must be a positive integer")
+        if not isinstance(self.task_mechanism_reuse_probe_epochs, int) or (
+            self.task_mechanism_reuse_probe_epochs < 0
+        ):
+            raise ValueError(
+                "task_mechanism_reuse_probe_epochs must be a non-negative integer"
+            )
+        if self.task_mechanism_route_lr_scale <= 0:
+            raise ValueError("task_mechanism_route_lr_scale must be positive")
+        if self.task_mechanism_consolidation_batches < 1:
+            raise ValueError("task_mechanism_consolidation_batches must be positive")
+        if not 0 <= self.task_mechanism_min_contribution < 1:
+            raise ValueError("task_mechanism_min_contribution must lie in [0, 1)")
+        if not 0 <= self.task_mechanism_max_validation_drop < 1:
+            raise ValueError("task_mechanism_max_validation_drop must lie in [0, 1)")
+        evolving_defaults = {
+            "evolving_task0_profile": "fixed_v1",
+            "evolving_shared_core": False,
+            "first_task_shared_core_lr": 2e-4,
+            "shared_core_lr": 1e-4,
+            "task_private_lr": 2e-4,
+            "task_route_lr": 1e-3,
+            "current_batch_n": 12,
+            "memory_batch_n": 4,
+            "memory_loss_scale": 1.0,
+            "interface_q_scale": 0.1,
+            "interface_h_scale": 0.05,
+            "interface_actor_scale": 0.05,
+            "component_gradient_projection": True,
+            "task_atom_output_regularization": 1e-4,
+            "boundary_consolidation_steps": 1000,
+            "boundary_consolidation_lr": 2e-5,
+            "boundary_max_return_drop": 0.05,
+            "task_private_heads": False,
+            "task_private_actor_critic": False,
+            "task_atomic_routes": False,
+            "full_task_rssm_experts": False,
+        }
+        if is_evolving_atomic:
+            task0_profile_overrides = {
+                "fixed_v1": {},
+                "fixed_v2": {
+                    "first_task_shared_core_lr": 3e-4,
+                },
+                "task0_shared_lr_1e4": {
+                    "first_task_shared_core_lr": 1e-4,
+                },
+                "task0_shared_lr_3e4": {
+                    "first_task_shared_core_lr": 3e-4,
+                },
+                "task0_private_lr_3e4": {
+                    "task_private_lr": 3e-4,
+                },
+                "task0_actor_lr_2e4": {
+                    "ac_lr": 2e-4,
+                },
+                "task0_epochs_120": {},
+                "task0_epochs_150": {},
+                "task0_epochs_180": {},
+                "task0_epochs_240": {},
+            }
+            if self.evolving_task0_profile not in task0_profile_overrides:
+                raise ValueError(
+                    "Unknown Evolving-Core Task-0 profile: "
+                    f"{self.evolving_task0_profile!r}"
+                )
+            expected_evolving = {
+                **evolving_defaults,
+                "evolving_task0_profile": self.evolving_task0_profile,
+                "evolving_shared_core": True,
+                "task_private_heads": True,
+                "task_private_actor_critic": True,
+                "task_atomic_routes": True,
+                "ac_lr": 1e-4,
+            }
+            expected_evolving.update(
+                task0_profile_overrides[self.evolving_task0_profile]
+            )
+            mismatches = {
+                name: (getattr(self, name), expected)
+                for name, expected in expected_evolving.items()
+                if getattr(self, name) != expected
+            }
+            if mismatches:
+                raise ValueError(
+                    "Evolving-Core Atomic RSSM requires its fixed optimizer, "
+                    f"replay, interface, and topology settings: {mismatches}"
+                )
+            if self.evolving_task0_profile not in ("fixed_v1", "fixed_v2"):
+                if sequential_task_durations is None:
+                    raise ValueError(
+                        "Evolving-Core Task-0 sweeps require a sequential schedule"
+                    )
+                task0_profile_epochs = {
+                    "task0_shared_lr_1e4": 90,
+                    "task0_shared_lr_3e4": 90,
+                    "task0_private_lr_3e4": 90,
+                    "task0_actor_lr_2e4": 90,
+                    "task0_epochs_120": 120,
+                    "task0_epochs_150": 150,
+                    "task0_epochs_180": 180,
+                    "task0_epochs_240": 240,
+                }
+                expected_task_durations = (
+                    task0_profile_epochs[self.evolving_task0_profile],
+                    90,
+                    90,
+                )
+                if sequential_task_durations != expected_task_durations:
+                    raise ValueError(
+                        "Evolving-Core Task-0 sweep profile requires exact task "
+                        f"durations {expected_task_durations}"
+                    )
+                if self.epochs != expected_task_durations[0]:
+                    raise ValueError(
+                        "Evolving-Core Task-0 sweep profiles must stop exactly at "
+                        "the first task boundary"
+                    )
+            if self.current_batch_n + self.memory_batch_n != self.mb_n_size:
+                raise ValueError(
+                    "Evolving-Core current and memory sequence counts must sum "
+                    "to mb_n_size"
+                )
+            if self.pretrain_mb_n_size != self.mb_n_size:
+                raise ValueError(
+                    "Evolving-Core Task 1 requires the same full sequence batch size"
+                )
+            if self.evaluation_seed_protocol != "fixed_validation_heldout_final":
+                raise ValueError(
+                    "Evolving-Core consolidation requires fixed validation and "
+                    "held-out final cohorts"
+                )
+            if self.memory_loss_scale < 0:
+                raise ValueError("memory_loss_scale must be non-negative")
+            if min(
+                self.interface_q_scale,
+                self.interface_h_scale,
+                self.interface_actor_scale,
+                self.task_atom_output_regularization,
+            ) < 0:
+                raise ValueError(
+                    "Evolving-Core interface and atom regularization scales "
+                    "must be non-negative"
+                )
+        else:
+            evolving_nondefault = {
+                name: (getattr(self, name), expected)
+                for name, expected in evolving_defaults.items()
+                if getattr(self, name) != expected
+            }
+            if evolving_nondefault:
+                raise ValueError(
+                    "Evolving-Core settings require "
+                    "continual_method='evolving_atomic_rssm_arrow': "
+                    f"{evolving_nondefault}"
+                )
         is_dino_fullbank = self.continual_method == "dino_fullbank_arrow"
         is_dino_patchbank = self.continual_method == "dino_patchbank_arrow"
         is_dino_convbank = self.continual_method == "dino_convbank_arrow"
@@ -392,6 +662,7 @@ class Config(Serialisable):
             or is_cnn_fullbank
             or is_cnn_projector_lora
             or is_cnn_compact_shared_actor
+            or uses_mechanism_bank
             or is_dino_fullbank
             or is_dino_pixelbank
         )
@@ -459,12 +730,13 @@ class Config(Serialisable):
             is_cnn_fullbank
             or is_cnn_projector_lora
             or is_cnn_compact_shared_actor
+            or uses_mechanism_bank
         ):
             if self.compute_dtype != "bfloat16":
-                raise ValueError("CNN task-bank methods require bfloat16 compute")
+                raise ValueError("The CNN task-bank protocol requires bfloat16 compute")
             if self.replay_observation_dtype != "uint8":
                 raise ValueError(
-                    "CNN task-bank methods require uint8 observation replay"
+                    "The CNN task-bank protocol requires uint8 observation replay"
                 )
         elif self.replay_observation_dtype != "float32":
             raise ValueError(
@@ -534,6 +806,8 @@ class Config(Serialisable):
             is_cnn_fullbank
             or is_cnn_projector_lora
             or is_cnn_compact_shared_actor
+            or is_cnn_mechanism_bank
+            or is_evolving_atomic
             or is_dino_fullbank
             or is_dino_pixelbank
         ):
@@ -542,10 +816,14 @@ class Config(Serialisable):
                     "Full task banks assign all updates to the current task"
                 )
             expected_shared_core_mode = (
-                "task_banked_shared_adapter"
+                "evolving_replay_protected"
+                if is_evolving_atomic
+                else "task_banked_shared_adapter"
                 if is_dino_convbank
                 else "task1_frozen_projector_compact_rssm"
                 if is_cnn_compact_shared_actor
+                else "task1_frozen_mechanism_bank"
+                if is_cnn_mechanism_bank
                 else "task1_frozen_projector_lora"
                 if is_cnn_projector_lora
                 else "task_isolated"
@@ -560,6 +838,7 @@ class Config(Serialisable):
                 if is_cnn_fullbank
                 or is_cnn_projector_lora
                 or is_cnn_compact_shared_actor
+                or uses_mechanism_bank
                 or is_dino_pixelbank
                 else "dinov3_posterior_feature"
             )
@@ -570,6 +849,8 @@ class Config(Serialisable):
                         if is_cnn_fullbank
                         or is_cnn_projector_lora
                         or is_cnn_compact_shared_actor
+                        or is_cnn_mechanism_bank
+                        or is_evolving_atomic
                         or is_dino_pixelbank
                         else "DINO-FullBank-ARROW reconstructs posterior DINOv3 features"
                     )
@@ -582,6 +863,8 @@ class Config(Serialisable):
                 is_cnn_fullbank
                 or is_cnn_projector_lora
                 or is_cnn_compact_shared_actor
+                or is_cnn_mechanism_bank
+                or is_evolving_atomic
                 or is_dino_pixelbank
             ) and any(
                 replay_config.rb_device.split(":", 1)[0] != "cpu"
@@ -595,7 +878,9 @@ class Config(Serialisable):
                 "task_banked_image_encoder is required only by CNN-FullBank-ARROW"
             )
         uses_cnn_projector = (
-            is_cnn_projector_lora or is_cnn_compact_shared_actor
+            is_cnn_projector_lora
+            or is_cnn_compact_shared_actor
+            or uses_mechanism_bank
         )
         if self.task_projected_image_encoder != uses_cnn_projector:
             raise ValueError(
@@ -617,24 +902,82 @@ class Config(Serialisable):
                 self.task_lora_transition_rank,
                 self.task_recurrent_output_adapter_features,
             )
-            expected_ranks = (
-                ((0, 32, 32, 32),)
-                if is_cnn_compact_shared_actor
-                else ((128, 128, 32, 0), (32, 32, 16, 0))
-            )
-            if observed_ranks not in expected_ranks:
-                method_description = (
-                    "The compact recurrent/representation protocol fixes "
-                    "recurrent-LoRA/representation-LoRA/transition-LoRA/"
-                    "GRU-output-adapter sizes"
+            if uses_mechanism_bank:
+                if observed_ranks != (0, 0, 0, 0):
+                    raise ValueError(
+                        "CNN-MechanismBank disables every RSSM LoRA/output-adapter path"
+                    )
+                expected_mechanism_settings = (
+                    (True, 640, 640, 320, 0.1)
+                    if self.task_mechanism_capacity_profile == "expanded_640"
+                    else (True, 512, 512, 256, 0.1)
+                )
+                observed_mechanism_settings = (
+                    self.task_mechanism_bank,
+                    self.task_mechanism_recurrent_width,
+                    self.task_mechanism_representation_width,
+                    self.task_mechanism_transition_width,
+                    self.task_mechanism_residual_scale,
+                )
+                if observed_mechanism_settings != expected_mechanism_settings:
+                    raise ValueError(
+                        "CNN-MechanismBank fixes bank/recurrent/posterior/prior/scale "
+                        f"settings to {expected_mechanism_settings}, got "
+                        f"{observed_mechanism_settings}"
+                    )
+                if (
+                    self.task_mechanism_capacity_profile == "expanded_640"
+                    and not is_rec_rssm
+                ):
+                    raise ValueError(
+                        "expanded_640 is validated only for REC-RSSM"
+                    )
+                atom_settings = (
+                    self.task_mechanism_num_atoms,
+                    self.task_mechanism_reuse_probe_epochs,
+                    self.task_mechanism_route_lr_scale,
+                    self.task_mechanism_consolidation_batches,
+                    self.task_mechanism_min_contribution,
+                    self.task_mechanism_max_validation_drop,
+                )
+                expected_atom_settings = (
+                    (4, 1, 5.0, 8, 0.01, 0.05)
+                    if is_rec_rssm
+                    else (4, 0, 1.0, 8, 0.01, 0.05)
+                    if is_evolving_atomic
+                    else (1, 0, 1.0, 8, 0.01, 0.05)
+                )
+                if atom_settings != expected_atom_settings:
+                    raise ValueError(
+                        "The named mechanism protocol fixes atom/probe/route-LR/"
+                        "consolidation settings to "
+                        f"{expected_atom_settings}, got {atom_settings}"
+                )
+                if (is_rec_rssm or is_evolving_atomic) and not self.task_mechanism_reuse:
+                    raise ValueError("Atomic RSSM requires atom reuse")
+                if self.fresh_ac is not False or self.actor_network != "mlp":
+                    raise ValueError(
+                        "CNN-MechanismBank requires independent fresh MLP actor-critics"
+                    )
+            else:
+                expected_ranks = (
+                    ((0, 32, 32, 32),)
                     if is_cnn_compact_shared_actor
-                    else "CNN-Projector-LoRA-ARROW fixes recurrent/representation/"
-                    "transition/output-adapter sizes"
+                    else ((128, 128, 32, 0), (32, 32, 16, 0))
                 )
-                raise ValueError(
-                    f"{method_description} to a named profile in "
-                    f"{expected_ranks}, got {observed_ranks}"
-                )
+                if observed_ranks not in expected_ranks:
+                    method_description = (
+                        "The compact recurrent/representation protocol fixes "
+                        "recurrent-LoRA/representation-LoRA/transition-LoRA/"
+                        "GRU-output-adapter sizes"
+                        if is_cnn_compact_shared_actor
+                        else "CNN-Projector-LoRA-ARROW fixes recurrent/representation/"
+                        "transition/output-adapter sizes"
+                    )
+                    raise ValueError(
+                        f"{method_description} to a named profile in "
+                        f"{expected_ranks}, got {observed_ranks}"
+                    )
         elif any(
             (
                 self.task_lora_recurrent_rank,
@@ -644,6 +987,29 @@ class Config(Serialisable):
             )
         ):
             raise ValueError("RSSM adapters require a named CNN projector method")
+        if self.task_mechanism_bank != uses_mechanism_bank:
+            raise ValueError(
+                "task_mechanism_bank is required only by named mechanism methods"
+            )
+        if not uses_mechanism_bank and not self.task_mechanism_reuse:
+            raise ValueError(
+                "Disabling mechanism reuse requires CNN-MechanismBank-ARROW"
+            )
+        if not uses_mechanism_bank:
+            observed_atom_settings = (
+                self.task_mechanism_num_atoms,
+                self.task_mechanism_reuse_probe_epochs,
+                self.task_mechanism_route_lr_scale,
+                self.task_mechanism_consolidation_batches,
+                self.task_mechanism_min_contribution,
+                self.task_mechanism_max_validation_drop,
+            )
+            default_atom_settings = (1, 0, 1.0, 8, 0.01, 0.05)
+            if observed_atom_settings != default_atom_settings:
+                raise ValueError(
+                    "REC-RSSM atom/probe/consolidation settings require a "
+                    "named mechanism method"
+                )
         shared_actor_defaults = (False, 0.0, 1, 1, 0, 1)
         shared_actor_values = (
             self.shared_actor_imagination_distillation,
@@ -673,6 +1039,8 @@ class Config(Serialisable):
             is_cnn_fullbank
             or is_cnn_projector_lora
             or is_cnn_compact_shared_actor
+            or is_cnn_mechanism_bank
+            or is_evolving_atomic
         ) and self.observation_encoder != "cnn":
             raise ValueError("CNN task-bank methods require the CNN observation encoder")
         if self.observation_objective not in {
@@ -940,6 +1308,8 @@ class Config(Serialisable):
             "task_banked_shared_adapter",
             "task1_frozen_projector_lora",
             "task1_frozen_projector_compact_rssm",
+            "task1_frozen_mechanism_bank",
+            "evolving_replay_protected",
         }:
             raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
         if self.shared_core_mode == "task_isolated" and not (
@@ -971,6 +1341,22 @@ class Config(Serialisable):
             raise ValueError(
                 "shared_core_mode='task1_frozen_projector_compact_rssm' is "
                 "reserved for CNN-Compact-SharedActor-ARROW"
+            )
+        if (
+            self.shared_core_mode == "task1_frozen_mechanism_bank"
+            and not uses_mechanism_bank
+        ):
+            raise ValueError(
+                "shared_core_mode='task1_frozen_mechanism_bank' is reserved for "
+                "CNN-MechanismBank-ARROW"
+            )
+        if (
+            self.shared_core_mode == "evolving_replay_protected"
+            and not is_evolving_atomic
+        ):
+            raise ValueError(
+                "shared_core_mode='evolving_replay_protected' is reserved for "
+                "Evolving-Core Atomic RSSM"
             )
         if self.residual_correction != "none" and not uses_dinov3:
             raise ValueError("KARROW residuals require the frozen DINOv3 protocol")
@@ -1154,16 +1540,31 @@ class Config(Serialisable):
                     "Actor-critic final entropy scale must lie in "
                     "[0, ac_entropy_scale]"
                 )
-            if not is_cnn_fullbank or self.dino_fullbank_current_task_fraction != 1.0:
-                raise ValueError(
-                    "task_cosine_decay is validated only for current-only "
-                    "CNN-FullBank actor training"
+            current_only_actor_training = (
+                is_cnn_fullbank
+                or (
+                    is_rec_rssm
+                    and self.task_mechanism_capacity_profile == "expanded_640"
                 )
-            swap_sched = self.esc.kwargs.get("swap_sched")
+            )
             if (
-                self.esc.env_schedule_type is not SequentialEnvironments
-                or not isinstance(swap_sched, int)
-                or swap_sched < self.ac_decay_end_task_epoch
+                not current_only_actor_training
+                or self.dino_fullbank_current_task_fraction != 1.0
+            ):
+                raise ValueError(
+                    "task_cosine_decay is validated only for named current-only "
+                    "actor training profiles"
+                )
+            actor_schedule_durations = sequential_task_durations
+            if (
+                actor_schedule_durations is not None
+                and is_rec_rssm
+                and self.task_mechanism_capacity_profile == "expanded_640"
+            ):
+                actor_schedule_durations = actor_schedule_durations[1:]
+            if (
+                not actor_schedule_durations
+                or min(actor_schedule_durations) < self.ac_decay_end_task_epoch
             ):
                 raise ValueError(
                     "task_cosine_decay must finish within each sequential task"
@@ -1264,6 +1665,9 @@ class Config(Serialisable):
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
             "cnn_compact_shared_actor_arrow",
+            "cnn_mechanism_bank_arrow",
+            "rec_rssm_arrow",
+            "evolving_atomic_rssm_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1275,6 +1679,8 @@ class Config(Serialisable):
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
             "cnn_compact_shared_actor_arrow",
+            "cnn_mechanism_bank_arrow",
+            "rec_rssm_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1288,6 +1694,9 @@ class Config(Serialisable):
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
             "cnn_compact_shared_actor_arrow",
+            "cnn_mechanism_bank_arrow",
+            "rec_rssm_arrow",
+            "evolving_atomic_rssm_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
@@ -1298,6 +1707,22 @@ class Config(Serialisable):
     @property
     def uses_shared_actor(self) -> bool:
         return self.continual_method == "cnn_compact_shared_actor_arrow"
+
+    @property
+    def uses_task_private_heads(self) -> bool:
+        """Separate private heads from copied full-RSSM expert topology."""
+
+        return self.task_private_heads or self.uses_full_task_experts
+
+    @property
+    def uses_full_task_rssm_experts(self) -> bool:
+        if self.continual_method == "evolving_atomic_rssm_arrow":
+            return self.full_task_rssm_experts
+        return self.uses_full_task_experts
+
+    @property
+    def uses_evolving_atomic_rssm(self) -> bool:
+        return self.continual_method == "evolving_atomic_rssm_arrow"
 
     def get_env_schedule(self) -> EnvironmentSchedule:
         return self.esc.env_schedule_type(

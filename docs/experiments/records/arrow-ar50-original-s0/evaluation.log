@@ -1,0 +1,32 @@
+# Curated evaluation-only excerpt; full training log is intentionally excluded from Git.
+# source_sha256=e12ebe3bbac2debc3b1d8904ff3e6efc6d742a8f9f2c0ec67a95a8f74eeb6875
+Eval for epoch:  90
+Eval means: [83.28125, -2.25, 4.285714456013271, 8.875, 6.25, 0.0]
+Eval stds: [19.171894101457475, 9.424038412485382, 2.169548144103768, 1.8666480653835098, 5.994789404140899, 0.0]
+[cuda-mem] epoch_end_90 | device=0 (P1.gpu.large) allocated=24.40 GiB reserved=26.19 GiB peak_allocated=25.47 GiB peak_reserved=26.19 GiB suggested_slurm_gpu_mem=30.12 GiB
+[stage-time] epoch=90 collect=23.392s eval=160.426s world_model=57.457s actor=48.143s overhead=0.008s total=289.427s
+Eval for epoch:  180
+Eval means: [112.21875, 79.125, 1.0599999904632569, 3.875, 8.75, 0.0]
+Eval stds: [44.51052149141257, 7.65567599889128, 0.9436100804772445, 4.553501400021746, 8.569568250501305, 0.0]
+[cuda-mem] epoch_end_180 | device=0 (P1.gpu.large) allocated=24.41 GiB reserved=26.19 GiB peak_allocated=25.47 GiB peak_reserved=26.19 GiB suggested_slurm_gpu_mem=30.12 GiB
+[stage-time] epoch=180 collect=21.214s eval=152.010s world_model=55.787s actor=47.594s overhead=0.011s total=276.616s
+Eval for epoch:  270
+Eval means: [72.4375, 83.4375, 49.38888952467177, 0.5, 6.25, 0.0]
+Eval stds: [21.0021390279657, 6.4707877225265245, 23.21692147154807, 1.118033988749895, 9.921567416492215, 0.0]
+[cuda-mem] epoch_end_270 | device=0 (P1.gpu.large) allocated=24.40 GiB reserved=26.19 GiB peak_allocated=25.47 GiB peak_reserved=26.19 GiB suggested_slurm_gpu_mem=30.12 GiB
+[stage-time] epoch=270 collect=25.961s eval=167.345s world_model=58.888s actor=49.963s overhead=0.031s total=302.188s
+Eval for epoch:  360
+Eval means: [60.53125, 71.6875, 18.000000780278985, 374.125, 3.3333333333333335, 0.0]
+Eval stds: [23.379657791283, 8.730111325177933, 7.348346083437143, 213.5350893295994, 6.666666666666667, 0.0]
+[cuda-mem] epoch_end_360 | device=0 (P1.gpu.large) allocated=24.40 GiB reserved=26.19 GiB peak_allocated=25.47 GiB peak_reserved=26.19 GiB suggested_slurm_gpu_mem=30.12 GiB
+[stage-time] epoch=360 collect=23.428s eval=204.843s world_model=60.879s actor=50.237s overhead=0.092s total=339.480s
+Eval for epoch:  450
+Eval means: [57.78125, 82.8125, 33.02222209506564, 310.75, 289.375, 0.0]
+Eval stds: [12.449860378233163, 6.559523134344447, 15.141976908581618, 145.20309053184783, 73.43949465376242, 0.0]
+[cuda-mem] epoch_end_450 | device=0 (P1.gpu.large) allocated=24.41 GiB reserved=26.19 GiB peak_allocated=25.47 GiB peak_reserved=26.19 GiB suggested_slurm_gpu_mem=30.12 GiB
+[stage-time] epoch=450 collect=23.329s eval=192.036s world_model=57.591s actor=48.812s overhead=0.014s total=321.782s
+Eval for epoch:  540
+Eval means: [59.75, 85.9375, 35.744445164998375, 124.125, 223.125, 62.0625]
+Eval stds: [8.465001476668506, 6.571422505820182, 19.553296001426926, 90.66275075796013, 44.11897975928274, 7.169542785282755]
+[cuda-mem] epoch_end_540 | device=0 (P1.gpu.large) allocated=24.40 GiB reserved=26.19 GiB peak_allocated=25.47 GiB peak_reserved=26.19 GiB suggested_slurm_gpu_mem=30.12 GiB
+[analysis-snapshot] reason=final epoch=540 path=/gemini/code/clworldmodel_arrow_analysis/runs/arrow_ar50_original_s0_analysis/analysis_snapshots/final_epoch_0540.pt sha256=5d55402201da04c2f0a3c7bc66c9e3827da010a725b9b7233411ea9321c21145

@@ -131,9 +131,15 @@ class ActorCriticBank(Generic[T]):
         for entry_task_id, entry in self._entries.items():
             is_active = entry_task_id == task_id
             getattr(entry, "ac").requires_grad_(is_active)
+            for parameter in getattr(entry, "ac").parameters():
+                if not parameter.requires_grad:
+                    parameter.grad = None
             slow_critic = getattr(entry, "slow_critic", None)
             if slow_critic is not None:
                 slow_critic.requires_grad_(is_active)
+                for parameter in slow_critic.parameters():
+                    if not parameter.requires_grad:
+                        parameter.grad = None
 
     def inference_state_dict(self) -> dict[str, object]:
         """Return CPU actor states without pretending optimizer/replay are resumable."""
@@ -150,3 +156,70 @@ class ActorCriticBank(Generic[T]):
             "resumable": False,
             "tasks": tasks,
         }
+
+    def resumable_state_dict(self) -> dict[str, object]:
+        """Return complete network, optimizer, EMA, and slow-target state."""
+
+        tasks: dict[str, dict[str, object]] = {}
+        for task_id, entry in sorted(self._entries.items()):
+            actor_critic = getattr(entry, "ac")
+            optimizer = getattr(entry, "opt")
+            slow_critic = getattr(entry, "slow_critic", None)
+            tasks[str(task_id)] = {
+                "actor_critic": actor_critic.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "slow_critic": (
+                    None if slow_critic is None else slow_critic.state_dict()
+                ),
+                "return_scale_ema": getattr(entry, "return_scale_ema", None),
+                "return_mean_ema": getattr(entry, "return_mean_ema", None),
+            }
+        return {
+            "schema_version": 1,
+            "artifact_kind": self.artifact_kind,
+            "resumable": True,
+            "tasks": tasks,
+        }
+
+    def load_resumable_state_dict(
+        self,
+        state: Mapping[str, object],
+        factory: Callable[[int], T],
+    ) -> None:
+        """Restore entries created by ``factory`` without resetting Adam state."""
+
+        if state.get("resumable") is not True or state.get("schema_version") != 1:
+            raise ValueError("Actor-Critic bank state is not resumable schema v1")
+        if state.get("artifact_kind") != self.artifact_kind:
+            raise ValueError("Actor-Critic bank artifact kind changed on resume")
+        task_states = state.get("tasks")
+        if not isinstance(task_states, Mapping):
+            raise ValueError("Actor-Critic bank state is missing task entries")
+        self._entries.clear()
+        for task_key, raw_entry in sorted(
+            task_states.items(), key=lambda item: int(item[0])
+        ):
+            if not isinstance(raw_entry, Mapping):
+                raise ValueError("Actor-Critic task state must be a mapping")
+            task_id = int(task_key)
+            if task_id < 0:
+                raise ValueError("Actor-Critic task ids must be non-negative")
+            entry = factory(task_id)
+            getattr(entry, "ac").load_state_dict(
+                raw_entry["actor_critic"], strict=True
+            )
+            getattr(entry, "opt").load_state_dict(raw_entry["optimizer"])
+            slow_critic = getattr(entry, "slow_critic", None)
+            slow_state = raw_entry.get("slow_critic")
+            if (slow_critic is None) != (slow_state is None):
+                raise ValueError("Actor-Critic slow-target topology changed on resume")
+            if slow_critic is not None:
+                slow_critic.load_state_dict(slow_state, strict=True)
+            for name in ("return_scale_ema", "return_mean_ema"):
+                value = raw_entry.get(name)
+                setattr(
+                    entry,
+                    name,
+                    None if value is None else value.detach().clone(),
+                )
+            self._entries[task_id] = entry

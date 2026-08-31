@@ -107,13 +107,23 @@ class Rssm(nn.Module):
         dinov3_patch_adapter: str = "none",
         num_task_experts: int = 1,
         full_task_experts: bool = False,
+        full_task_rssm_experts: Optional[bool] = None,
         task_banked_image_encoder: bool = False,
         task_projected_image_encoder: bool = False,
+        task_symmetric_image_projectors: bool = False,
         task_projector_bottleneck_features: int = 64,
         task_lora_recurrent_rank: int = 0,
         task_lora_representation_rank: int = 0,
         task_lora_transition_rank: int = 0,
         task_recurrent_output_adapter_features: int = 0,
+        task_mechanism_bank: bool = False,
+        task_mechanism_reuse: bool = True,
+        task_mechanism_recurrent_width: int = 512,
+        task_mechanism_representation_width: int = 512,
+        task_mechanism_transition_width: int = 256,
+        task_mechanism_residual_scale: float = 0.1,
+        task_mechanism_num_atoms: int = 1,
+        task_symmetric_mechanisms: bool = False,
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
         residual_grid_size: int = 8,
@@ -127,9 +137,14 @@ class Rssm(nn.Module):
         compute_dtype: str = "float32",
     ) -> None:
         super().__init__()
+        if full_task_rssm_experts is None:
+            # Legacy callers used one flag for copied RSSMs and private heads.
+            full_task_rssm_experts = full_task_experts
+        if not isinstance(full_task_rssm_experts, bool):
+            raise TypeError("full_task_rssm_experts must be a boolean")
         if num_task_experts < 1:
             raise ValueError("num_task_experts must be positive")
-        if full_task_experts and num_task_experts < 2:
+        if (full_task_experts or full_task_rssm_experts) and num_task_experts < 2:
             raise ValueError("Full task experts require at least two task routes")
         if task_banked_image_encoder and not full_task_experts:
             raise ValueError(
@@ -139,9 +154,11 @@ class Rssm(nn.Module):
             raise ValueError(
                 "A task-banked image encoder does not use a shared observation adapter"
             )
-        if task_projected_image_encoder and not full_task_experts:
+        if task_projected_image_encoder and not (
+            full_task_experts or full_task_rssm_experts or task_mechanism_bank
+        ):
             raise ValueError(
-                "A projected shared image encoder requires complete task experts"
+                "A projected shared image encoder requires task-routed components"
             )
         if task_projected_image_encoder and task_banked_image_encoder:
             raise ValueError(
@@ -163,6 +180,39 @@ class Rssm(nn.Module):
             raise ValueError(
                 "Recurrent matrix LoRA and recurrent output adapters are mutually exclusive"
             )
+        if task_mechanism_bank and (
+            any(task_lora_ranks) or task_recurrent_output_adapter_features
+        ):
+            raise ValueError(
+                "RSSM mechanism banks and LoRA/output adapters are mutually exclusive"
+            )
+        mechanism_widths = (
+            task_mechanism_recurrent_width,
+            task_mechanism_representation_width,
+            task_mechanism_transition_width,
+        )
+        if task_mechanism_bank and min(mechanism_widths) < 1:
+            raise ValueError("RSSM mechanism-bank widths must be positive")
+        if task_mechanism_bank and task_mechanism_residual_scale <= 0:
+            raise ValueError("RSSM mechanism residual scale must be positive")
+        if task_mechanism_bank and task_mechanism_num_atoms < 1:
+            raise ValueError("RSSM mechanism atom count must be positive")
+        if task_mechanism_bank and any(
+            width % task_mechanism_num_atoms for width in mechanism_widths
+        ):
+            raise ValueError(
+                "RSSM mechanism widths must be divisible by the atom count"
+            )
+        if task_mechanism_bank and not task_projected_image_encoder:
+            raise ValueError("RSSM mechanism banks require task image projectors")
+        if task_symmetric_image_projectors and not task_projected_image_encoder:
+            raise ValueError("Symmetric projectors require task image projection")
+        if task_symmetric_mechanisms and not task_mechanism_bank:
+            raise ValueError("Symmetric mechanisms require RSSM mechanism banks")
+        if task_symmetric_image_projectors != task_symmetric_mechanisms:
+            raise ValueError(
+                "The evolving atomic topology requires symmetric projectors and mechanisms"
+            )
         task_rssm_adaptation_enabled = bool(
             any(task_lora_ranks) or task_recurrent_output_adapter_features
         )
@@ -178,7 +228,7 @@ class Rssm(nn.Module):
                 "Task RSSM adaptation requires posterior/prior LoRA and one "
                 "recurrent adaptation mechanism"
             )
-        if task_rssm_adaptation_enabled and not full_task_experts:
+        if task_rssm_adaptation_enabled and not full_task_rssm_experts:
             raise ValueError(
                 "Task RSSM adaptation requires complete task experts"
             )
@@ -190,8 +240,12 @@ class Rssm(nn.Module):
         self.h_dim = h_dim
         self.num_task_experts = num_task_experts
         self.full_task_experts = full_task_experts
+        self.full_task_rssm_experts = full_task_rssm_experts
         self.task_banked_image_encoder = task_banked_image_encoder
         self.task_projected_image_encoder = task_projected_image_encoder
+        self.task_symmetric_image_projectors = bool(
+            task_symmetric_image_projectors
+        )
         self.task_lora_recurrent_rank = task_lora_recurrent_rank
         self.task_lora_representation_rank = task_lora_representation_rank
         self.task_lora_transition_rank = task_lora_transition_rank
@@ -202,6 +256,16 @@ class Rssm(nn.Module):
         self.task_recurrent_output_adapter_enabled = (
             task_recurrent_output_adapter_features > 0
         )
+        self.task_mechanism_bank_enabled = bool(task_mechanism_bank)
+        self.task_mechanism_reuse = bool(task_mechanism_reuse)
+        self.task_mechanism_recurrent_width = task_mechanism_recurrent_width
+        self.task_mechanism_representation_width = (
+            task_mechanism_representation_width
+        )
+        self.task_mechanism_transition_width = task_mechanism_transition_width
+        self.task_mechanism_residual_scale = task_mechanism_residual_scale
+        self.task_mechanism_num_atoms = task_mechanism_num_atoms
+        self.task_symmetric_mechanisms = bool(task_symmetric_mechanisms)
 
         self.recurrent = Recurrent(
             ls,
@@ -219,7 +283,9 @@ class Rssm(nn.Module):
             residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
         )
-        if self.task_recurrent_output_adapter_enabled:
+        if self.task_mechanism_bank_enabled:
+            self.recurrent_experts = nn.ModuleList()
+        elif self.task_recurrent_output_adapter_enabled:
             from clworldmodel.models.rssm_lora import TaskRecurrentOutputRoute
 
             self.recurrent_experts = nn.ModuleList(
@@ -273,7 +339,11 @@ class Rssm(nn.Module):
                 SpatialFeatureProjector(
                     bottleneck_channels=task_projector_bottleneck_features
                 )
-                for _ in range(num_task_experts - 1)
+                for _ in range(
+                    num_task_experts
+                    if self.task_symmetric_image_projectors
+                    else num_task_experts - 1
+                )
             )
         self.observation_adapter_kind = dinov3_patch_adapter
         self.observation_adapter: nn.Module = nn.Identity()
@@ -314,9 +384,12 @@ class Rssm(nn.Module):
             residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
         )
+        representation_expert_count = 0
+        if full_task_rssm_experts and not self.task_mechanism_bank_enabled:
+            representation_expert_count = num_task_experts - 1
         self.representation_experts = nn.ModuleList(
             copy.deepcopy(self.representation)
-            for _ in range(num_task_experts - 1 if full_task_experts else 0)
+            for _ in range(representation_expert_count)
         )
         self.transition = Transition(
             ls,
@@ -334,9 +407,57 @@ class Rssm(nn.Module):
             residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
         )
-        self.transition_experts = nn.ModuleList(
-            copy.deepcopy(self.transition) for _ in range(num_task_experts - 1)
+        transition_expert_count = (
+            0 if self.task_mechanism_bank_enabled else num_task_experts - 1
         )
+        self.transition_experts = nn.ModuleList(
+            copy.deepcopy(self.transition)
+            for _ in range(transition_expert_count)
+        )
+        self.task_mechanism_reports: dict[str, object] = {}
+        if self.task_mechanism_bank_enabled:
+            from clworldmodel.models.mechanism_bank import MechanismBank
+
+            z_dim = ls[0] * ls[1]
+            # Mechanism allocation must not perturb downstream head initialization.
+            with torch.random.fork_rng(devices=[]):
+                self.recurrent_mechanism_bank = MechanismBank(
+                    num_tasks=num_task_experts,
+                    in_features=h_dim,
+                    out_features=h_dim,
+                    hidden_features=task_mechanism_recurrent_width,
+                    residual_scale=task_mechanism_residual_scale,
+                    reuse_enabled=task_mechanism_reuse,
+                    num_atoms=task_mechanism_num_atoms,
+                    include_task0=self.task_symmetric_mechanisms,
+                )
+                self.representation_mechanism_bank = MechanismBank(
+                    num_tasks=num_task_experts,
+                    in_features=self.observation_embedding_size + h_dim,
+                    out_features=z_dim,
+                    hidden_features=task_mechanism_representation_width,
+                    residual_scale=task_mechanism_residual_scale,
+                    reuse_enabled=task_mechanism_reuse,
+                    num_atoms=task_mechanism_num_atoms,
+                    include_task0=self.task_symmetric_mechanisms,
+                )
+                self.transition_mechanism_bank = MechanismBank(
+                    num_tasks=num_task_experts,
+                    in_features=h_dim,
+                    out_features=z_dim,
+                    hidden_features=task_mechanism_transition_width,
+                    residual_scale=task_mechanism_residual_scale,
+                    reuse_enabled=task_mechanism_reuse,
+                    num_atoms=task_mechanism_num_atoms,
+                    include_task0=self.task_symmetric_mechanisms,
+                )
+            self.task_mechanism_reports = {
+                "recurrent": self.recurrent_mechanism_bank.parameter_report(),
+                "representation": (
+                    self.representation_mechanism_bank.parameter_report()
+                ),
+                "transition": self.transition_mechanism_bank.parameter_report(),
+            }
         self.task_lora_reports: list[dict[str, object]] = []
         if task_rssm_adaptation_enabled:
             from clworldmodel.models.rssm_lora import (
@@ -414,7 +535,13 @@ class Rssm(nn.Module):
 
     def recurrent_for(self, task_id: Optional[int | torch.Tensor]) -> nn.Module:
         task_index = self._task_index(task_id)
-        return self.recurrent if task_index == 0 else self.recurrent_experts[task_index - 1]
+        if self.task_mechanism_bank_enabled:
+            return self.recurrent
+        return (
+            self.recurrent
+            if task_index == 0
+            else self.recurrent_experts[task_index - 1]
+        )
 
     def image_embedder_for(
         self, task_id: Optional[int | torch.Tensor]
@@ -428,31 +555,114 @@ class Rssm(nn.Module):
         self, task_id: Optional[int | torch.Tensor]
     ) -> nn.Module:
         task_index = self._task_index(task_id)
-        if task_index == 0 or not self.task_projected_image_encoder:
+        if not self.task_projected_image_encoder:
+            return self.image_projector_identity
+        if self.task_symmetric_image_projectors:
+            return self.image_projectors[task_index]
+        if task_index == 0:
             return self.image_projector_identity
         return self.image_projectors[task_index - 1]
 
     def transition_for(self, task_id: Optional[int | torch.Tensor]) -> "Transition":
         task_index = self._task_index(task_id)
-        return self.transition if task_index == 0 else self.transition_experts[task_index - 1]
+        if self.task_mechanism_bank_enabled:
+            return self.transition
+        return (
+            self.transition
+            if task_index == 0
+            else self.transition_experts[task_index - 1]
+        )
 
     def representation_for(
         self, task_id: Optional[int | torch.Tensor]
     ) -> "Representation":
         task_index = self._task_index(task_id)
+        if self.task_mechanism_bank_enabled:
+            return self.representation
         if task_index == 0 or not self.full_task_experts:
             return self.representation
         return self.representation_experts[task_index - 1]
 
-    def prior(
-        self, hidden: HiddenT, task_id: Optional[int | torch.Tensor] = None
+    def recurrent_step(
+        self,
+        prev_z: LatentT,
+        prev_a: ActionT,
+        prev_h: HiddenT,
+        task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
+    ) -> HiddenT:
+        task_index = self._task_index(task_id)
+        if not self.task_mechanism_bank_enabled:
+            return self.recurrent_for(task_index)(prev_z, prev_a, prev_h)
+        base_hidden = self.recurrent(prev_z, prev_a, prev_h)
+        correction, current_output = (
+            self.recurrent_mechanism_bank.forward_with_current(
+                base_hidden, task_index
+            )
+        )
+        if mechanism_trace is not None:
+            mechanism_trace.setdefault("recurrent", []).append(current_output)
+        return base_hidden + correction
+
+    def posterior_step(
+        self,
+        embedding: EmbedT,
+        hidden: HiddenT,
+        task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
     ) -> LatentLogDistT:
-        return self.transition_for(task_id)(hidden)
+        task_index = self._task_index(task_id)
+        if not self.task_mechanism_bank_enabled:
+            return self.representation_for(task_index)(embedding, hidden)
+        mechanism_input = torch.cat((embedding, hidden), dim=-1)
+        base_logits = self.representation.logits(embedding, hidden)
+        correction, current_output = (
+            self.representation_mechanism_bank.forward_with_current(
+                mechanism_input, task_index
+            )
+        )
+        if mechanism_trace is not None:
+            mechanism_trace.setdefault("posterior", []).append(current_output)
+        return self.representation.distribution_from_logits(
+            base_logits + correction
+        )
+
+    def prior(
+        self,
+        hidden: HiddenT,
+        task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
+    ) -> LatentLogDistT:
+        task_index = self._task_index(task_id)
+        if not self.task_mechanism_bank_enabled:
+            return self.transition_for(task_index)(hidden)
+        base_logits = self.transition.logits(hidden)
+        correction, current_output = (
+            self.transition_mechanism_bank.forward_with_current(hidden, task_index)
+        )
+        if mechanism_trace is not None:
+            mechanism_trace.setdefault("prior", []).append(current_output)
+        return self.transition.distribution_from_logits(base_logits + correction)
 
     def copy_task_expert(self, target_task_id: int, source_task_id: int) -> None:
         if target_task_id == source_task_id:
             return
-        if (
+        if self.task_mechanism_bank_enabled:
+            if target_task_id == 0:
+                raise ValueError(
+                    "The shared Task-0 RSSM cannot be reset from a later task"
+                )
+            self.recurrent_mechanism_bank.reset_task(target_task_id)
+            self.representation_mechanism_bank.reset_task(target_task_id)
+            self.transition_mechanism_bank.reset_task(target_task_id)
+            if self.task_projected_image_encoder:
+                projector_index = (
+                    target_task_id
+                    if self.task_symmetric_image_projectors
+                    else target_task_id - 1
+                )
+                self.image_projectors[projector_index].reset_parameters()
+        elif (
             self.task_lora_enabled or self.task_recurrent_output_adapter_enabled
         ) and target_task_id > 0:
             from clworldmodel.models.rssm_lora import reset_affine_lora_from
@@ -500,6 +710,7 @@ class Rssm(nn.Module):
         stochastic: bool = True,
         temperature: float = 1.0,
         task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
     ) -> tuple[LatentLogDistT, LatentT, HiddenT]:
         return super().__call__(
             prev_z,
@@ -510,6 +721,7 @@ class Rssm(nn.Module):
             stochastic=stochastic,
             temperature=temperature,
             task_id=task_id,
+            mechanism_trace=mechanism_trace,
         )
 
     def forward(
@@ -522,20 +734,25 @@ class Rssm(nn.Module):
         stochastic: bool = True,
         temperature: float = 1.0,
         task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
     ) -> tuple[LatentLogDistT, LatentT, HiddenT]:
         if len(prev_a.shape) == 2:
             # Apply reset flags
             prev_z = prev_z * (1 - reset).unsqueeze(-1)  # Need to multiply againt dim [ N 1 1 ]
             prev_h = prev_h * (1 - reset)
             # No time dimension
-            h = self.recurrent_for(task_id)(prev_z, prev_a, prev_h)
+            h = self.recurrent_step(
+                prev_z, prev_a, prev_h, task_id, mechanism_trace
+            )
             if x is not None:
                 e = self.adapt_observation_embeddings(
                     self.image_embedder_for(task_id)(x), task_id=task_id
                 )
-                z_log_dist = self.representation_for(task_id)(e, h)
+                z_log_dist = self.posterior_step(
+                    e, h, task_id, mechanism_trace
+                )
             else:
-                z_log_dist = self.prior(h, task_id)
+                z_log_dist = self.prior(h, task_id, mechanism_trace)
             z_logits, z_sample = straight_through_one_hot(
                 z_log_dist / temperature, stochastic
             )
@@ -555,6 +772,7 @@ class Rssm(nn.Module):
                     stochastic=stochastic,
                     temperature=temperature,
                     task_id=task_id,
+                    mechanism_trace=mechanism_trace,
                 )
                 z_log_dists.append(z_log_dist)
                 z_samples.append(z_sample)
@@ -572,6 +790,7 @@ class Rssm(nn.Module):
                 stochastic=stochastic,
                 temperature=temperature,
                 task_id=task_id,
+                mechanism_trace=mechanism_trace,
             )
         raise ValueError
 
@@ -628,6 +847,7 @@ class Rssm(nn.Module):
         stochastic: bool = True,
         temperature: float = 1.0,
         task_id: Optional[int | torch.Tensor] = None,
+        mechanism_trace: Optional[dict[str, list[torch.Tensor]]] = None,
     ) -> tuple[LatentLogDistT, LatentT, HiddenT]:
         """Run the posterior recurrence from precomputed [T, N, E] embeddings."""
         if len(prev_a.shape) != 3 or len(embeddings.shape) != 3:
@@ -646,10 +866,16 @@ class Rssm(nn.Module):
         z_samples = []
         z, h = prev_z, prev_h
         for e, a, r in zip(embeddings, prev_a, reset):
-            h = self.recurrent_for(task_id)(
-                z * (1 - r).unsqueeze(-1), a, h * (1 - r)
+            h = self.recurrent_step(
+                z * (1 - r).unsqueeze(-1),
+                a,
+                h * (1 - r),
+                task_id,
+                mechanism_trace,
             )
-            z_log_dist = self.representation_for(task_id)(e, h)
+            z_log_dist = self.posterior_step(
+                e, h, task_id, mechanism_trace
+            )
             _, z_sample = straight_through_one_hot(
                 z_log_dist / temperature, stochastic
             )
@@ -665,6 +891,67 @@ class Rssm(nn.Module):
             torch.zeros(n, *self.ls, device=device),
             torch.zeros(n, self.h_dim, device=device),
         )
+
+    @staticmethod
+    def _unique_parameters(
+        modules: list[nn.Module],
+    ) -> list[nn.Parameter]:
+        parameters: list[nn.Parameter] = []
+        seen: set[int] = set()
+        for module in modules:
+            for parameter in module.parameters():
+                if id(parameter) not in seen:
+                    parameters.append(parameter)
+                    seen.add(id(parameter))
+        return parameters
+
+    def shared_parameter_groups(self) -> dict[str, list[nn.Parameter]]:
+        """Return non-overlapping shared encoder/Q/F/P parameter groups."""
+
+        return {
+            "encoder": self._unique_parameters(
+                [self.image_embedder, self.observation_adapter]
+            ),
+            "posterior": list(self.representation.parameters()),
+            "recurrent": list(self.recurrent.parameters()),
+            "prior": list(self.transition.parameters()),
+        }
+
+    def private_parameters(self, task_id: int) -> list[nn.Parameter]:
+        """Return the selected task's projector and Q/F/P atom parameters."""
+
+        task_index = self._task_index(task_id)
+        modules: list[nn.Module] = []
+        projector = self.image_projector_for(task_index)
+        if projector is not self.image_projector_identity:
+            modules.append(projector)
+        if self.task_mechanism_bank_enabled:
+            for bank in (
+                self.recurrent_mechanism_bank,
+                self.representation_mechanism_bank,
+                self.transition_mechanism_bank,
+            ):
+                mechanism = bank.mechanism_for(task_index)
+                if mechanism is not None:
+                    modules.append(mechanism)
+        return self._unique_parameters(modules)
+
+    def route_parameters(self, task_id: int) -> list[nn.Parameter]:
+        """Return only the selected task's old-atom gate parameters."""
+
+        if not self.task_mechanism_bank_enabled:
+            return []
+        task_index = self._task_index(task_id)
+        modules: list[nn.Module] = []
+        for bank in (
+            self.recurrent_mechanism_bank,
+            self.representation_mechanism_bank,
+            self.transition_mechanism_bank,
+        ):
+            route = bank.route_for(task_index)
+            if route is not None:
+                modules.append(route)
+        return self._unique_parameters(modules)
 
 
 class Recurrent(nn.Module):
@@ -823,6 +1110,10 @@ class Representation(nn.Module):
         return super().__call__(e, h)
 
     def forward(self, e: EmbedT, h: HiddenT) -> LatentLogDistT:
+        return self.distribution_from_logits(self.logits(e, h))
+
+    def logits(self, e: EmbedT, h: HiddenT) -> torch.Tensor:
+        """Return pre-categorical posterior logits for residual composition."""
         assert len(e.shape) == len(h.shape) == 2
         eh = torch.cat((e, h), dim=-1)
         x1 = self.eh_to_inter(eh)
@@ -831,7 +1122,11 @@ class Representation(nn.Module):
         if self.residual is not None:
             residual_input = x1 if self.residual_input_mode == "base_output" else eh
             x1 = x1 + self.residual(residual_input)
-        post_log_probs = self.inter_to_z_dist(x1)
+        return x1
+
+    def distribution_from_logits(self, logits: torch.Tensor) -> LatentLogDistT:
+        """Normalize flat posterior logits with the original uniform mixture."""
+        post_log_probs = self.inter_to_z_dist(logits)
         if self.uniform:
             # Use (1-u) of probs from logits + (u) of uniform
             # Conditions the KL loss better this way
@@ -885,6 +1180,7 @@ class Transition(nn.Module):
             nn.Unflatten(-1, (n_dis, n_cls)),
             nn.LogSoftmax(-1),
         )
+        self._logit_layer_count = len(self.h_to_z_prior) - 2
         if residual_correction == "none":
             self.residual = None
         else:
@@ -908,6 +1204,8 @@ class Transition(nn.Module):
                 )
 
     def forward(self, h: HiddenT) -> LatentLogDistT:
+        if self.residual is None:
+            return self.distribution_from_logits(self.logits(h))
         prior_log_probs = self.h_to_z_prior(h)
         if self.residual is not None:
             prior_logits = prior_log_probs.flatten(-2)
@@ -918,6 +1216,26 @@ class Transition(nn.Module):
             prior_log_probs = torch.log_softmax(
                 prior_logits.unflatten(-1, self.ls), dim=-1
             )
+        if self.uniform:
+            probs = prior_log_probs.exp()
+            return ((1 - self.uniform) * probs + self.uniform / self.ls[1]).log()
+        return prior_log_probs
+
+    def logits(self, h: HiddenT) -> torch.Tensor:
+        """Return flat pre-categorical prior logits for residual composition."""
+        if self.residual is not None:
+            raise RuntimeError(
+                "Raw prior logits are unavailable with legacy residual corrections"
+            )
+        logits = h
+        for index in range(self._logit_layer_count):
+            logits = self.h_to_z_prior[index](logits)
+        return logits
+
+    def distribution_from_logits(self, logits: torch.Tensor) -> LatentLogDistT:
+        """Normalize flat prior logits with the original uniform mixture."""
+        prior_log_probs = self.h_to_z_prior[-2](logits)
+        prior_log_probs = self.h_to_z_prior[-1](prior_log_probs)
         if self.uniform:
             probs = prior_log_probs.exp()
             return ((1 - self.uniform) * probs + self.uniform / self.ls[1]).log()

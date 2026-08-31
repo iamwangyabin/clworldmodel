@@ -8,40 +8,20 @@ interact with an environment, modify parameters, or regenerate any measurement.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from artifact_io import (
+    sha256_file as _sha256,
+    write_json_atomic as _write_json_atomic,
+    write_text_atomic as _write_text_atomic,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / "runs"
 SCHEMA_VERSION = 1
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _write_text_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, delete=False
-    ) as temporary:
-        temporary.write(text)
-        temporary_path = Path(temporary.name)
-    os.replace(temporary_path, path)
-
-
-def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
-    _write_text_atomic(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
 
 
 def _format(value: Any, *, precision: int = 4) -> str:
@@ -99,7 +79,6 @@ def _result_trajectory(
 def _render_source_header(
     launch: Mapping[str, Any], config: Mapping[str, Any], collection: Mapping[str, Any]
 ) -> list[str]:
-    task_names = [entry["name"] for entry in config["esc"]["env_configs"]]
     protocol = collection["protocol"]
     return [
         "# DreamerV3/FIFO P1 Forgetting Audit Dossier",

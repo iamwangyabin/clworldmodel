@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "record_id": "evolving-compact-original-six-s0-partial",
+  "run_id": "compact_128_128_64_original_six_s0_pilot",
+  "method": "Evolving-Core Atomic RSSM Compact Mechanism 128/128/64",
+  "protocol": "Evolving-Core-Atomic-RSSM-CompactMechanism-128-128-64-ARROW-v1-OriginalSix-Atari-TaskAware-Pilot",
+  "evidence_level": "ablation",
+  "classification": "pilot",
+  "status": "partial",
+  "recorded_at_utc": "2026-08-31T12:36:20Z",
+  "project_git": {
+    "commit": "5c1f374a5bc5225f0dda2d532da136a5a8f9d7b7",
+    "clean": true,
+    "upstream": "origin/codex/evolving-core-compact-mechanism-six-task-v1",
+    "ahead": 0,
+    "behind": 0
+  },
+  "seed": {
+    "id": 0,
+    "value": 123456789
+  },
+  "task_awareness": "task_aware",
+  "task_order": [
+    "ALE/MsPacman-v5",
+    "ALE/Boxing-v5",
+    "ALE/CrazyClimber-v5",
+    "ALE/Frostbite-v5",
+    "ALE/Seaquest-v5",
+    "ALE/Enduro-v5"
+  ],
+  "completion": {
+    "total_task_count": 6,
+    "completed_task_count": 1,
+    "completed_epochs": 134,
+    "final_evaluation_performed": false,
+    "started_at_utc": "2026-08-30T03:54:24.804553+00:00",
+    "run_status_artifact_present": false,
+    "final_evaluation_artifact_present": false
+  },
+  "evaluation": {
+    "metric": "raw_environment_return",
+    "policy": "deterministic_argmax_and_latent_mode",
+    "cohort_protocol": "fixed_validation_at_boundary_and_periodic_checkpoints",
+    "evaluation_transitions_enter_replay": false,
+    "checkpoints": [
+      {
+        "checkpoint_id": "task-boundary-01-accepted",
+        "stage": "accepted_post_consolidation",
+        "completed_epochs": 90,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1155.0,
+            "raw_return_std": 275.4087870784082
+          }
+        ],
+        "consolidation": {
+          "steps": 1000,
+          "learning_rate": 2e-05,
+          "rollback": false,
+          "rollback_reasons": [],
+          "validation_task_seeds": [
+            2127245496
+          ],
+          "pre_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 1100.0,
+              "raw_return_std": 106.2426468043789
+            }
+          ],
+          "candidate_post_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 1155.0,
+              "raw_return_std": 275.4087870784082
+            }
+          ],
+          "accepted_stage": "post_consolidation"
+        }
+      },
+      {
+        "checkpoint_id": "periodic-epoch-130-partial-task-01",
+        "stage": "periodic_during_partial_boxing_training",
+        "completed_epochs": 130,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation_periodic",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1184.375,
+            "raw_return_std": 201.67947187306893
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 68.0625,
+            "raw_return_std": 9.12735414838276
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 7230.000066757202,
+            "raw_return_std": 1650.484804369519
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 71.25,
+            "raw_return_std": 41.51430476353903
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 55.0,
+            "raw_return_std": 52.20153254455275
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ],
+        "accepted_task_boundary": false
+      }
+    ]
+  },
+  "headline": {
+    "summary": "Task-0 fixed-validation raw return improved from 1100.0 ± 106.243 before consolidation to an accepted 1155.0 ± 275.409; the run is partial during Task 1."
+  },
+  "budgets": {
+    "planned_task_duration_epochs": [
+      90,
+      90,
+      90,
+      90,
+      90,
+      90
+    ],
+    "planned_raw_environment_frames": 35389440,
+    "planned_online_world_model_updates": 540000,
+    "planned_boundary_consolidation_world_model_updates": 6000,
+    "planned_actor_critic_updates": 432000,
+    "online_sequence_batch_total": 16,
+    "later_task_current_memory_split": [
+      12,
+      4
+    ],
+    "replay_transition_capacity": 524288,
+    "replay_observation_dtype": "uint8",
+    "replay_observation_bytes": 6442450944,
+    "consolidation_is_extra_compute": true
+  },
+  "parameter_accounting": {
+    "world_model_parameters": 68304114,
+    "world_model_parameter_and_buffer_bytes": 273217902,
+    "shared_observation_encoder_parameters": 691104,
+    "mechanism_widths": {
+      "recurrent": 128,
+      "representation_posterior": 128,
+      "transition_prior": 64
+    },
+    "mechanism_parameters_per_task": {
+      "task_0": 964416,
+      "task_1": 964428,
+      "task_2": 964440,
+      "task_3": 964452,
+      "task_4": 964464,
+      "task_5": 964476
+    }
+  },
+  "runtime": {
+    "accelerator": "NVIDIA GeForce RTX 4090",
+    "torch": "2.3.0+cu118",
+    "cuda_build": "11.8",
+    "python": "3.10.21"
+  },
+  "comparability": {
+    "direct_comparison_group": "evolving-task0-s0-fixed-validation-90e-v1",
+    "claim": "Direct Task-0 capacity-ablation diagnostic against dense and SharedDown is valid for the same seed, fixed cohort, duration, and rollout count; later-task comparisons are incomplete.",
+    "limitations": [
+      "Only the Task-0 boundary completed.",
+      "Only one seed was evaluated.",
+      "The epoch-130 Boxing result is a partial periodic checkpoint, not a task boundary.",
+      "No held-out final evaluation exists.",
+      "The termination cause is not established by the preserved artifacts."
+    ]
+  },
+  "source_artifacts": [
+    {
+      "role": "source_metadata",
+      "name": "launch.json",
+      "sha256": "112bbe28f05b37962802700259906f32738721535a94da3462cd52988f631864",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "resolved_training_config.json",
+      "sha256": "afd20e01e25fb62c2b623cee98a0d362fed4a4aeb2c2a9146384534da67c5129",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "model_parameter_accounting.json",
+      "sha256": "55d8807d0e0f399a9ed73898f4c4a9793e0259f1d7272f81a6193ff8f1c93467",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "actor_critic_parameter_accounting.json",
+      "sha256": "874585701b45c32a36a2698c9904c67a36054593962ca8f1fb219cddfa274227",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "replay_mmap_storage_accounting.json",
+      "sha256": "b8287623ab380ba05fa8833458c268efcab258c0a3518a3d7502c8e8472449be",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evaluation_seed_manifest.json",
+      "sha256": "5abd59223d399706d3aae275a0cd71c866079a7cf03b585ef2e2d4aa44211adc",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "full_training_log",
+      "name": "train.log",
+      "sha256": "004208756c7e2381074767a24ba84c4a216b9b43b988f084c6db27a23fe0285e",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_00_boundary.json",
+      "sha256": "684330f3b92156db5d34b2284fa033955042bf9757359c5939a205a04000974a",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_00_pre_validation.json",
+      "sha256": "24fcee1e40796eb8302b0aa5606f68c95ac980f5fab84d9b9b96ba1503825fbd",
+      "repository_copy_excluded": false
+    }
+  ],
+  "notes": [
+    "The capacity change is limited to mechanism widths 128/128/64 versus the dense 512/512/256 control.",
+    "The source log ends after “Starting Epoch 134” with no run_status.json, final_evaluation.json, traceback, or recorded error.",
+    "No weights, snapshots, Replay mmap storage, TensorBoard events, or full training log are copied into Git."
+  ]
+}

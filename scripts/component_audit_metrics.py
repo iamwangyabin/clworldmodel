@@ -8,7 +8,6 @@ unit test on CPU-only machines.
 from __future__ import annotations
 
 import math
-from typing import Iterable
 
 import numpy as np
 
@@ -255,11 +254,3 @@ def paired_episode_bootstrap_difference(
         "ci_low": float(np.quantile(bootstrap_differences, alpha)),
         "ci_high": float(np.quantile(bootstrap_differences, 1 - alpha)),
     }
-
-
-def scalar_rows(values: Iterable[float]) -> np.ndarray:
-    """Convert a scalar iterable to a finite float64 vector with clear validation."""
-    array = np.asarray(list(values), dtype=np.float64)
-    if array.ndim != 1 or not np.isfinite(array).all():
-        raise ValueError("metric values must be a finite one-dimensional sequence")
-    return array

@@ -6,9 +6,17 @@ from .kan_consolidation import (
     capture_kan_parameter_values,
     finish_kan_importance_estimation,
     freeze_kan_coordinate_maps,
-    kan_consolidation_penalty,
     named_kan_residuals,
     protect_kan_parameter_updates,
+)
+from .evolving_core import (
+    ComponentProjectionDiagnostic,
+    assign_component_projected_gradients,
+    assign_unprojected_current_gradients,
+    atom_output_penalty,
+    interface_distillation_losses,
+    project_component_gradients,
+    recursive_python_scalars,
 )
 from .moe_arrow import ActorCriticBank, allocate_task_updates, shuffled_task_schedule
 
@@ -18,9 +26,15 @@ __all__ = [
     "capture_kan_parameter_values",
     "finish_kan_importance_estimation",
     "freeze_kan_coordinate_maps",
-    "kan_consolidation_penalty",
     "named_kan_residuals",
     "protect_kan_parameter_updates",
+    "ComponentProjectionDiagnostic",
+    "assign_component_projected_gradients",
+    "assign_unprojected_current_gradients",
+    "atom_output_penalty",
+    "interface_distillation_losses",
+    "project_component_gradients",
+    "recursive_python_scalars",
     "ActorCriticBank",
     "allocate_task_updates",
     "shuffled_task_schedule",

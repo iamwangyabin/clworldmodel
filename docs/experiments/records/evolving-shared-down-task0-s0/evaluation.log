@@ -1,0 +1,12 @@
+# Curated boundary-evaluation evidence; full training log is intentionally excluded from Git.
+# train_log_sha256=e9791fbf7ac32e1c3ad82f38458a48456a4f061d3e1ab36630503d1155f14ece
+# task_00_pre_validation.json sha256=9fdc919c52f5edb698b93273c1f0604049a0f9aac2a357a016b3a45aa34f6532
+completed_epochs=90 cohort=fixed_validation rollouts_per_task=16
+pre_raw_mean=[1588.75]
+pre_raw_std=[270.22849128098983]
+# task_00_boundary.json sha256=3935cf5500dee1beb3848020e83ea7f7cf27f9d74688a1b1a5f02ecb16e05aec
+candidate_post_raw_mean=[1497.5]
+relative_drop=[0.057435090479937057]
+rollback=true
+accepted_raw_mean=[1588.75]
+accepted_raw_std=[270.22849128098983]

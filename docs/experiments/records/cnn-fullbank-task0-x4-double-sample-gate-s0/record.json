@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "record_id": "cnn-fullbank-task0-x4-double-sample-gate-s0",
+  "run_id": "cnn_fullbank_arrow_v1_mspacman_t090_single_gpu_x4_double_sample_linear_lr_fixed_eval_fp32cont_bf16_uint8_seed0_speed_accuracy_pilot_v1_20260825_run1",
+  "method": "CNN-FullBank-ARROW-v1 x4-double-sample Task-0 gate",
+  "protocol": "CNN-FullBank-ARROW-v1 single-GPU x4-double-sample Task-0 acquisition gate",
+  "evidence_level": "pilot",
+  "classification": "single_gpu_extra_sample_large_batch_ablation",
+  "status": "complete",
+  "recorded_at_utc": "2026-08-31T12:36:20Z",
+  "project_git": {
+    "commit": "e90c1801f25e0c33f30a96d913972a64cc404eee",
+    "clean": true,
+    "upstream": "codex/karrow"
+  },
+  "seed": {
+    "id": 0,
+    "value": 123456789
+  },
+  "task_awareness": "task_aware",
+  "task_order": [
+    "ALE/MsPacman-v5"
+  ],
+  "completion": {
+    "total_task_count": 1,
+    "completed_task_count": 1,
+    "completed_epochs": 90,
+    "final_evaluation_performed": true,
+    "return_code": 0,
+    "finished_at_utc": "2026-08-25T10:31:58.528579+00:00"
+  },
+  "evaluation": {
+    "metric": "raw_environment_return",
+    "policy": "deterministic_argmax_and_latent_mode",
+    "cohort_protocol": "heldout_final",
+    "evaluation_transitions_enter_replay": false,
+    "checkpoints": [
+      {
+        "checkpoint_id": "heldout-final",
+        "stage": "heldout_final_acquisition_gate",
+        "completed_epochs": 90,
+        "completed_task_count": 1,
+        "cohort": "heldout_final",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2595.625,
+            "raw_return_std": 491.7820750850929
+          }
+        ]
+      }
+    ]
+  },
+  "headline": {
+    "summary": "Held-out seed-0 MsPacman raw return 2595.62 ± 491.782; acquisition gate passed."
+  },
+  "budgets": {
+    "name": "single-gpu-x4-double-sample-linear-lr",
+    "classification": "single_gpu_extra_sample_large_batch_ablation",
+    "world_model_batch_sequences": 64,
+    "world_model_updates_per_epoch": 500,
+    "actor_context_sequences": 512,
+    "actor_critic_updates_per_epoch": 400,
+    "world_model_learning_rate": 0.0002,
+    "actor_critic_learning_rate": 0.0002,
+    "world_model_update_multiplier": 0.5,
+    "actor_critic_update_multiplier": 0.5,
+    "world_model_sampled_frame_use_multiplier": 2.0,
+    "actor_context_frame_use_multiplier": 2.0,
+    "compute_dtype": "bfloat16_autocast_with_float32_sensitive_paths"
+  },
+  "comparability": {
+    "direct_comparison_group": null,
+    "claim": "Single-task task-aware acquisition gate only; progression evidence, not a continual-retention or fair-superiority result.",
+    "limitations": [
+      "The candidate uses BF16, uint8 mmap Replay, half as many Adam updates, and twice the optimization sample use. It passes the Task 1 gate for progression to a named two-task sequential pilot, not a fair superiority claim.",
+      "Only one seed was evaluated."
+    ]
+  },
+  "source_artifacts": [
+    {
+      "role": "curated_source_result",
+      "name": "cnn_fullbank_task1_x4_double_sample_gate_seed0_20260825.json",
+      "repository_path": "docs/protocols/references/cnn_fullbank_task1_x4_double_sample_gate_seed0_20260825.json",
+      "sha256": "c6c73396cd2b4fccd7155701f44f0b6b18cc80dedb55bb5af700fb096ac7dae1"
+    },
+    {
+      "role": "evaluation_seed_manifest",
+      "name": "evaluation_seed_manifest",
+      "sha256": "5abd59223d399706d3aae275a0cd71c866079a7cf03b585ef2e2d4aa44211adc",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "final_evaluation_json",
+      "name": "final_evaluation_json",
+      "sha256": "e9962591e69838b16deef62d0dc845eb8d6edf6101fefa9db5bf21137a0250ea",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "launch_manifest",
+      "name": "launch_manifest",
+      "sha256": "0cdbfc37a35f899abab3c99dc96668ef9f7b528e837ef174d1b3089db651bcac",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "resolved_config",
+      "name": "resolved_config",
+      "sha256": "44fe5dcbfdee38646d02aa4eab6661bd0beccf70dc11246b885345381802f361",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "run_status_json",
+      "name": "run_status_json",
+      "sha256": "7c2dc4648c64f15ce4746d902f5c351783621f9742d1055e9c5f313bf22b1a8b",
+      "repository_copy_excluded": true
+    }
+  ],
+  "notes": [
+    "The held-out final cohort was not used for periodic validation or selection.",
+    "Weights and snapshots named by the source artifact are not copied into this registry."
+  ]
+}

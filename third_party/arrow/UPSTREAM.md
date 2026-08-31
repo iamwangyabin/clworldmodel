@@ -331,6 +331,117 @@ documented here, covered by focused parity tests, and followed by regenerating
     RSSM adapter parameters per later task, a 73.8 percent reduction. Focused
     tests cover exact profile selection, config isolation, and rejection of
     unnamed rank tuples.
+42. Add the separately named, task-aware
+    `CNN-MechanismBank-RSSM-ARROW-v1-Task1SnapshotSeeded` path. It retains one
+    frozen Task-1 CNN and base recurrent/posterior/prior RSSM, then applies
+    project-owned zero-output nonlinear residual mechanisms at the recurrent
+    state and raw posterior/prior logits. Every later task owns one full new
+    mechanism in each location. Independent zero-initialized tanh gates may add
+    or subtract frozen older mechanisms without scaling the new mechanism; the
+    capacity-matched NoReuse ablation stores the same route tensors but freezes
+    them at zero. Spatial projectors, decoder/reward/continue heads, and
+    Actor-Critics remain task-private, with fresh Actors and previous-task head
+    initialization. The original Dreamer losses, current-task ARROW Replay,
+    budgets, and default methods remain unchanged. Precomputed observation
+    features now retain their task id when entering a task projector, fixing a
+    latent routing error exposed by the new path. Focused parity and method tests
+    cover exact zero effect, one-time normalization of composed logits, strict
+    configuration isolation, gradient allowlists, frozen old tensors, nonzero
+    zero-gate gradients, parameter accounting, and launcher semantics.
+43. Add the separately named, task-aware
+    `REC-RSSM-ARROW-v1-Task1SnapshotSeeded` path. It losslessly partitions each
+    fixed-width mechanism hidden axis into four contiguous atoms while retaining
+    the full coefficient-one current mechanism. Later tasks receive independent
+    per-old-task, per-atom tanh gates and persistent hard masks. CrazyClimber's
+    first local epoch freezes its new zero-effect mechanisms for a reuse-only
+    probe, after which full expansion resumes under the original Dreamer loss.
+    Boundary consolidation uses eight frozen replay batches for atom ablation
+    and routed-output contribution, followed by a same-cohort deterministic
+    16-rollout validation with whole-route rollback. A separate persisted mask
+    labels atoms as shared only after that validation accepts them. It changes
+    no mechanism weight, performs no optimization or environment interaction,
+    and adds no teacher, distillation, sparsity, or orthogonality objective.
+    Legacy scalar gates repeat across all atoms. Defaults and the whole-gate
+    mechanism method remain unchanged. Gradient clipping reads the active
+    optimizer groups directly so REC's two learning-rate groups do not depend
+    on the single-group initializer used by older methods. Focused tests cover
+    lossless atom sums, state migration, recurrent/posterior/prior parity,
+    phase-specific gradients, optimizer ownership, hard masks, fixed
+    configuration, and launcher budgets.
+44. Add the separately named
+    `REC-RSSM-ARROW-v2-Task1SnapshotSeeded-Atari-TaskAware-Expanded120`
+    follow-up profile.
+    Sequential Atari schedules may now declare one positive duration per task;
+    the legacy scalar `swap_sched` remains unchanged for every existing
+    profile. The v2 schedule keeps the 90-epoch Task-1 source boundary and uses
+    120 epochs for Boxing and CrazyClimber. REC mechanisms widen to
+    `640/640/320` with four lossless `160/160/80` atoms. A task-age-only Actor
+    learning-rate schedule stays at `2e-4` through local epoch 60 and then
+    cosine decays to `5e-5` by epoch 120 without changing entropy scale. Strict
+    configuration rejects mixed scalar/list schedules, unnamed widths,
+    mismatched duration or total-epoch budgets, and schedule drift. The v1
+    path and all upstream defaults remain unchanged. Focused tests cover
+    variable schedule boundaries, task-local Actor age, exact capacity and
+    parameter ledgers, and launcher budgets.
+45. Add the separately named, task-aware, from-scratch
+    `Evolving-Core-Atomic-RSSM-ARROW-v1-Atari-TaskAware` path. It separates
+    copied-RSSM ownership from task-private heads, retains exactly one shared
+    CNN and posterior/recurrent/prior RSSM, and gives every task (including
+    Task 0) a zero-effect spatial projector, four-atom recurrent/posterior/prior
+    mechanism route, private decoder/reward/continue heads, and independent
+    Actor-Critic. Later online updates split the fixed 16-sequence batch into
+    12 current and four uniformly selected old-task LTDM sequences. Project-
+    owned code applies posterior/hidden/frozen-Actor interface protection,
+    per-component conflicting-current-gradient projection, and the unprojected
+    current loss to only current private parameters. One shared Adam persists
+    across tasks; private and route optimizers are task-indexed. Replay now
+    maintains exact task-to-slot tensors and exposes non-rejection,
+    task-homogeneous FIFO/LTDM/mixed sampling. Each task boundary writes a
+    complete resumable checkpoint and attempts 1,000 task-balanced shared-only
+    updates with fixed-cohort rollback of both shared weights and Adam state.
+    Mapped replay checkpoint assets are immutable and checksum verified.
+    Legacy methods retain their prior topology, sampling, optimizer, and loss
+    defaults. Focused tests cover Task-0 symmetry and zero effect, config
+    isolation, Replay purity, gradient projection/ownership, persistent Adam,
+    complete checkpoint and mmap round trips, consolidation rollback, launcher
+    orders/budgets, and existing MB/REC parity.
+46. Add the separately named, fixed-order
+    `Evolving-Core-Atomic-RSSM-ARROW-v1-Task0-HParamSweep-v1` pilot without
+    changing `fixed_v1`. Four strict profiles each modify exactly one Task-0
+    learning rate (low/high shared core, high task-private, or high
+    Actor-Critic), retain seed 0 and the MsPacman-first schedule, and must stop
+    at its 90-epoch boundary. The trainer atomically persists the fixed-cohort
+    raw return immediately before any boundary-consolidation gradient, so a
+    consolidation failure cannot erase the selection observation and
+    post-consolidation or held-out-final data cannot enter ranking. The
+    launcher records matched acquisition/update/Replay budgets and omits final
+    evaluation; the selector requires the unchanged control plus all four
+    profiles, identical validation seeds, and the preregistered deterministic
+    tie break. Focused tests cover single-field config isolation, exact Task-0
+    budgets, final-evaluation exclusion, pre-validation persistence on safe
+    rollback, and selection behavior.
+47. Add the separately named, fixed-order
+    `Evolving-Core-Atomic-RSSM-ARROW-v1-Task0-DurationSweep-v1` resource-scaling
+    pilot. Four profiles keep every fixed-v1 optimizer and model setting but
+    replace the 90-epoch Task-0 duration with exactly 120, 150, 180, or 240;
+    later declared durations remain 90 and each pilot must stop at its first
+    boundary. Raw frames, online world-model updates, Actor-Critic updates, and
+    sampled sequences scale explicitly with duration while Replay capacity is
+    unchanged. Selection requires the original 90-epoch control plus all four
+    candidates, uses only the fixed-cohort pre-consolidation raw mean, and
+    chooses the shortest duration within five percent of the observed maximum.
+    The preceding LR-only jobs were operator-stopped and excluded when the
+    hypothesis changed to insufficient acquisition time. Focused tests cover
+    exact schedule isolation, resource ledgers, boundary stopping, complete-set
+    validation, held-out exclusion, and duration-curve selection.
+48. Add the separately named full-curriculum `fixed_v2` profile for
+    `Evolving-Core-Atomic-RSSM-ARROW-v2-Atari-TaskAware`. It changes only the
+    first-task shared-core Adam learning rate from `2e-4` to `3e-4`; later-task
+    shared-core, task-private, route, Actor-Critic, and consolidation learning
+    rates remain unchanged. The original `fixed_v1` profile and all Task-0
+    sweep baselines retain their exact prior semantics. Focused launcher tests
+    require the two resolved full-curriculum configs to differ only in profile
+    identity and the declared first-task learning rate.
 
 ## Known issues at import
 

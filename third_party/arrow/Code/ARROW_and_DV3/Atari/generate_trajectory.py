@@ -1,3 +1,4 @@
+from bisect import bisect_right
 from contextlib import nullcontext
 from functools import partial
 from typing import Any, Callable, Optional
@@ -92,22 +93,51 @@ class AllEnvironments(EnvironmentSchedule):
 
 
 class SequentialEnvironments(EnvironmentSchedule):
-    def __init__(self, n_sync: int, templates: list[Callable[[], Any]], swap_sched: int) -> None:
+    def __init__(
+        self,
+        n_sync: int,
+        templates: list[Callable[[], Any]],
+        swap_sched: Optional[int] = None,
+        task_durations: Optional[list[int]] = None,
+    ) -> None:
         super().__init__(n_sync, templates)
+        if task_durations is not None and swap_sched is not None:
+            raise ValueError(
+                "SequentialEnvironments accepts swap_sched or task_durations, not both"
+            )
+        if task_durations is None:
+            if not isinstance(swap_sched, int) or swap_sched < 1:
+                raise ValueError("swap_sched must be a positive integer")
+            task_durations = [swap_sched] * len(templates)
+        if len(task_durations) != len(templates):
+            raise ValueError("task_durations must match the environment count")
+        if any(
+            not isinstance(duration, int) or duration < 1
+            for duration in task_durations
+        ):
+            raise ValueError("task_durations must contain positive integers")
+
         self.swap_sched = swap_sched
+        self.task_durations = tuple(task_durations)
+        total = 0
+        boundaries = []
+        for duration in self.task_durations:
+            total += duration
+            boundaries.append(total)
+        self._task_boundaries = tuple(boundaries)
+        self._task_starts = frozenset((0, *self._task_boundaries[:-1]))
+        self._schedule_duration = total
 
     def funcs(self) -> list[Callable[[], Any]]:
         i = self.current_task_index()
         return [self.templates[i] for _ in range(self.n_sync)]
 
     def is_new_env(self) -> bool:
-        return (
-            self._step % self.swap_sched == 0
-            and self._step < len(self.templates) * self.swap_sched
-        )
+        return self._step in self._task_starts
 
     def current_task_index(self) -> int:
-        return (self._step // self.swap_sched) % len(self.templates)
+        schedule_step = self._step % self._schedule_duration
+        return bisect_right(self._task_boundaries, schedule_step)
 
 
 class SyncVectorEnvAtHome:
