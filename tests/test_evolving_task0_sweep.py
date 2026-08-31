@@ -7,6 +7,7 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,10 +27,12 @@ if torch is not None:
     sys.path.insert(0, str(ROOT / "src"))
     sys.path.insert(0, str(VENDORED_ATARI))
     from config import Config
+    import run_preemptible_evolving_task0_queue as preemptible_queue
     from run_evolving_atomic_rssm import _resolved_config
     from run_evolving_task0_sweep import (
         BASELINE_HPARAMETERS,
         DURATION_PROFILE_EPOCHS,
+        ENV16_PROTOCOL,
         PROFILE_OVERRIDES,
         TASK_ORDER,
         _budget_manifest,
@@ -140,6 +143,68 @@ class EvolvingTask0SweepTests(unittest.TestCase):
         self.assertEqual(budget["online_memory_sequences"], 0)
         self.assertEqual(budget["consolidation_sequences"], 16_000)
         self.assertFalse(budget["heldout_final_evaluation_performed"])
+
+    def test_env16_preserves_budget_with_explicit_trajectory_partition(self) -> None:
+        data = _resolved_sweep_config(
+            self._source(),
+            profile="task0_private_lr_3e4",
+            collection_envs=16,
+        )
+        config = Config.from_dict(data)
+        budget = _budget_manifest(data)
+        self.assertEqual(config.n_sync, 16)
+        self.assertEqual(config.gen_seq_len, 1024)
+        self.assertEqual(config.n_sync * config.gen_seq_len, 16_384)
+        self.assertEqual(budget["raw_environment_frames"], 5_898_240)
+        self.assertEqual(budget["online_world_model_updates"], 90_000)
+        self.assertEqual(budget["actor_critic_updates"], 72_000)
+
+    def test_env16_has_a_complete_standalone_fixed_control(self) -> None:
+        data = _resolved_sweep_config(
+            self._source(), profile="fixed_v1", collection_envs=16
+        )
+        config = Config.from_dict(data)
+        self.assertEqual(config.epochs, 90)
+        self.assertEqual(config.evolving_task0_profile, "fixed_v1")
+        self.assertEqual(config.n_sync, 16)
+        self.assertEqual(
+            {name: data[name] for name in BASELINE_HPARAMETERS},
+            BASELINE_HPARAMETERS,
+        )
+        with self.assertRaisesRegex(ValueError, "standalone fixed_v1"):
+            _resolved_sweep_config(self._source(), profile="fixed_v1")
+
+    def test_env16_does_not_redefine_the_duration_sweep(self) -> None:
+        with self.assertRaisesRegex(ValueError, "frozen at four"):
+            _resolved_sweep_config(
+                self._source(), profile="task0_epochs_120", collection_envs=16
+            )
+
+    def test_preemptible_queue_distinguishes_owned_and_external_cuda_pids(self) -> None:
+        gpu = {
+            "memory_used_mib": 1000,
+            "compute_pids": [{"pid": 11}, {"pid": 22}],
+        }
+        with patch.object(
+            preemptible_queue,
+            "_pid_process_group",
+            side_effect=lambda pid: {11: 123, 22: 999}[pid],
+        ):
+            self.assertEqual(
+                preemptible_queue._external_compute_pids(
+                    gpu, owned_process_group=123
+                ),
+                [22],
+            )
+        self.assertFalse(
+            preemptible_queue._gpu_is_idle(gpu, idle_memory_mib=64)
+        )
+        self.assertTrue(
+            preemptible_queue._gpu_is_idle(
+                {"memory_used_mib": 1, "compute_pids": []},
+                idle_memory_mib=64,
+            )
+        )
 
     def test_duration_budget_scales_samples_and_updates_explicitly(self) -> None:
         config = _resolved_sweep_config(
@@ -309,6 +374,84 @@ class EvolvingTask0SweepTests(unittest.TestCase):
             [90, 120, 150, 180, 240],
         )
         self.assertFalse(selection["heldout_final_data_read"])
+
+    def test_env16_selection_requires_one_complete_matched_cohort(self) -> None:
+        scores = {
+            "fixed_v1": 10.0,
+            "task0_shared_lr_1e4": 20.0,
+            "task0_shared_lr_3e4": 30.0,
+            "task0_private_lr_3e4": 15.0,
+            "task0_actor_lr_2e4": 5.0,
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate_dirs = []
+            for profile, score in scores.items():
+                run_dir = root / profile
+                validation_dir = run_dir / "evolving_core_consolidation"
+                validation_dir.mkdir(parents=True)
+                config = {
+                    **BASELINE_HPARAMETERS,
+                    **PROFILE_OVERRIDES.get(profile, {}),
+                    "evolving_task0_profile": profile,
+                    "epochs": 90,
+                    "n_sync": 16,
+                    "gen_seq_len": 1024,
+                    "esc": {"kwargs": {"swap_sched": 90}},
+                }
+                (run_dir / "launch.json").write_text(
+                    json.dumps(
+                        {
+                            "protocol": ENV16_PROTOCOL,
+                            "task_order": list(TASK_ORDER),
+                            "seed_index": 0,
+                            "project_git": {"commit": "a" * 40},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (run_dir / "resolved_training_config.json").write_text(
+                    json.dumps(config), encoding="utf-8"
+                )
+                (run_dir / "run_status.json").write_text(
+                    json.dumps({"complete": True}), encoding="utf-8"
+                )
+                (validation_dir / "task_00_pre_validation.json").write_text(
+                    json.dumps(
+                        {
+                            "validation": {
+                                "raw_mean": [score],
+                                "task_seeds": [12345],
+                            },
+                            "rollouts_per_task": 16,
+                            "heldout_final_data_used": False,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                candidate_dirs.append(run_dir)
+
+            selection = _select(candidate_dirs)
+            self.assertEqual(selection["protocol"], ENV16_PROTOCOL)
+            self.assertEqual(selection["collection_envs"], 16)
+            self.assertEqual(selection["winner"]["profile"], "task0_shared_lr_3e4")
+
+            fixed_status = root / "fixed_v1" / "run_status.json"
+            fixed_status.write_text(
+                json.dumps({"complete": False}), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "not complete"):
+                _select(candidate_dirs)
+            fixed_status.write_text(
+                json.dumps({"complete": True}), encoding="utf-8"
+            )
+
+            mixed_launch = root / "task0_actor_lr_2e4" / "launch.json"
+            launch = json.loads(mixed_launch.read_text(encoding="utf-8"))
+            launch["protocol"] = "legacy-control"
+            mixed_launch.write_text(json.dumps(launch), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "cannot mix protocols"):
+                _select(candidate_dirs)
 
 
 if __name__ == "__main__":

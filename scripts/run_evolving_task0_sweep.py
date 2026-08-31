@@ -38,6 +38,9 @@ from run_evolving_atomic_rssm import (
 
 
 PROTOCOL = "Evolving-Core-Atomic-RSSM-ARROW-v1-Task0-HParamSweep-v1"
+ENV16_PROTOCOL = (
+    "Evolving-Core-Atomic-RSSM-ARROW-v1-Task0-HParamSweep-v2-EnvParallel16"
+)
 DURATION_PROTOCOL = (
     "Evolving-Core-Atomic-RSSM-ARROW-v1-Task0-DurationSweep-v1"
 )
@@ -61,8 +64,9 @@ DURATION_PROFILE_EPOCHS = {
     "task0_epochs_180": 180,
     "task0_epochs_240": 240,
 }
-ALL_PROFILES = (*PROFILE_OVERRIDES, *DURATION_PROFILE_EPOCHS)
+ALL_PROFILES = ("fixed_v1", *PROFILE_OVERRIDES, *DURATION_PROFILE_EPOCHS)
 PROFILE_RATIONALE = {
+    "fixed_v1": "matched standalone control for the EnvParallel16 cohort",
     "task0_shared_lr_1e4": "test slower shared representation learning",
     "task0_shared_lr_3e4": "test faster shared representation learning",
     "task0_private_lr_3e4": "test faster private projector/atom/head learning",
@@ -88,22 +92,56 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
+    parser.add_argument(
+        "--collection-envs",
+        type=int,
+        choices=(4, 16),
+        default=4,
+        help=(
+            "Parallel Atari collectors. Sixteen is a separately named runtime "
+            "protocol with the same per-epoch decision budget."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
 
-def _resolved_sweep_config(source: dict, *, profile: str) -> dict:
+def _resolved_sweep_config(
+    source: dict, *, profile: str, collection_envs: int = 4
+) -> dict:
     """Apply exactly one declared Task-0 change and stop at its boundary."""
 
     if profile not in ALL_PROFILES:
         raise ValueError(f"Unknown Task-0 sweep profile: {profile!r}")
-    # The preregistered sweep is defined relative to the unchanged fixed_v1
+    if collection_envs not in (4, 16):
+        raise ValueError("Task-0 sweep collection_envs must be 4 or 16")
+    if profile == "fixed_v1" and collection_envs != 16:
+        raise ValueError(
+            "The standalone fixed_v1 control is declared only for EnvParallel16"
+        )
+    if profile in DURATION_PROFILE_EPOCHS and collection_envs != 4:
+        raise ValueError(
+            "The duration sweep is frozen at four collection environments"
+        )
+    # Every preregistered sweep remains relative to the unchanged fixed_v1
     # control even though the full-curriculum launcher now defaults to fixed_v2.
     config = _resolved_config(
         source,
         task_order=TASK_ORDER_NAME,
         task0_profile="fixed_v1",
     )
+    decisions_per_epoch = int(config["n_sync"]) * int(config["gen_seq_len"])
+    declared_decisions = int(config["data_n"]) * int(config["data_t"])
+    if decisions_per_epoch != declared_decisions:
+        raise ValueError(
+            "Source config collection budget does not equal data_n * data_t"
+        )
+    if decisions_per_epoch % collection_envs:
+        raise ValueError(
+            "Per-epoch decision budget is not divisible by collection_envs"
+        )
+    config["n_sync"] = collection_envs
+    config["gen_seq_len"] = decisions_per_epoch // collection_envs
     task0_epochs = DURATION_PROFILE_EPOCHS.get(profile, TASK_DURATION_EPOCHS)
     config["epochs"] = task0_epochs
     config["evolving_task0_profile"] = profile
@@ -208,6 +246,7 @@ def _selection_candidate(
         raise ValueError("Task-0 selection artifact must exclude held-out-final data")
     profile = config["evolving_task0_profile"]
     duration_sweep = profile in DURATION_PROFILE_EPOCHS
+    decisions_per_epoch = int(config["n_sync"]) * int(config["gen_seq_len"])
     return {
         "schema_version": 1,
         "artifact_kind": "evolving_core_task0_sweep_candidate",
@@ -216,6 +255,9 @@ def _selection_candidate(
         "profile": profile,
         "profile_overrides": PROFILE_OVERRIDES.get(profile, {}),
         "task0_acquisition_epochs": int(config["epochs"]),
+        "collection_envs": int(config["n_sync"]),
+        "decisions_per_environment_per_epoch": int(config["gen_seq_len"]),
+        "decisions_per_epoch": decisions_per_epoch,
         "profile_log_distance_from_fixed_v1": _profile_distance(config),
         "project_git_commit": launch["project_git"]["commit"],
         "seed_index": launch["seed_index"],
@@ -247,9 +289,17 @@ def main() -> int:
     )
     source_path = _config_path("original", args.seed)
     source = _verify_primary_config(source_path, "original", args.seed)
-    config = _resolved_sweep_config(source, profile=args.profile)
+    config = _resolved_sweep_config(
+        source, profile=args.profile, collection_envs=args.collection_envs
+    )
     duration_sweep = args.profile in DURATION_PROFILE_EPOCHS
-    protocol = DURATION_PROTOCOL if duration_sweep else PROTOCOL
+    protocol = (
+        DURATION_PROTOCOL
+        if duration_sweep
+        else ENV16_PROTOCOL
+        if args.collection_envs == 16
+        else PROTOCOL
+    )
     python = args.python.expanduser().resolve()
     output_dir = (
         args.output_dir.expanduser().resolve()
@@ -297,6 +347,22 @@ def main() -> int:
         "profile_rationale": PROFILE_RATIONALE[args.profile],
         "profile_overrides": PROFILE_OVERRIDES.get(args.profile, {}),
         "task0_acquisition_epochs": int(config["epochs"]),
+        "collection": {
+            "parallel_environments": int(config["n_sync"]),
+            "decisions_per_environment_per_epoch": int(config["gen_seq_len"]),
+            "total_decisions_per_epoch": int(config["n_sync"])
+            * int(config["gen_seq_len"]),
+            "raw_frames_per_epoch": int(config["n_sync"])
+            * int(config["gen_seq_len"])
+            * int(config["env_repeat"]),
+            "semantic_note": (
+                "EnvParallel16 preserves the aggregate interaction/update budget "
+                "but changes worker seeds and trajectory partitioning; it is not "
+                "presented as the v1 collection stream."
+                if args.collection_envs == 16
+                else "Frozen v1 four-environment collection stream."
+            ),
+        },
         "selection_metric": "Task0 pre-consolidation fixed-validation raw mean",
         "selection_rule": (
             "shortest duration within five percent of the best raw mean, then "
