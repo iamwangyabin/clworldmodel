@@ -62,7 +62,9 @@ class EvolvingTask0SweepTests(unittest.TestCase):
 
     def test_each_profile_changes_exactly_one_preregistered_hyperparameter(self) -> None:
         fixed = _resolved_config(
-            self._source(), task_order="mspacman-boxing-crazyclimber"
+            self._source(),
+            task_order="mspacman-boxing-crazyclimber",
+            task0_profile="fixed_v1",
         )
         for profile, override in PROFILE_OVERRIDES.items():
             with self.subTest(profile=profile):

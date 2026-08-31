@@ -116,6 +116,7 @@ Inspect a resolved launch without environment interaction:
 ```bash
 python scripts/run_evolving_atomic_rssm.py \
   --task-order mspacman-boxing-crazyclimber \
+  --task0-profile fixed_v1 \
   --seed 0 \
   --classification pilot \
   --dry-run
@@ -124,6 +125,11 @@ python scripts/run_evolving_atomic_rssm.py \
 Non-dry runs enforce the repository clean, committed, pushed, and synchronized
 Git provenance gate. Evolving-Core deliberately disables world-model
 compilation because its component-wise `autograd.grad` ownership is explicit.
+
+`fixed_v1` remains explicitly selectable for exact reproduction. The launcher
+now defaults to the separately named `fixed_v2` formal configuration described
+in `evolving_core_atomic_rssm_arrow_v2_atari.md`; omitting `--task0-profile`
+therefore does not reproduce v1.
 
 Run the production-shaped synthetic CUDA gate before starting a campaign:
 

@@ -97,7 +97,13 @@ def _resolved_sweep_config(source: dict, *, profile: str) -> dict:
 
     if profile not in ALL_PROFILES:
         raise ValueError(f"Unknown Task-0 sweep profile: {profile!r}")
-    config = _resolved_config(source, task_order=TASK_ORDER_NAME)
+    # The preregistered sweep is defined relative to the unchanged fixed_v1
+    # control even though the full-curriculum launcher now defaults to fixed_v2.
+    config = _resolved_config(
+        source,
+        task_order=TASK_ORDER_NAME,
+        task0_profile="fixed_v1",
+    )
     task0_epochs = DURATION_PROFILE_EPOCHS.get(profile, TASK_DURATION_EPOCHS)
     config["epochs"] = task0_epochs
     config["evolving_task0_profile"] = profile

@@ -74,6 +74,7 @@ ReplayObservationDType = Literal["float32", "uint8"]
 DataParallelWorldSize = Literal[1, 2, 4]
 EvolvingTask0Profile = Literal[
     "fixed_v1",
+    "fixed_v2",
     "task0_shared_lr_1e4",
     "task0_shared_lr_3e4",
     "task0_private_lr_3e4",
@@ -537,6 +538,9 @@ class Config(Serialisable):
         if is_evolving_atomic:
             task0_profile_overrides = {
                 "fixed_v1": {},
+                "fixed_v2": {
+                    "first_task_shared_core_lr": 3e-4,
+                },
                 "task0_shared_lr_1e4": {
                     "first_task_shared_core_lr": 1e-4,
                 },
@@ -581,7 +585,7 @@ class Config(Serialisable):
                     "Evolving-Core Atomic RSSM requires its fixed optimizer, "
                     f"replay, interface, and topology settings: {mismatches}"
                 )
-            if self.evolving_task0_profile != "fixed_v1":
+            if self.evolving_task0_profile not in ("fixed_v1", "fixed_v2"):
                 if sequential_task_durations is None:
                     raise ValueError(
                         "Evolving-Core Task-0 sweeps require a sequential schedule"

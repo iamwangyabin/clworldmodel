@@ -434,6 +434,14 @@ documented here, covered by focused parity tests, and followed by regenerating
     hypothesis changed to insufficient acquisition time. Focused tests cover
     exact schedule isolation, resource ledgers, boundary stopping, complete-set
     validation, held-out exclusion, and duration-curve selection.
+48. Add the separately named full-curriculum `fixed_v2` profile for
+    `Evolving-Core-Atomic-RSSM-ARROW-v2-Atari-TaskAware`. It changes only the
+    first-task shared-core Adam learning rate from `2e-4` to `3e-4`; later-task
+    shared-core, task-private, route, Actor-Critic, and consolidation learning
+    rates remain unchanged. The original `fixed_v1` profile and all Task-0
+    sweep baselines retain their exact prior semantics. Focused launcher tests
+    require the two resolved full-curriculum configs to differ only in profile
+    identity and the declared first-task learning rate.
 
 ## Known issues at import
 

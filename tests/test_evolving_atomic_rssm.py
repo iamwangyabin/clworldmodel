@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -101,8 +100,9 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
                 "evaluation_seed_protocol": "fixed_validation_heldout_final",
                 "residual_correction": "none",
                 "shared_core_mode": "evolving_replay_protected",
+                "evolving_task0_profile": "fixed_v2",
                 "evolving_shared_core": True,
-                "first_task_shared_core_lr": 2e-4,
+                "first_task_shared_core_lr": 3e-4,
                 "shared_core_lr": 1e-4,
                 "task_private_lr": 2e-4,
                 "task_route_lr": 1e-3,

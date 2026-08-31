@@ -30,9 +30,18 @@ from run_arrow_ar50_atari import (
     _verify_primary_config,
 )
 from run_cnn_projector_lora_incremental import _prepare_replay_symlink
+from summarize_continual_metrics import build_run_report
 
 
-PROTOCOL = "Evolving-Core-Atomic-RSSM-ARROW-v1-Atari-TaskAware"
+FORMAL_TASK0_PROFILE = "fixed_v2"
+FIXED_TASK0_PROFILE_LRS = {
+    "fixed_v1": 2e-4,
+    "fixed_v2": 3e-4,
+}
+PROTOCOLS = {
+    "fixed_v1": "Evolving-Core-Atomic-RSSM-ARROW-v1-Atari-TaskAware",
+    "fixed_v2": "Evolving-Core-Atomic-RSSM-ARROW-v2-Atari-TaskAware",
+}
 TASK_ORDERS = {
     "mspacman-boxing-crazyclimber": (
         "ALE/MsPacman-v5",
@@ -66,6 +75,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--classification", choices=("pilot", "official"), default="pilot"
     )
+    parser.add_argument(
+        "--task0-profile",
+        choices=tuple(FIXED_TASK0_PROFILE_LRS),
+        default=FORMAL_TASK0_PROFILE,
+        help=(
+            "Named full-curriculum optimizer profile. fixed_v2 is the formal "
+            "default; fixed_v1 remains available for exact reproduction."
+        ),
+    )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
@@ -74,11 +92,20 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolved_config(source: dict, *, task_order: str) -> dict:
+def _resolved_config(
+    source: dict,
+    *,
+    task_order: str,
+    task0_profile: str = FORMAL_TASK0_PROFILE,
+) -> dict:
     """Compose the fixed named protocol without changing existing baselines."""
 
     if task_order not in TASK_ORDERS:
         raise ValueError(f"Unknown Evolving-Core task order: {task_order!r}")
+    if task0_profile not in FIXED_TASK0_PROFILE_LRS:
+        raise ValueError(
+            f"Unknown full-curriculum Task-0 profile: {task0_profile!r}"
+        )
     config = copy.deepcopy(source)
     by_name = {
         task["name"]: task for task in config["esc"]["env_configs"]
@@ -132,9 +159,9 @@ def _resolved_config(source: dict, *, task_order: str) -> dict:
             "residual_consolidation": "none",
             "shared_core_mode": "evolving_replay_protected",
             "independent_expert_original_task_index": None,
-            "evolving_task0_profile": "fixed_v1",
+            "evolving_task0_profile": task0_profile,
             "evolving_shared_core": True,
-            "first_task_shared_core_lr": 2e-4,
+            "first_task_shared_core_lr": FIXED_TASK0_PROFILE_LRS[task0_profile],
             "shared_core_lr": 1e-4,
             "task_private_lr": 2e-4,
             "task_route_lr": 1e-3,
@@ -229,14 +256,21 @@ def main() -> int:
     )
     source_path = _config_path("original", args.seed)
     source = _verify_primary_config(source_path, "original", args.seed)
-    config = _resolved_config(source, task_order=args.task_order)
+    config = _resolved_config(
+        source,
+        task_order=args.task_order,
+        task0_profile=args.task0_profile,
+    )
     python = args.python.expanduser().resolve()
     output_dir = (
         args.output_dir.expanduser().resolve()
         if args.output_dir is not None
         else ROOT
         / "runs"
-        / f"evolving_atomic_rssm_{args.task_order}_s{args.seed}_{args.classification}"
+        / (
+            f"evolving_atomic_rssm_{args.task0_profile}_{args.task_order}_"
+            f"s{args.seed}_{args.classification}"
+        )
     )
     config_path = output_dir / "resolved_training_config.json"
     task_snapshot_dir = output_dir / "task_boundary_snapshots"
@@ -259,7 +293,7 @@ def main() -> int:
     launch = {
         "schema_version": 1,
         "method": "Evolving-Core Atomic RSSM",
-        "protocol": PROTOCOL,
+        "protocol": PROTOCOLS[args.task0_profile],
         "classification": args.classification,
         "status": "dry_run" if args.dry_run else "launching",
         "project_git": project_git,
@@ -290,6 +324,14 @@ def main() -> int:
         ),
         "project_pythonpath_prepend": project_pythonpath,
         "world_model_compile": False,
+        "metric_reporting": {
+            "schema": "arrow-paper-v1",
+            "automatic_after_training": True,
+            "required_output": str(output_dir / "continual_metrics.json"),
+            "raw_checkpoint_matrix_preserved": True,
+            "partial_curriculum_metric_suffix": "3",
+            "published_arrow_direct_comparison": False,
+        },
         "command": command,
     }
     print(json.dumps(launch, indent=2))
@@ -348,13 +390,26 @@ def main() -> int:
         )
         if not success.is_file() and not failure.is_file():
             missing_consolidation_records.append(task_id)
+    metric_report_error = None
+    metric_report_path = output_dir / "continual_metrics.json"
+    if return_code == 0 and not missing and not missing_consolidation_records:
+        try:
+            _write_json(metric_report_path, build_run_report(output_dir))
+        except (FileNotFoundError, KeyError, ValueError) as exc:
+            metric_report_error = f"{type(exc).__name__}: {exc}"
+
     status = {
         "complete": return_code == 0
         and not missing
-        and not missing_consolidation_records,
+        and not missing_consolidation_records
+        and metric_report_error is None,
         "return_code": return_code,
         "missing_required_outputs": missing,
         "missing_consolidation_records": missing_consolidation_records,
+        "continual_metric_report": (
+            str(metric_report_path) if metric_report_path.is_file() else None
+        ),
+        "continual_metric_report_error": metric_report_error,
         "finished_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     _write_json(output_dir / "run_status.json", status)
@@ -362,6 +417,10 @@ def main() -> int:
         raise subprocess.CalledProcessError(return_code, command)
     if missing or missing_consolidation_records:
         raise RuntimeError(f"Training omitted required outputs: {status}")
+    if metric_report_error is not None:
+        raise RuntimeError(
+            f"Training completed but metric reporting failed: {metric_report_error}"
+        )
     return 0
 
 

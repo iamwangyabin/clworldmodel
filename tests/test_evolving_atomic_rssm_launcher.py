@@ -64,12 +64,44 @@ class EvolvingAtomicRssmLauncherTests(unittest.TestCase):
                 self.assertEqual(config.epochs, 270)
                 self.assertTrue(config.uses_evolving_atomic_rssm)
                 self.assertTrue(config.evolving_shared_core)
+                self.assertEqual(config.evolving_task0_profile, "fixed_v2")
+                self.assertEqual(config.first_task_shared_core_lr, 3e-4)
+                self.assertEqual(config.shared_core_lr, 1e-4)
                 self.assertTrue(config.uses_task_private_heads)
                 self.assertFalse(config.uses_full_task_rssm_experts)
                 self.assertEqual(
                     (config.current_batch_n, config.memory_batch_n), (12, 4)
                 )
                 self.assertEqual(config.boundary_consolidation_steps, 1000)
+
+    def test_fixed_v1_remains_available_without_redefining_it(self) -> None:
+        v1_data = _resolved_config(
+            self._source(),
+            task_order="mspacman-boxing-crazyclimber",
+            task0_profile="fixed_v1",
+        )
+        v2_data = _resolved_config(
+            self._source(),
+            task_order="mspacman-boxing-crazyclimber",
+            task0_profile="fixed_v2",
+        )
+        config = Config.from_dict(v1_data)
+
+        self.assertEqual(config.epochs, 270)
+        self.assertEqual(config.evolving_task0_profile, "fixed_v1")
+        self.assertEqual(config.first_task_shared_core_lr, 2e-4)
+        self.assertEqual(config.shared_core_lr, 1e-4)
+        self.assertEqual(
+            {
+                name: (v1_data[name], v2_data[name])
+                for name in v1_data
+                if v1_data[name] != v2_data[name]
+            },
+            {
+                "evolving_task0_profile": ("fixed_v1", "fixed_v2"),
+                "first_task_shared_core_lr": (2e-4, 3e-4),
+            },
+        )
 
     def test_budget_ledger_separates_online_and_consolidation_compute(self) -> None:
         config = _resolved_config(
