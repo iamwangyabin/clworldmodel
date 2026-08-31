@@ -273,7 +273,10 @@ class MoeArrowMethodTests(unittest.TestCase):
             "evaluation_task_seed_offset",
         ):
             invalid[key] = data[key]
-        with self.assertRaisesRegex(ValueError, "only for current-only CNN-FullBank"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "only for named current-only actor training profiles",
+        ):
             Config.from_dict(invalid)
 
         invalid = data.copy()

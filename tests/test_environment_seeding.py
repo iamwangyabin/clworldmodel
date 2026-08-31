@@ -190,6 +190,7 @@ class EnvironmentSeedingTests(unittest.TestCase):
         class FakeConfig:
             algorithm = "arrow"
             seed = 7
+            uses_shared_actor = False
 
             @staticmethod
             def to_dict():
@@ -237,6 +238,7 @@ class EnvironmentSeedingTests(unittest.TestCase):
             algorithm = "arrow"
             seed = 7
             ac_train_steps = 800
+            uses_shared_actor = False
 
             @staticmethod
             def to_dict():
