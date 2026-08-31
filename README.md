@@ -541,10 +541,28 @@ python scripts/run_evolving_atomic_rssm.py \
 For three tasks, the online total is prospectively `44,376,209` parameters:
 `3,444,213` fewer than a matched Shared-Frozen-Down model with three private
 MLP pairs, `8,944,117` fewer than dense Evolving-Core v2, and `23,162,395` more
-than plain ARROW. This configuration has not yet produced a performance
-result. See
+than plain ARROW. The separately named original-six extension preserves the
+same `fixed_v2` method and runs the full MsPacman/Boxing/CrazyClimber/Frostbite/
+Seaquest/Enduro order:
+
+```bash
+python scripts/run_evolving_atomic_rssm.py \
+  --task-order arrow-original-six \
+  --task0-profile fixed_v2 \
+  --behavior-profile shared_fastkan_stable \
+  --seed 0 \
+  --classification pilot \
+  --dry-run
+```
+
+Its fixed budgets are `35,389,440` raw frames, `540,000` online world-model
+updates plus `6,000` boundary-consolidation updates, and `432,000`
+Actor-Critic updates. The six-task online total is `73,361,840` parameters.
+Both configurations remain pilots. See
 `docs/protocols/evolving_core_shared_frozen_down_shared_fastkan_arrow_v1_atari.md`
-for exact mechanism, target, Replay, checkpoint, parameter, and claim semantics.
+for exact mechanism semantics and
+`docs/protocols/evolving_core_shared_frozen_down_shared_fastkan_arrow_v1_original_six_atari.md`
+for the extended curriculum, budgets, storage, and claim limits.
 
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control

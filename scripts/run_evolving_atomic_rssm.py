@@ -66,6 +66,10 @@ SHARED_FASTKAN_PROTOCOL = (
     "Evolving-Core-SharedFrozenDown-SharedFastKANAC-StableTargets-ARROW-v1-"
     "ThreeTask-Atari-TaskAware-Pilot"
 )
+SHARED_FASTKAN_ORIGINAL_SIX_PROTOCOL = (
+    "Evolving-Core-SharedFrozenDown-SharedFastKANAC-StableTargets-ARROW-v1-"
+    "OriginalSix-Atari-TaskAware-Pilot"
+)
 TASK_ORDERS = {
     "mspacman-boxing-crazyclimber": (
         "ALE/MsPacman-v5",
@@ -108,24 +112,34 @@ ORIGINAL_SIX_MINIMUM_FREE_BYTES = 48 * 1024**3
 
 
 def _task0_profile_for_order(
-    task_order: str, task0_profile: str | None = None
+    task_order: str,
+    task0_profile: str | None = None,
+    behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
 ) -> str:
     if task_order not in TASK_ORDERS:
         raise ValueError(f"Unknown Evolving-Core task order: {task_order!r}")
+    if behavior_profile not in BEHAVIOR_PROFILES:
+        raise ValueError(f"Unknown behavior profile: {behavior_profile!r}")
     resolved = task0_profile
     if resolved is None:
         resolved = (
-            "fixed_v1"
-            if task_order == "arrow-original-six"
-            else FORMAL_TASK0_PROFILE
+            FORMAL_TASK0_PROFILE
+            if behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
+            or task_order != "arrow-original-six"
+            else "fixed_v1"
         )
     if resolved not in FIXED_TASK0_PROFILE_LRS:
         raise ValueError(
             f"Unknown full-curriculum Task-0 profile: {resolved!r}"
         )
-    if task_order == "arrow-original-six" and resolved != "fixed_v1":
+    if (
+        task_order == "arrow-original-six"
+        and behavior_profile != SHARED_FASTKAN_STABLE_BEHAVIOR
+        and resolved != "fixed_v1"
+    ):
         raise ValueError(
-            "The named original-six pilot preserves the fixed_v1 Task-0 profile"
+            "The private-MLP original-six pilot preserves the fixed_v1 Task-0 "
+            "profile"
         )
     return resolved
 
@@ -171,11 +185,22 @@ def _protocol_for_task_order(
     mechanism_profile: str = DEFAULT_MECHANISM_PROFILE,
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
     task0_profile: str | None = None,
+    behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
 ) -> str:
     _validate_mechanism_profile(
         task_order, mechanism_profile, mechanism_parameterization
     )
-    resolved_task0_profile = _task0_profile_for_order(task_order, task0_profile)
+    resolved_task0_profile = _task0_profile_for_order(
+        task_order,
+        task0_profile,
+        behavior_profile,
+    )
+    if behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR:
+        return (
+            SHARED_FASTKAN_ORIGINAL_SIX_PROTOCOL
+            if task_order == "arrow-original-six"
+            else SHARED_FASTKAN_PROTOCOL
+        )
     if mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION:
         return SHARED_DOWN_ORIGINAL_SIX_PROTOCOL
     if mechanism_profile == COMPACT_MECHANISM_PROFILE:
@@ -388,8 +413,8 @@ def _parser() -> argparse.ArgumentParser:
         choices=tuple(FIXED_TASK0_PROFILE_LRS),
         default=None,
         help=(
-            "Named optimizer profile. The three-task formal default is fixed_v2; "
-            "the separately named original-six pilot preserves fixed_v1."
+            "Named optimizer profile. The three-task and Shared-FastKAN defaults "
+            "are fixed_v2; the private-MLP original-six pilot preserves fixed_v1."
         ),
     )
     parser.add_argument(
@@ -430,19 +455,19 @@ def _resolved_config(
     _validate_mechanism_profile(
         task_order, mechanism_profile, mechanism_parameterization
     )
-    resolved_task0_profile = _task0_profile_for_order(task_order, task0_profile)
-    mechanism_widths = MECHANISM_PROFILE_WIDTHS[mechanism_profile]
     if behavior_profile not in BEHAVIOR_PROFILES:
         raise ValueError(f"Unknown behavior profile: {behavior_profile!r}")
+    resolved_task0_profile = _task0_profile_for_order(
+        task_order,
+        task0_profile,
+        behavior_profile,
+    )
+    mechanism_widths = MECHANISM_PROFILE_WIDTHS[mechanism_profile]
     if behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR:
         if resolved_task0_profile != "fixed_v2":
             raise ValueError(
                 "Shared-Frozen-Down + Shared FastKAN inherits the fixed_v2 "
                 "Task-0 world-model optimizer profile"
-            )
-        if task_order == "arrow-original-six":
-            raise ValueError(
-                "Shared FastKAN v1 is a separately named three-task pilot"
             )
         if (
             mechanism_profile != DEFAULT_MECHANISM_PROFILE
@@ -826,6 +851,7 @@ def main() -> int:
         mechanism_profile=args.mechanism_profile,
         mechanism_parameterization=args.mechanism_parameterization,
         task0_profile=resolved_task0_profile,
+        behavior_profile=args.behavior_profile,
     )
     if args.task_order == "arrow-original-six" and args.classification != "pilot":
         raise ValueError("The original-six Evolving-Core campaign is pilot-only")
@@ -889,11 +915,7 @@ def main() -> int:
             if args.mechanism_profile == DEFAULT_MECHANISM_PROFILE
             else "Evolving-Core Atomic RSSM Compact Mechanism 128/128/64"
         ),
-        "protocol": (
-            SHARED_FASTKAN_PROTOCOL
-            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
-            else protocol
-        ),
+        "protocol": protocol,
         "classification": args.classification,
         "status": "dry_run" if args.dry_run else "launching",
         "project_git": project_git,
@@ -969,7 +991,7 @@ def main() -> int:
             "automatic_after_training": True,
             "required_output": str(output_dir / "continual_metrics.json"),
             "raw_checkpoint_matrix_preserved": True,
-            "partial_curriculum_metric_suffix": "3",
+            "partial_curriculum_metric_suffix": str(task_count),
             "published_arrow_direct_comparison": False,
         },
         "checkpoint_retention": config["evolving_checkpoint_retention"],

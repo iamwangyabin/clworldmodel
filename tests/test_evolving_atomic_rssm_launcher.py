@@ -34,6 +34,7 @@ if torch is not None:
         ORIGINAL_SIX_MINIMUM_FREE_BYTES,
         ORIGINAL_SIX_TASK_PROTOCOL,
         PROTOCOL,
+        SHARED_FASTKAN_ORIGINAL_SIX_PROTOCOL,
         SHARED_FASTKAN_STABLE_BEHAVIOR,
         TASK_ORDERS,
         _behavior_update_budget,
@@ -406,6 +407,74 @@ class EvolvingAtomicRssmLauncherTests(unittest.TestCase):
         self.assertFalse(
             budget["shared_behavior_rehearsal_adds_optimizer_steps"]
         )
+
+    def test_shared_fastkan_original_six_is_separately_named_and_budgeted(
+        self,
+    ) -> None:
+        data = _resolved_config(
+            self._source(),
+            task_order="arrow-original-six",
+            behavior_profile=SHARED_FASTKAN_STABLE_BEHAVIOR,
+        )
+        config = Config.from_dict(data)
+
+        self.assertEqual(config.epochs, 540)
+        self.assertEqual(config.rssm_num_experts, 6)
+        self.assertEqual(config.evolving_task0_profile, "fixed_v2")
+        self.assertEqual(config.first_task_shared_core_lr, 3e-4)
+        self.assertEqual(config.evolving_checkpoint_retention, "latest_boundary")
+        self.assertTrue(config.uses_shared_actor)
+        self.assertEqual(
+            _protocol_for_task_order(
+                "arrow-original-six",
+                task0_profile="fixed_v2",
+                behavior_profile=SHARED_FASTKAN_STABLE_BEHAVIOR,
+            ),
+            SHARED_FASTKAN_ORIGINAL_SIX_PROTOCOL,
+        )
+
+        budget = _budget_manifest(data)
+        self.assertEqual(budget["raw_environment_frames"], 35_389_440)
+        self.assertEqual(budget["online_world_model_updates"], 540_000)
+        self.assertEqual(
+            budget["boundary_consolidation_world_model_updates"], 6_000
+        )
+        self.assertEqual(budget["actor_critic_updates"], 432_000)
+        self.assertEqual(
+            budget["actor_critic_updates_by_task_route"],
+            {
+                "0": 113_130,
+                "1": 77_130,
+                "2": 68_040,
+                "3": 62_100,
+                "4": 57_600,
+                "5": 54_000,
+            },
+        )
+        self.assertEqual(
+            sum(budget["actor_critic_updates_by_task_route"].values()),
+            432_000,
+        )
+        self.assertEqual(budget["checkpoint_retention"], "latest_boundary")
+
+        parameters = _parameter_manifest(data)
+        self.assertEqual(parameters["world_model_parameters"], 71_661_170)
+        self.assertEqual(parameters["behavior_parameters"], 1_700_670)
+        self.assertEqual(parameters["online_parameters"], 73_361_840)
+        self.assertEqual(
+            parameters["comparison_to_matched_world_model_private_mlp"][
+                "difference"
+            ],
+            -8_589_096,
+        )
+
+    def test_private_mlp_original_six_still_rejects_fixed_v2(self) -> None:
+        with self.assertRaisesRegex(ValueError, "private-MLP original-six"):
+            _resolved_config(
+                self._source(),
+                task_order="arrow-original-six",
+                task0_profile="fixed_v2",
+            )
 
     def test_shared_fastkan_parameter_ledger_combines_shared_down_and_behavior(self) -> None:
         data = _resolved_config(
