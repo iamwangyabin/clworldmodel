@@ -31,17 +31,28 @@ contains experiment-facing code.
   RSSM with a continually updated shared CNN/RSSM, symmetric per-task
   projectors/atoms/heads, independent Actor-Critics, replay-protected
   component gradients, and boundary consolidation. It supports the three
-  predeclared task orders and always disables world-model compilation. The
-  formal default is `fixed_v2` (`first_task_shared_core_lr=3e-4`); pass
-  `--task0-profile fixed_v1` to reproduce the original `2e-4` protocol.
+  predeclared three-task orders plus the separately named original-six-task
+  seed-0 pilot. The explicit `compact_128_128_64` original-six profile is a
+  separately named mechanism-capacity ablation; the default remains the
+  `512/512/256` protocol. The launcher always disables world-model compilation.
+  Three-task full curricula default to `fixed_v2`
+  (`first_task_shared_core_lr=3e-4`); pass `--task0-profile fixed_v1` to
+  reproduce the original `2e-4` protocol. The original-six pilot remains
+  fixed to its preregistered `fixed_v1` acquisition setting.
 - `smoke_evolving_atomic_rssm.py`: target-CUDA, production-shaped synthetic
   update covering the fixed 12-current/4-memory split, component projection,
-  frozen old private state, and shared/private/route Adam steps. It performs no
-  environment interaction and is evidence of execution correctness only.
+  frozen old private state, and shared/private/route Adam steps. Its explicit
+  compact-mechanism profile allocates the complete six-task compact topology.
+  It performs no environment interaction and is evidence of execution
+  correctness only.
 - `run_evolving_task0_sweep.py`: fixed-order, seed-0 MsPacman acquisition
   launcher for the preregistered single-LR profiles or the 120/150/180/240
   duration profiles. It omits held-out-final evaluation and stops at the
   declared first-task boundary.
+- `run_evolving_shared_down_task0.py`: seed-0 acquisition gate for the
+  full-width shared-frozen-down plus private LayerNorm/FiLM/up mechanism. It
+  allocates all six original-order routes, trains only MsPacman for 90 epochs,
+  and omits held-out-final evaluation.
 - `select_evolving_task0_profile.py`: require and rank the unchanged control
   plus a complete LR or duration family using only the fixed-cohort
   pre-consolidation raw return. Duration selection chooses the shortest run

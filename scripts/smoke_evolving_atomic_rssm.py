@@ -33,13 +33,31 @@ from replay import FifoReplay, LongTermReplay, MultiTypeReplay  # noqa: E402
 import train  # noqa: E402
 from wm import WorldModel  # noqa: E402
 
-from run_evolving_atomic_rssm import _resolved_config  # noqa: E402
+from run_evolving_atomic_rssm import (  # noqa: E402
+    COMPACT_MECHANISM_PROFILE,
+    DEFAULT_MECHANISM_PROFILE,
+    DENSE_PRIVATE_PARAMETERIZATION,
+    MECHANISM_PROFILE_WIDTHS,
+    MECHANISM_PARAMETERIZATIONS,
+    SHARED_DOWN_PARAMETERIZATION,
+    _resolved_config,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=20260829)
+    parser.add_argument(
+        "--mechanism-profile",
+        choices=tuple(MECHANISM_PROFILE_WIDTHS),
+        default=DEFAULT_MECHANISM_PROFILE,
+    )
+    parser.add_argument(
+        "--mechanism-parameterization",
+        choices=MECHANISM_PARAMETERIZATIONS,
+        default=DENSE_PRIVATE_PARAMETERIZATION,
+    )
     return parser
 
 
@@ -59,12 +77,23 @@ def _source_config() -> Path:
     )
 
 
-def _config() -> Config:
+def _config(
+    mechanism_profile: str = DEFAULT_MECHANISM_PROFILE,
+    mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
+) -> Config:
     source = Config.from_file(_source_config()).to_dict()
+    task_order = (
+        "arrow-original-six"
+        if mechanism_profile == COMPACT_MECHANISM_PROFILE
+        or mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION
+        else "mspacman-boxing-crazyclimber"
+    )
     return Config.from_dict(
         _resolved_config(
             source,
-            task_order="mspacman-boxing-crazyclimber",
+            task_order=task_order,
+            mechanism_profile=mechanism_profile,
+            mechanism_parameterization=mechanism_parameterization,
         )
     )
 
@@ -134,6 +163,7 @@ def _world_model(config: Config, device: torch.device) -> WorldModel:
         ),
         task_mechanism_residual_scale=config.task_mechanism_residual_scale,
         task_mechanism_num_atoms=config.task_mechanism_num_atoms,
+        task_mechanism_parameterization=config.task_mechanism_parameterization,
         task_symmetric_mechanisms=config.task_atomic_routes,
     ).to(device)
 
@@ -186,7 +216,9 @@ def main() -> int:
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
-    config = _config()
+    config = _config(
+        args.mechanism_profile, args.mechanism_parameterization
+    )
     world_model = _world_model(config, device)
     world_model.activate_task_expert(0)
     boundary_teacher = copy.deepcopy(world_model).eval()
@@ -291,6 +323,13 @@ def main() -> int:
         "device": str(device),
         "gpu": torch.cuda.get_device_name(device),
         "compute_dtype": config.compute_dtype,
+        "mechanism_profile": config.task_mechanism_capacity_profile,
+        "mechanism_parameterization": config.task_mechanism_parameterization,
+        "mechanism_widths": [
+            config.task_mechanism_recurrent_width,
+            config.task_mechanism_representation_width,
+            config.task_mechanism_transition_width,
+        ],
         "current_sequences": config.current_batch_n,
         "memory_sequences": config.memory_batch_n,
         "current_loss": float(checked_metrics["current_loss"].detach().cpu()),

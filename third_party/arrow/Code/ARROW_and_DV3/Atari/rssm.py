@@ -123,6 +123,7 @@ class Rssm(nn.Module):
         task_mechanism_transition_width: int = 256,
         task_mechanism_residual_scale: float = 0.1,
         task_mechanism_num_atoms: int = 1,
+        task_mechanism_parameterization: str = "dense_private",
         task_symmetric_mechanisms: bool = False,
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
@@ -203,6 +204,21 @@ class Rssm(nn.Module):
             raise ValueError(
                 "RSSM mechanism widths must be divisible by the atom count"
             )
+        if task_mechanism_parameterization not in {
+            "dense_private",
+            "shared_frozen_down_film",
+        }:
+            raise ValueError(
+                "Unknown RSSM mechanism parameterization: "
+                f"{task_mechanism_parameterization!r}"
+            )
+        if (
+            task_mechanism_parameterization != "dense_private"
+            and not task_mechanism_bank
+        ):
+            raise ValueError(
+                "A non-default RSSM mechanism parameterization requires mechanism banks"
+            )
         if task_mechanism_bank and not task_projected_image_encoder:
             raise ValueError("RSSM mechanism banks require task image projectors")
         if task_symmetric_image_projectors and not task_projected_image_encoder:
@@ -265,6 +281,7 @@ class Rssm(nn.Module):
         self.task_mechanism_transition_width = task_mechanism_transition_width
         self.task_mechanism_residual_scale = task_mechanism_residual_scale
         self.task_mechanism_num_atoms = task_mechanism_num_atoms
+        self.task_mechanism_parameterization = task_mechanism_parameterization
         self.task_symmetric_mechanisms = bool(task_symmetric_mechanisms)
 
         self.recurrent = Recurrent(
@@ -430,6 +447,7 @@ class Rssm(nn.Module):
                     reuse_enabled=task_mechanism_reuse,
                     num_atoms=task_mechanism_num_atoms,
                     include_task0=self.task_symmetric_mechanisms,
+                    parameterization=task_mechanism_parameterization,
                 )
                 self.representation_mechanism_bank = MechanismBank(
                     num_tasks=num_task_experts,
@@ -440,6 +458,7 @@ class Rssm(nn.Module):
                     reuse_enabled=task_mechanism_reuse,
                     num_atoms=task_mechanism_num_atoms,
                     include_task0=self.task_symmetric_mechanisms,
+                    parameterization=task_mechanism_parameterization,
                 )
                 self.transition_mechanism_bank = MechanismBank(
                     num_tasks=num_task_experts,
@@ -450,6 +469,7 @@ class Rssm(nn.Module):
                     reuse_enabled=task_mechanism_reuse,
                     num_atoms=task_mechanism_num_atoms,
                     include_task0=self.task_symmetric_mechanisms,
+                    parameterization=task_mechanism_parameterization,
                 )
             self.task_mechanism_reports = {
                 "recurrent": self.recurrent_mechanism_bank.parameter_report(),

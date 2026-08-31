@@ -128,7 +128,9 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
         return data
 
     @staticmethod
-    def _world_model() -> WorldModel:
+    def _world_model(
+        mechanism_parameterization: str = "dense_private",
+    ) -> WorldModel:
         class WideEmbedder(nn.Module):
             output_size = 4096
 
@@ -162,6 +164,7 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
             task_mechanism_representation_width=8,
             task_mechanism_transition_width=8,
             task_mechanism_num_atoms=4,
+            task_mechanism_parameterization=mechanism_parameterization,
             task_symmetric_mechanisms=True,
             image_embedder=WideEmbedder(),
         )
@@ -186,11 +189,26 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
         self.assertTrue(config.uses_task_private_heads)
         self.assertFalse(config.uses_full_task_rssm_experts)
         self.assertTrue(config.evolving_shared_core)
+        self.assertEqual(
+            config.evolving_checkpoint_retention, "all_boundaries"
+        )
 
         invalid = self._method_config_data()
         invalid["task_private_heads"] = False
         with self.assertRaisesRegex(ValueError, "fixed optimizer, replay, interface"):
             Config.from_dict(invalid)
+
+        rolling = self._method_config_data()
+        rolling["evolving_checkpoint_retention"] = "latest_boundary"
+        self.assertEqual(
+            Config.from_dict(rolling).evolving_checkpoint_retention,
+            "latest_boundary",
+        )
+
+        invalid_retention = self._method_config_data()
+        invalid_retention["evolving_checkpoint_retention"] = "unknown"
+        with self.assertRaisesRegex(ValueError, "checkpoint retention"):
+            Config.from_dict(invalid_retention)
 
     def test_task0_has_zero_effect_projector_atoms_and_private_heads(self) -> None:
         torch.manual_seed(7)
@@ -223,6 +241,67 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
             wm._head_for(wm.reward_fc, wm.reward_experts, 0),
             wm._head_for(wm.reward_fc, wm.reward_experts, 1),
         )
+
+    def test_shared_down_world_model_keeps_basis_out_of_optimizer_ownership(
+        self,
+    ) -> None:
+        wm = self._world_model("shared_frozen_down_film")
+        banks = (
+            wm.rssm.recurrent_mechanism_bank,
+            wm.rssm.representation_mechanism_bank,
+            wm.rssm.transition_mechanism_bank,
+        )
+        shared_down_ids = {
+            id(parameter)
+            for bank in banks
+            for parameter in bank.shared_down.parameters()
+        }
+        self.assertEqual(
+            wm.rssm.task_mechanism_parameterization,
+            "shared_frozen_down_film",
+        )
+        self.assertTrue(shared_down_ids)
+        self.assertTrue(
+            all(
+                id(parameter) not in shared_down_ids
+                for task_id in range(3)
+                for parameter in (
+                    *wm.private_parameters(task_id),
+                    *wm.route_parameters(task_id),
+                )
+            )
+        )
+        self.assertTrue(
+            all(
+                id(parameter) not in shared_down_ids
+                for parameters in wm.shared_parameter_groups().values()
+                for parameter in parameters
+            )
+        )
+
+        wm.activate_task_expert(0)
+        self.assertTrue(
+            all(
+                not parameter.requires_grad
+                for bank in banks
+                for parameter in bank.shared_down.parameters()
+            )
+        )
+        self.assertTrue(
+            all(
+                parameter.requires_grad
+                for parameter in wm.private_parameters(0)
+            )
+        )
+
+        copied = copy.deepcopy(wm)
+        for bank in (
+            copied.rssm.recurrent_mechanism_bank,
+            copied.rssm.representation_mechanism_bank,
+            copied.rssm.transition_mechanism_bank,
+        ):
+            for mechanism in bank.mechanisms:
+                self.assertIs(mechanism.down_projection(), bank.shared_down)
 
     def test_task_activation_keeps_shared_core_and_only_current_private_plastic(self) -> None:
         wm = self._world_model()
@@ -492,6 +571,63 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
 
             self.assertEqual(digest_after, digest_before)
             self.assertNotEqual(target.observation_storage_path, asset)
+
+    def test_latest_boundary_retention_prunes_only_after_new_pair_is_durable(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            checkpoint_dir = Path(directory)
+            old_asset = checkpoint_dir / "task_00_replay_assets"
+            old_asset.mkdir()
+            (old_asset / "observations.mmap").write_bytes(b"old-replay")
+            for task_id in (0, 1):
+                for phase in ("pre_consolidation", "post_consolidation"):
+                    path = checkpoint_dir / f"task_{task_id:02d}_{phase}.pt"
+                    path.write_bytes(f"task-{task_id}-{phase}".encode())
+                    path.with_suffix(".pt.sha256").write_text(
+                        "fixture checksum\n", encoding="utf-8"
+                    )
+
+            artifact = train._apply_evolving_checkpoint_retention(
+                checkpoint_dir,
+                completed_task_id=1,
+                retention="latest_boundary",
+            )
+
+            self.assertFalse(old_asset.exists())
+            for phase in ("pre_consolidation", "post_consolidation"):
+                self.assertFalse(
+                    (checkpoint_dir / f"task_00_{phase}.pt").exists()
+                )
+                current = checkpoint_dir / f"task_01_{phase}.pt"
+                self.assertTrue(current.is_file())
+                self.assertTrue(current.with_suffix(".pt.sha256").is_file())
+            self.assertEqual(artifact["retention"], "latest_boundary")
+            self.assertTrue((checkpoint_dir / "retention.json").is_file())
+
+    def test_latest_boundary_retention_never_prunes_for_incomplete_new_pair(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            checkpoint_dir = Path(directory)
+            old = checkpoint_dir / "task_00_pre_consolidation.pt"
+            old.write_bytes(b"old")
+            old.with_suffix(".pt.sha256").write_text("checksum\n", encoding="utf-8")
+            current = checkpoint_dir / "task_01_pre_consolidation.pt"
+            current.write_bytes(b"current")
+            current.with_suffix(".pt.sha256").write_text(
+                "checksum\n", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(FileNotFoundError, "complete current"):
+                train._apply_evolving_checkpoint_retention(
+                    checkpoint_dir,
+                    completed_task_id=1,
+                    retention="latest_boundary",
+                )
+
+            self.assertTrue(old.is_file())
+            self.assertTrue(old.with_suffix(".pt.sha256").is_file())
 
     def test_consolidation_evaluation_error_restores_core_and_adam(self) -> None:
         class TinyWorldModel(nn.Module):

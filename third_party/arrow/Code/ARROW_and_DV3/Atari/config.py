@@ -64,7 +64,15 @@ ActorNetwork = Literal[
 ]
 ActorCriticOptimizer = Literal["adam", "laprop"]
 ActorCriticSchedule = Literal["constant", "task_cosine_decay"]
-TaskMechanismCapacityProfile = Literal["matched_512", "expanded_640"]
+TaskMechanismCapacityProfile = Literal[
+    "matched_512",
+    "expanded_640",
+    "compact_128_128_64",
+]
+TaskMechanismParameterization = Literal[
+    "dense_private",
+    "shared_frozen_down_film",
+]
 EvaluationSeedProtocol = Literal[
     "advancing",
     "fixed_validation_heldout_final",
@@ -84,6 +92,7 @@ EvolvingTask0Profile = Literal[
     "task0_epochs_180",
     "task0_epochs_240",
 ]
+EvolvingCheckpointRetention = Literal["all_boundaries", "latest_boundary"]
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -320,6 +329,7 @@ class Config(Serialisable):
     task_mechanism_bank: bool = False
     task_mechanism_reuse: bool = True
     task_mechanism_capacity_profile: TaskMechanismCapacityProfile = "matched_512"
+    task_mechanism_parameterization: TaskMechanismParameterization = "dense_private"
     task_mechanism_recurrent_width: int = 512
     task_mechanism_representation_width: int = 512
     task_mechanism_transition_width: int = 256
@@ -334,6 +344,7 @@ class Config(Serialisable):
     # the frozen-base MB/REC methods above.
     evolving_task0_profile: EvolvingTask0Profile = "fixed_v1"
     evolving_shared_core: bool = False
+    evolving_checkpoint_retention: EvolvingCheckpointRetention = "all_boundaries"
     first_task_shared_core_lr: float = 2e-4
     shared_core_lr: float = 1e-4
     task_private_lr: float = 2e-4
@@ -485,11 +496,36 @@ class Config(Serialisable):
         if self.task_mechanism_capacity_profile not in {
             "matched_512",
             "expanded_640",
+            "compact_128_128_64",
         }:
             raise ValueError(
                 "Unknown mechanism capacity profile: "
                 f"{self.task_mechanism_capacity_profile!r}"
             )
+        if (
+            self.task_mechanism_capacity_profile == "compact_128_128_64"
+            and not is_evolving_atomic
+        ):
+            raise ValueError(
+                "compact_128_128_64 is validated only for Evolving-Core"
+            )
+        if self.task_mechanism_parameterization not in {
+            "dense_private",
+            "shared_frozen_down_film",
+        }:
+            raise ValueError(
+                "Unknown mechanism parameterization: "
+                f"{self.task_mechanism_parameterization!r}"
+            )
+        if self.task_mechanism_parameterization == "shared_frozen_down_film":
+            if not is_evolving_atomic:
+                raise ValueError(
+                    "shared_frozen_down_film is validated only for Evolving-Core"
+                )
+            if self.task_mechanism_capacity_profile != "matched_512":
+                raise ValueError(
+                    "shared_frozen_down_film preserves the matched_512 hidden widths"
+                )
         if not isinstance(self.task_mechanism_bank, bool) or not isinstance(
             self.task_mechanism_reuse, bool
         ):
@@ -536,6 +572,14 @@ class Config(Serialisable):
             "full_task_rssm_experts": False,
         }
         if is_evolving_atomic:
+            if self.evolving_checkpoint_retention not in {
+                "all_boundaries",
+                "latest_boundary",
+            }:
+                raise ValueError(
+                    "Unknown Evolving-Core checkpoint retention: "
+                    f"{self.evolving_checkpoint_retention!r}"
+                )
             task0_profile_overrides = {
                 "fixed_v1": {},
                 "fixed_v2": {
@@ -642,6 +686,11 @@ class Config(Serialisable):
                     "must be non-negative"
                 )
         else:
+            if self.evolving_checkpoint_retention != "all_boundaries":
+                raise ValueError(
+                    "Evolving-Core checkpoint retention requires "
+                    "continual_method='evolving_atomic_rssm_arrow'"
+                )
             evolving_nondefault = {
                 name: (getattr(self, name), expected)
                 for name, expected in evolving_defaults.items()
@@ -907,11 +956,11 @@ class Config(Serialisable):
                     raise ValueError(
                         "CNN-MechanismBank disables every RSSM LoRA/output-adapter path"
                     )
-                expected_mechanism_settings = (
-                    (True, 640, 640, 320, 0.1)
-                    if self.task_mechanism_capacity_profile == "expanded_640"
-                    else (True, 512, 512, 256, 0.1)
-                )
+                expected_mechanism_settings = {
+                    "matched_512": (True, 512, 512, 256, 0.1),
+                    "expanded_640": (True, 640, 640, 320, 0.1),
+                    "compact_128_128_64": (True, 128, 128, 64, 0.1),
+                }[self.task_mechanism_capacity_profile]
                 observed_mechanism_settings = (
                     self.task_mechanism_bank,
                     self.task_mechanism_recurrent_width,
@@ -996,6 +1045,10 @@ class Config(Serialisable):
                 "Disabling mechanism reuse requires CNN-MechanismBank-ARROW"
             )
         if not uses_mechanism_bank:
+            if self.task_mechanism_parameterization != "dense_private":
+                raise ValueError(
+                    "Mechanism parameterization requires a named mechanism method"
+                )
             observed_atom_settings = (
                 self.task_mechanism_num_atoms,
                 self.task_mechanism_reuse_probe_epochs,

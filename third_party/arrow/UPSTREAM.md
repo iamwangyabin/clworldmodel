@@ -442,8 +442,42 @@ documented here, covered by focused parity tests, and followed by regenerating
     sweep baselines retain their exact prior semantics. Focused launcher tests
     require the two resolved full-curriculum configs to differ only in profile
     identity and the declared first-task learning rate.
-
-48. Add an opt-in CoinRun replay observation dtype so the full published
+49. Add explicit Evolving-Core resumable-checkpoint retention for the
+    separately named
+    `Evolving-Core-Atomic-RSSM-ARROW-v2-OriginalSix-Atari-TaskAware-Pilot`.
+    The original three-task path retains every boundary by default. The
+    six-task launcher selects `latest_boundary`: after the new task's complete
+    pre/post pair and checksum sidecars are durable, older resumable pairs and
+    their immutable mmap assets are removed. Raw metrics, TensorBoard events,
+    consolidation records, the retention manifest, and task-bank inference
+    snapshots remain. A missing current file or checksum aborts retention
+    before any old artifact is touched. Focused tests cover config isolation,
+    complete-pair gating, preservation on incomplete writes, rolling cleanup,
+    six-task budgets, and the launch storage gate.
+50. Add the opt-in `compact_128_128_64` mechanism-capacity profile for the
+    separately named original-six Evolving-Core pilot. It changes only the
+    recurrent/posterior/prior residual bottlenecks from `512/512/256` to
+    `128/128/64`; fixed RSSM interfaces, four-atom routing, zero-effect
+    initialization, private heads, independent Actor-Critics, replay,
+    optimizers, budgets, and evaluation remain unchanged. The existing
+    `matched_512` default and all baseline configurations retain their prior
+    values. Focused launcher tests require exact four-field isolation, reject
+    the profile outside the complete six-task curriculum, and verify the
+    declared mechanism parameter ledger.
+51. Add the opt-in `shared_frozen_down_film` mechanism parameterization for the
+    separately named Evolving-Core original-six route allocation. Each
+    recurrent/posterior/prior mechanism bank registers one full-width down
+    projection, freezes it at seeded initialization, and shares it across every
+    task. Each task retains private LayerNorm, hidden feature-wise scale/shift,
+    zero-initialized up projection, and the unchanged four-atom route. The
+    `dense_private` default, `512/512/256` interfaces, replay, optimizer budgets,
+    Actor-Critics, and all previous named methods remain unchanged. A seed-0,
+    90-epoch MsPacman acquisition gate allocates all six routes but deliberately
+    omits held-out-final evaluation before any complete curriculum is attempted.
+    Focused tests cover single-registration checkpoint state, frozen-gradient
+    ownership, zero effect, lossless atom sums, reset isolation, strict config
+    isolation, and exact shared/private parameter accounting.
+52. Add an opt-in CoinRun replay observation dtype so the full published
     ARROW-50 trajectory capacity can run on a 24-GiB accelerator without
     placing the complete replay in VRAM. The published default remains float32.
     The storage-optimized profile keeps FIFO/LTDM capacity, retention, RNG, and
@@ -452,8 +486,7 @@ documented here, covered by focused parity tests, and followed by regenerating
     model interface. Focused tests cover exact source-pixel round trips, FIFO
     wraparound, LTDM random-key parity, byte accounting, default isolation, and
     invalid-value rejection.
-
-49. Add an opt-in deterministic CoinRun runtime seed path and preserve raw
+53. Add an opt-in deterministic CoinRun runtime seed path and preserve raw
     evaluation returns for project formal runs. With
     `deterministic_runtime_seeding=true`, the trainer seeds Python's
     whole-minibatch replay selector and supplies distinct, reproducible Procgen
