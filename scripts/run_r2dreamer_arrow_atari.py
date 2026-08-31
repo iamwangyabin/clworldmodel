@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from git_provenance import git_state, require_synced_training_git_state
+from launcher_support import run_and_tee as _run_and_tee, write_json as _write_json
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -195,34 +196,6 @@ def _cuda_info(python: Path, environment: dict[str, str]) -> dict[str, Any]:
     return json.loads(result.stdout.strip())
 
 
-def _write_json(path: Path, value: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
-
-
-def _run_and_tee(
-    command: list[str], *, cwd: Path, environment: dict[str, str], log_path: Path
-) -> int:
-    with log_path.open("w", encoding="utf-8") as log:
-        process = subprocess.Popen(
-            command,
-            cwd=cwd,
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        assert process.stdout is not None
-        for line in process.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            log.write(line)
-            log.flush()
-        return process.wait()
-
-
 def main() -> int:
     args = _parser().parse_args()
     project_git = (
@@ -383,7 +356,7 @@ def main() -> int:
     return_code = _run_and_tee(
         command,
         cwd=ROOT,
-        environment=environment,
+        env=environment,
         log_path=output_dir / "train.log",
     )
     _write_json(

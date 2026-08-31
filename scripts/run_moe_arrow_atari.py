@@ -16,6 +16,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from git_provenance import git_state, require_synced_training_git_state
+from launcher_support import (
+    run_and_tee as _run_and_tee,
+    runtime_info as _runtime_info,
+    write_json as _write_json,
+)
 from run_arrow_ar50_atari import (
     ARROW_ROOT,
     CURRICULUM_DIRS,
@@ -25,10 +30,7 @@ from run_arrow_ar50_atari import (
     UPSTREAM_COMMIT,
     _arrow_replay_storage_budget,
     _config_path,
-    _run_and_tee,
-    _runtime_info,
     _verify_primary_config,
-    _write_json,
 )
 from run_karrow_ar50_atari import (
     DINOV3_CACHE_DTYPE,
@@ -61,8 +63,6 @@ TWO_TASK_CONTINUAL_CAMPAIGN_PROFILE = (
 THREE_TASK_CONTINUAL_CAMPAIGN_PROFILE = (
     "three-task-single-gpu-x4-double-sample-pilot-v1"
 )
-# Kept as an import-compatible alias for callers that reference the original name.
-CONTINUAL_CAMPAIGN_PROFILE = SIX_TASK_CONTINUAL_CAMPAIGN_PROFILE
 INDEPENDENT_EXPERT_PROFILE = "parallel-independent-single-gpu-v1"
 SINGLE_GPU_SPEED_EXPERT_PROFILE = "single-gpu-large-batch-90-v1"
 TASK1_GATE_EVIDENCE_PATH = (
@@ -1308,7 +1308,6 @@ def main(*, default_method: str = "moe") -> int:
         source_config = json.loads(json.dumps(source_config))
         source_config["esc"]["env_configs"] = [independent_task]
     tasks = source_config["esc"]["env_configs"]
-    task_names = [task["name"] for task in tasks]
     source_swap_sched = int(source_config["esc"]["kwargs"]["swap_sched"])
     swap_sched = source_swap_sched * args.task_duration_multiplier
     training_epochs = (

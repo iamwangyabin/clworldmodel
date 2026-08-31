@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from git_provenance import git_state, require_synced_training_git_state
+from launcher_support import run_and_tee as _run_and_tee, write_json as _write_json
 
 ROOT = Path(__file__).resolve().parents[1]
 ARROW_ROOT = ROOT / "third_party" / "arrow"
@@ -140,34 +141,6 @@ def _cuda_info(python: Path, env: dict[str, str]) -> dict:
         text=True,
     )
     return json.loads(probe.stdout.strip())
-
-
-def _write_json(path: Path, value: dict) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
-
-
-def _run_and_tee(
-    command: list[str], *, cwd: Path, env: dict[str, str], log_path: Path
-) -> int:
-    with log_path.open("w", encoding="utf-8") as log:
-        process = subprocess.Popen(
-            command,
-            cwd=cwd,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        assert process.stdout is not None
-        for line in process.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            log.write(line)
-            log.flush()
-        return process.wait()
 
 
 def main() -> int:

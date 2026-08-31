@@ -18,14 +18,16 @@ import hashlib
 import importlib
 import json
 import math
-import os
 import sys
-import tempfile
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator, Mapping
 
+from artifact_io import (
+    sha256_file as _sha256,
+    write_json_atomic_sorted as _write_json_atomic,
+)
 from git_provenance import git_state
 
 
@@ -48,14 +50,6 @@ CONDITIONS = (
 BANK_NAMES = ("recurrent", "posterior", "prior")
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _require_checksum(path: Path) -> str:
     digest = _sha256(path)
     sidecar = path.with_suffix(path.suffix + ".sha256")
@@ -65,20 +59,6 @@ def _require_checksum(path: Path) -> str:
     if not fields or fields[0] != digest:
         raise RuntimeError(f"Snapshot checksum mismatch: {path}")
     return digest
-
-
-def _write_text_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, delete=False
-    ) as temporary:
-        temporary.write(text)
-        temporary_path = Path(temporary.name)
-    os.replace(temporary_path, path)
-
-
-def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
-    _write_text_atomic(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
 def _vendor_modules() -> SimpleNamespace:

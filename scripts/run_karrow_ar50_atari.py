@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shlex
@@ -13,7 +12,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from artifact_io import sha256_file as _sha256
 from git_provenance import git_state, require_synced_training_git_state
+from launcher_support import (
+    run_and_tee as _run_and_tee,
+    runtime_info as _runtime_info,
+    write_json as _write_json,
+)
 from run_arrow_ar50_atari import (
     ARROW_ROOT,
     CURRICULUM_DIRS,
@@ -23,10 +28,7 @@ from run_arrow_ar50_atari import (
     UPSTREAM_COMMIT,
     _arrow_replay_storage_budget,
     _config_path,
-    _run_and_tee,
-    _runtime_info,
     _verify_primary_config,
-    _write_json,
 )
 
 
@@ -226,14 +228,6 @@ def _parser(*, default_visual_version: str = "v1") -> argparse.ArgumentParser:
     parser.add_argument("--swanlab-experiment-name")
     parser.add_argument("--dry-run", action="store_true")
     return parser
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _model_artifact_manifest(model_path: Path) -> dict[str, object]:

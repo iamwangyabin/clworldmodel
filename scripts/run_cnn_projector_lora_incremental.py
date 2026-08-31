@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 import os
 import shlex
@@ -15,15 +14,18 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from artifact_io import sha256_file as _sha256
 from git_provenance import git_state, require_synced_training_git_state
+from launcher_support import (
+    run_and_tee as _run_and_tee,
+    runtime_info as _runtime_info,
+    write_json as _write_json,
+)
 from run_arrow_ar50_atari import (
     ARROW_ROOT,
     ROOT,
     THREAD_ENV_KEYS,
     UPSTREAM_COMMIT,
-    _run_and_tee,
-    _runtime_info,
-    _write_json,
 )
 
 
@@ -107,14 +109,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-compile", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _source_config_path(snapshot: Path, explicit: Path | None) -> Path:

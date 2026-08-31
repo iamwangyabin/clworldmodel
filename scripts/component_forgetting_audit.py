@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import hashlib
 import importlib
 import json
 import os
@@ -30,10 +29,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from artifact_io import (
+    sha256_file as _sha256,
+    write_json_atomic as _write_json_atomic,
+    write_sha256_sidecar as _write_sha256_sidecar,
+    write_text_atomic as _write_text_atomic,
+)
 from component_audit_metrics import (
     linear_cka,
     mean_and_episode_bootstrap_ci,
@@ -87,34 +92,6 @@ class ModelBundle:
     config: Mapping[str, Any]
     device: Any
     vendor: SimpleNamespace
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _write_text_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, delete=False
-    ) as temporary:
-        temporary.write(text)
-        temporary_path = Path(temporary.name)
-    os.replace(temporary_path, path)
-
-
-def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
-    _write_text_atomic(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
-
-
-def _write_sha256_sidecar(path: Path) -> str:
-    digest = _sha256(path)
-    _write_text_atomic(path.with_suffix(path.suffix + ".sha256"), f"{digest}  {path.name}\n")
-    return digest
 
 
 def _vendor_modules() -> SimpleNamespace:

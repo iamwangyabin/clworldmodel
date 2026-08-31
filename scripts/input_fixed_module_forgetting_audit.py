@@ -20,6 +20,12 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from artifact_io import (
+    sha256_file as _sha256,
+    write_json_atomic as _write_json_atomic,
+    write_sha256_sidecar as _write_sha256_sidecar,
+    write_text_atomic as _write_text_atomic,
+)
 from component_audit_metrics import (
     linear_cka,
     mean_and_episode_bootstrap_ci,
@@ -33,12 +39,8 @@ from component_forgetting_audit import (
     _fixed_returns_torch,
     _load_dataset,
     _model_bundle,
-    _sha256,
     _to_time_batch,
-    _write_json_atomic,
     _write_metrics_npz,
-    _write_sha256_sidecar,
-    _write_text_atomic,
     load_snapshot_specs,
 )
 from git_provenance import git_state

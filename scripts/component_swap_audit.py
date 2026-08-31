@@ -18,6 +18,12 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from artifact_io import (
+    sha256_file as _sha256,
+    write_json_atomic as _write_json_atomic,
+    write_sha256_sidecar as _write_sha256_sidecar,
+    write_text_atomic as _write_text_atomic,
+)
 from component_audit_metrics import paired_episode_bootstrap_difference
 from component_forgetting_audit import (
     ROOT,
@@ -25,11 +31,7 @@ from component_forgetting_audit import (
     _evaluate_one_checkpoint,
     _load_dataset,
     _model_bundle,
-    _sha256,
-    _write_json_atomic,
     _write_npz_atomic,
-    _write_sha256_sidecar,
-    _write_text_atomic,
     load_snapshot_specs,
 )
 from git_provenance import git_state

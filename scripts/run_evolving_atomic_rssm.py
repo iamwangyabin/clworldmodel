@@ -14,6 +14,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from git_provenance import git_state, require_synced_training_git_state
+from launcher_support import (
+    run_and_tee as _run_and_tee,
+    runtime_info as _runtime_info,
+    write_json as _write_json,
+)
 from run_arrow_ar50_atari import (
     ARROW_ROOT,
     ROOT,
@@ -22,10 +27,7 @@ from run_arrow_ar50_atari import (
     UPSTREAM_COMMIT,
     _arrow_replay_storage_budget,
     _config_path,
-    _run_and_tee,
-    _runtime_info,
     _verify_primary_config,
-    _write_json,
 )
 from run_cnn_projector_lora_incremental import _prepare_replay_symlink
 

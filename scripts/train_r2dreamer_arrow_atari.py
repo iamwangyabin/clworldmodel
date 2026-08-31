@@ -22,6 +22,8 @@ from typing import Any, Iterator
 
 import numpy as np
 
+from launcher_support import write_json as _write_json
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_SRC = ROOT / "src"
@@ -73,12 +75,6 @@ def _parser() -> argparse.ArgumentParser:
         help="Allow the fresh directory pre-created by the provenance launcher only.",
     )
     return parser
-
-
-def _write_json(path: Path, value: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
 
 
 def _append_jsonl(path: Path, value: dict[str, Any]) -> None:
