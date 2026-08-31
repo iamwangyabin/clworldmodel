@@ -153,6 +153,8 @@ class FastKANActorCriticTests(unittest.TestCase):
         actor_before = copy.deepcopy(actor_critic.actor.state_dict())
         critic_before = copy.deepcopy(actor_critic.critic.state_dict())
         routed_task_ids: list[int] = []
+        world_model = nn.Linear(1, 1)
+        world_model.compute_dtype = "float32"
 
         def fake_dream_rollout(_wm, _ac, _data, **kwargs):
             routed_task_ids.append(kwargs["task_id"])
@@ -165,7 +167,7 @@ class FastKANActorCriticTests(unittest.TestCase):
 
         with mock.patch("ac.dream_rollout", side_effect=fake_dream_rollout):
             trained, _performance, metrics = train_ac_from_wm(
-                SimpleNamespace(compute_dtype="float32"),
+                world_model,
                 None,
                 steps=3,
                 n_sync=1,
