@@ -1,4 +1,4 @@
-from typing import Any, Callable, Optional, List
+from typing import Any, Callable, Optional, List, Union
 
 import cv2
 import gym
@@ -17,6 +17,7 @@ class EnvironmentSchedule:
     def __init__(self, n_sync: int, templates: List[Callable[[], Any]]) -> None:
         self._step = 0
         self.templates = templates
+        self.eval_templates = templates
         self.n_sync = n_sync
 
     def step(self) -> None:
@@ -26,7 +27,12 @@ class EnvironmentSchedule:
         raise NotImplementedError
 
     def eval_funcs(self) -> List[List[Callable[[], Any]]]:
-        return [[t for _ in range(self.n_sync)] for t in self.templates]
+        return [[t for _ in range(self.n_sync)] for t in self.eval_templates]
+
+    def set_eval_templates(self, templates: List[Callable[[], Any]]) -> None:
+        if len(templates) != len(self.templates):
+            raise ValueError("Training and evaluation task sets must have equal length")
+        self.eval_templates = templates
 
     def is_new_env(self) -> bool:
         raise NotImplementedError
@@ -113,7 +119,8 @@ def evaluate(
     env_fns: Optional[List[Callable[[], Any]]] = None,
     env_repeat: int = 4,
     n_rollouts: int = 10,
-) -> Tuple[float, float]:
+    return_episode_returns: bool = False,
+) -> Union[Tuple[float, float], Tuple[float, float, List[float]]]:
     _, _, rews, conts, resets = generate_trajectories(
         n_rollouts * 2**13 // n_sync,
         n_sync,
@@ -124,6 +131,25 @@ def evaluate(
         n_rollouts,
         no_images=True,
     )
+    eps_rews = _completed_episode_returns(rews, conts, resets)
+    if not eps_rews:
+        n_eps = resets.sum().item()
+        mean = rews.sum().item() / n_eps
+        var = rews.var().item() * rews.numel() / n_eps**2
+        std = np.sqrt(var)
+    else:
+        mean = np.mean(eps_rews)
+        std = np.std(eps_rews)
+    if return_episode_returns:
+        return float(mean), float(std), eps_rews
+    return float(mean), float(std)
+
+
+def _completed_episode_returns(
+    rews: RewardT, conts: ContT, resets: ResetT
+) -> List[float]:
+    """Return every complete raw episode return in the packed evaluation trace."""
+
     terms = torch.where(conts == 0)[0]
     starts = torch.where(resets == 1)[0]
     collection = [(t.item(), "E") for t in terms] + [(s.item(), "S") for s in starts]
@@ -133,12 +159,7 @@ def evaluate(
         (si, s), (ei, e) = collection[i : i + 2]
         if s == "S" and e == "E":
             where_se.append((si, ei))
-    eps_rews = [rews[s : e + 1].sum().item() for s, e in where_se]
-    if not eps_rews:
-        n_eps = resets.sum().item()
-        var = rews.var().item() * rews.numel() / n_eps**2
-        return rews.sum().item() / n_eps, np.sqrt(var)
-    return np.mean(eps_rews), np.std(eps_rews)
+    return [float(rews[s : e + 1].sum().item()) for s, e in where_se]
 
 
 @torch.no_grad()
@@ -278,5 +299,4 @@ def reinterpret_nt_to_t_n(
         conts.reshape(n, t, 1).swapaxes(0, 1),
         resets.reshape(n, t, 1).swapaxes(0, 1),
     )
-
 

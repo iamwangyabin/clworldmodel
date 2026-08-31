@@ -443,6 +443,27 @@ documented here, covered by focused parity tests, and followed by regenerating
     require the two resolved full-curriculum configs to differ only in profile
     identity and the declared first-task learning rate.
 
+48. Add an opt-in CoinRun replay observation dtype so the full published
+    ARROW-50 trajectory capacity can run on a 24-GiB accelerator without
+    placing the complete replay in VRAM. The published default remains float32.
+    The storage-optimized profile keeps FIFO/LTDM capacity, retention, RNG, and
+    whole-minibatch selection unchanged while storing source pixels as uint8 on
+    CPU and decoding only sampled minibatches to the existing float32 `[0, 1]`
+    model interface. Focused tests cover exact source-pixel round trips, FIFO
+    wraparound, LTDM random-key parity, byte accounting, default isolation, and
+    invalid-value rejection.
+
+49. Add an opt-in deterministic CoinRun runtime seed path and preserve raw
+    evaluation returns for project formal runs. With
+    `deterministic_runtime_seeding=true`, the trainer seeds Python's
+    whole-minibatch replay selector and supplies distinct, reproducible Procgen
+    seeds from disjoint training and evaluation streams. The published default
+    remains unseeded for parity. Evaluation now appends every complete raw
+    episode return, task name/index, epoch, and update counter to
+    `evaluation_returns.jsonl`; TensorBoard aggregates are unchanged. Focused
+    tests cover default isolation, constructor seed sequences, train/eval stream
+    separation, schedule validation, and hand-computed episode returns.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

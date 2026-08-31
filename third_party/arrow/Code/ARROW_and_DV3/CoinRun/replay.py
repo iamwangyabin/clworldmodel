@@ -8,6 +8,12 @@ from rssm import ActionT, ContT, ImageT, ResetT
 from wm import RewardT
 
 
+_OBSERVATION_DTYPES = {
+    "float32": torch.float32,
+    "uint8": torch.uint8,
+}
+
+
 class Replay:
     def __init__(self) -> None:
         self.n_valid = 0
@@ -53,15 +59,74 @@ class Replay:
 
         return (
             mb_acts.to(mb_device),
-            mb_obss.to(mb_device),
+            self._decode_observations(mb_obss.to(mb_device), self.obss.dtype),
             mb_rews.to(mb_device),
             mb_conts.to(mb_device),
             mb_resets.to(mb_device),
         )
 
+    @staticmethod
+    def _encode_observations(
+        observations: ImageT, storage_dtype: torch.dtype
+    ) -> ImageT:
+        if storage_dtype == torch.float32:
+            return observations
+        if storage_dtype != torch.uint8:
+            raise TypeError(f"Unsupported observation storage dtype: {storage_dtype}")
+        if observations.dtype == torch.uint8:
+            return observations
+        if not observations.is_floating_point():
+            raise TypeError(
+                "uint8 replay observations must be uint8 pixels or floating-point "
+                "values in [0, 1]"
+            )
+        minimum, maximum = torch.aminmax(observations)
+        if not (
+            bool(torch.isfinite(minimum)) and bool(torch.isfinite(maximum))
+        ):
+            raise ValueError("Replay observations must contain only finite values")
+        if minimum.item() < 0.0 or maximum.item() > 1.0:
+            raise ValueError(
+                "Floating-point observations for uint8 replay must lie in [0, 1]"
+            )
+        return observations.mul(255).round_().to(torch.uint8)
+
+    @staticmethod
+    def _decode_observations(
+        observations: ImageT, storage_dtype: torch.dtype
+    ) -> ImageT:
+        if storage_dtype == torch.float32:
+            return observations
+        if storage_dtype != torch.uint8:
+            raise TypeError(f"Unsupported observation storage dtype: {storage_dtype}")
+        return observations.float().div_(255)
+
+
+def _observation_storage(
+    t: int,
+    n: int,
+    store_device: str,
+    observation_dtype: str,
+) -> ImageT:
+    try:
+        dtype = _OBSERVATION_DTYPES[observation_dtype]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown replay observation dtype: {observation_dtype!r}"
+        ) from exc
+    return torch.zeros(t, n, 3, 64, 64, dtype=dtype, device=store_device)
+
 
 class FifoReplay(Replay):
-    def __init__(self, t: int, n: int, n_acts: int, store_device: str = "cpu") -> None:
+    def __init__(
+        self,
+        t: int,
+        n: int,
+        n_acts: int,
+        store_device: str = "cpu",
+        *,
+        observation_dtype: str = "float32",
+    ) -> None:
         super().__init__()
 
         self.t = t
@@ -69,7 +134,10 @@ class FifoReplay(Replay):
         self.n_idx = 0
         self.n_valid = 0
         self.acts: ActionT = torch.zeros(t, n, n_acts).to(store_device)
-        self.obss: ImageT = torch.zeros(t, n, 3, 64, 64).to(store_device)
+        self.obss: ImageT = _observation_storage(
+            t, n, store_device, observation_dtype
+        )
+        self.observation_dtype = observation_dtype
         self.rews: RewardT = torch.zeros(t, n, 1).to(store_device)
         self.conts: ContT = torch.zeros(t, n, 1).to(store_device)
         self.resets: ResetT = torch.zeros(t, n, 1).to(store_device)
@@ -79,6 +147,7 @@ class FifoReplay(Replay):
     ) -> None:
         # Incoming shapes [ T N ... ]
         assert acts.shape[0] == self.t
+        obss = self._encode_observations(obss, self.obss.dtype)
         data_n = acts.shape[1]
 
         if self.n_idx + data_n <= self.n:
@@ -110,13 +179,24 @@ class LongTermReplay(Replay):
     Priority = float
     NIndex = int
 
-    def __init__(self, t: int, n: int, n_acts: int, store_device: str = "cpu") -> None:
+    def __init__(
+        self,
+        t: int,
+        n: int,
+        n_acts: int,
+        store_device: str = "cpu",
+        *,
+        observation_dtype: str = "float32",
+    ) -> None:
         super().__init__()
 
         self.t = t
         self.n = n
         self.acts: ActionT = torch.zeros(t, n, n_acts).to(store_device)
-        self.obss: ImageT = torch.zeros(t, n, 3, 64, 64).to(store_device)
+        self.obss: ImageT = _observation_storage(
+            t, n, store_device, observation_dtype
+        )
+        self.observation_dtype = observation_dtype
         self.rews: RewardT = torch.zeros(t, n, 1).to(store_device)
         self.conts: ContT = torch.zeros(t, n, 1).to(store_device)
         self.resets: ResetT = torch.zeros(t, n, 1).to(store_device)
@@ -126,6 +206,7 @@ class LongTermReplay(Replay):
 
     def add(self, acts: ActionT, obss: ImageT, rews: RewardT, conts: ContT, resets: ResetT) -> None:
         assert acts.shape[0] == self.t
+        obss = self._encode_observations(obss, self.obss.dtype)
         data_n = acts.shape[1]
 
         for n in range(data_n):
@@ -166,10 +247,16 @@ class MultiTypeReplay(Replay):
         return
 
     def add(self, acts: ActionT, obss: ImageT, rews: RewardT, conts: ContT, resets: ResetT) -> None:
+        observation_dtypes = {
+            replay.obss.dtype
+            for replay in self.replays
+            if hasattr(replay, "obss")
+        }
+        if len(observation_dtypes) == 1:
+            obss = self._encode_observations(obss, observation_dtypes.pop())
         for replay in self.replays:
             replay.add(acts, obss, rews, conts, resets)
 
     def minibatch(self, mb_t: int, mb_n: int, mb_device: str = "cuda") -> tuple[ActionT, ImageT, RewardT, ContT, ResetT]:
         replay = random.choices(self.replays, weights=self.sampling_weights, k=1)[0]
         return replay.minibatch(mb_t, mb_n, mb_device)
-

@@ -27,6 +27,18 @@ from replay import FifoReplay, LongTermReplay, MultiTypeReplay, Replay
 T = TypeVar("T", bound="Serialisable")
 
 ArrowReplayCapacityRatio = Literal["50-50", "25-75", "75-25"]
+ReplayObservationDType = Literal["float32", "uint8"]
+
+_PROCGEN_SEED_MODULUS = 2**31
+_PROCGEN_TASK_SEED_STRIDE = 1_000_000
+_PROCGEN_EVAL_SEED_OFFSET = 1_000_000_000
+
+
+def _procgen_factory_seed(seed: int, task_index: int, *, evaluation: bool) -> int:
+    stream_offset = _PROCGEN_EVAL_SEED_OFFSET if evaluation else 0
+    return (
+        seed + task_index * _PROCGEN_TASK_SEED_STRIDE + stream_offset
+    ) % _PROCGEN_SEED_MODULUS
 
 
 def _arrow_fifo_ltdm_capacity_ns(
@@ -90,7 +102,7 @@ class EnvConfig(Serialisable):
     def __post_init__(self) -> None:
         assert self.rew_scale == 1
 
-    def get_function(self) -> Callable[[], Any]:
+    def get_function(self, seed: int | None = None) -> Callable[[], Any]:
         default = {
             "use_backgrounds": True,
             "restrict_themes": False,
@@ -114,10 +126,22 @@ class EnvConfig(Serialisable):
         assert parts[0] == "CoinRun"
         for part in parts[1:]:
             default.update(mods[part])
-        return lambda: gym.make(
-            "procgen:procgen-coinrun-v0",
-            **default,
-        )
+        environment_index = 0
+
+        def make_environment():
+            nonlocal environment_index
+            kwargs = default.copy()
+            if seed is not None:
+                kwargs["rand_seed"] = (
+                    seed + environment_index
+                ) % _PROCGEN_SEED_MODULUS
+                environment_index += 1
+            return gym.make(
+                "procgen:procgen-coinrun-v0",
+                **kwargs,
+            )
+
+        return make_environment
 
 
 @dataclass
@@ -208,6 +232,8 @@ class Config(Serialisable):
 
     action_space: int = 18
     replay_buffers: list[RbConfig] = field(default_factory=list)
+    replay_observation_dtype: ReplayObservationDType = "float32"
+    deterministic_runtime_seeding: bool = False
     # ARROW only: split of total capacity 2 * data_n_max between FifoReplay vs LongTermReplay
     arrow_replay_capacity_ratio: ArrowReplayCapacityRatio = "50-50"
 
@@ -223,6 +249,13 @@ class Config(Serialisable):
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
         assert self.env_repeat == 1, "Env repeat disabled for procgen"
+        if self.replay_observation_dtype not in {"float32", "uint8"}:
+            raise ValueError(
+                "replay_observation_dtype must be 'float32' or 'uint8', got "
+                f"{self.replay_observation_dtype!r}"
+            )
+        if not isinstance(self.deterministic_runtime_seeding, bool):
+            raise TypeError("deterministic_runtime_seeding must be a boolean")
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -231,9 +264,27 @@ class Config(Serialisable):
         return data
 
     def get_env_schedule(self) -> EnvironmentSchedule:
-        return self.esc.env_schedule_type(
-            self.n_sync, [e.get_function() for e in self.esc.env_configs], **self.esc.kwargs
+        if self.deterministic_runtime_seeding:
+            train_templates = [
+                env_config.get_function(
+                    _procgen_factory_seed(self.seed, task_index, evaluation=False)
+                )
+                for task_index, env_config in enumerate(self.esc.env_configs)
+            ]
+            eval_templates = [
+                env_config.get_function(
+                    _procgen_factory_seed(self.seed, task_index, evaluation=True)
+                )
+                for task_index, env_config in enumerate(self.esc.env_configs)
+            ]
+        else:
+            train_templates = [e.get_function() for e in self.esc.env_configs]
+            eval_templates = train_templates
+        schedule = self.esc.env_schedule_type(
+            self.n_sync, train_templates, **self.esc.kwargs
         )
+        schedule.set_eval_templates(eval_templates)
+        return schedule
 
     def get_replay_buffer(self) -> Replay:
         if self.algorithm == "arrow":
@@ -257,11 +308,23 @@ class Config(Serialisable):
                 for rc in self.replay_buffers
             )
             replays = [
-                rc.rb_type(self.data_t, _arrow_n(rc), self.action_space, rc.rb_device)
+                rc.rb_type(
+                    self.data_t,
+                    _arrow_n(rc),
+                    self.action_space,
+                    rc.rb_device,
+                    observation_dtype=self.replay_observation_dtype,
+                )
                 for rc in self.replay_buffers
             ]
             return MultiTypeReplay(*replays, sampling_weights=sampling_weights)
         if self.algorithm == "dv3" or self.algorithm == "sac":
             rc = self.replay_buffers[0]
-            return rc.rb_type(self.data_t, self.sac_dv3_data_n_max, self.action_space, rc.rb_device)
+            return rc.rb_type(
+                self.data_t,
+                self.sac_dv3_data_n_max,
+                self.action_space,
+                rc.rb_device,
+                observation_dtype=self.replay_observation_dtype,
+            )
         #self.sac_dv3_data_n_max
