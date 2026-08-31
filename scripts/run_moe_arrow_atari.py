@@ -464,6 +464,18 @@ EARLY_PROGRESS_GUARD_PROFILES = {
 
 
 TASK1_TUNING_PROFILES = {
+    "aclr1e4": {
+        "protocol_suffix": "Task1AcLR1e4",
+        "output_suffix": "task1_aclr1e4",
+        "config_overrides": {
+            "ac_lr": 1e-4,
+            "ac_entropy_scale": 3e-4,
+        },
+        "hypothesis": (
+            "Halving the actor-critic learning rate will reduce late MsPacman "
+            "policy regression while retaining the published entropy scale."
+        ),
+    },
     "aclr5e5": {
         "protocol_suffix": "Task1AcLR5e5",
         "output_suffix": "task1_aclr5e5",
@@ -475,6 +487,18 @@ TASK1_TUNING_PROFILES = {
             "Halving the actor-critic learning rate will reduce the post-peak "
             "policy regression observed on MsPacman while retaining the "
             "published entropy scale."
+        ),
+    },
+    "aclr1e4-ent1e4": {
+        "protocol_suffix": "Task1AcLR1e4Ent1e4",
+        "output_suffix": "task1_aclr1e4_ent1e4",
+        "config_overrides": {
+            "ac_lr": 1e-4,
+            "ac_entropy_scale": 1e-4,
+        },
+        "hypothesis": (
+            "At the halved actor-critic learning rate, reducing entropy "
+            "regularization will improve final MsPacman exploitation."
         ),
     },
     "aclr5e5-ent1e4": {
@@ -863,8 +887,9 @@ def _parser(*, default_method: str = "moe") -> argparse.ArgumentParser:
         "--task1-tuning-profile",
         choices=tuple(TASK1_TUNING_PROFILES),
         help=(
-            "Named MsPacman acquisition ablation. Requires dino-convbank and "
-            "--task-prefix-length 1; data and update budgets remain fixed"
+            "Named MsPacman acquisition ablation. Requires dino-convbank or "
+            "cnn-fullbank and --task-prefix-length 1; data and update budgets "
+            "remain fixed"
         ),
     )
     parser.add_argument(
@@ -1068,9 +1093,10 @@ def main(*, default_method: str = "moe") -> int:
             "--devices 2/4 is validated only for dino-convbank and cnn-fullbank"
         )
     if args.task1_tuning_profile is not None:
-        if args.method != "dino-convbank":
+        if args.method not in {"dino-convbank", "cnn-fullbank"}:
             parser.error(
-                "--task1-tuning-profile is validated only for dino-convbank"
+                "--task1-tuning-profile is validated only for dino-convbank "
+                "and cnn-fullbank"
             )
         if args.task_prefix_length != 1:
             parser.error(
@@ -1369,10 +1395,10 @@ def main(*, default_method: str = "moe") -> int:
         else None
     )
     config_overrides: dict[str, int | float | str] = {}
-    if tuning_profile is not None:
-        config_overrides.update(tuning_profile["config_overrides"])
     if batch_profile is not None:
         config_overrides.update(batch_profile.config_overrides)
+    if tuning_profile is not None:
+        config_overrides.update(tuning_profile["config_overrides"])
     if actor_stability_profile is not None:
         config_overrides.update(actor_stability_profile.config_overrides)
     if evaluation_audit_profile is not None:
@@ -2040,6 +2066,12 @@ def main(*, default_method: str = "moe") -> int:
                 "config_overrides": dict(tuning_profile["config_overrides"]),
                 "world_model_learning_rate": config["wm_lr"],
                 "fixed_data_and_update_budgets": True,
+                "sweep_selection_rule": {
+                    "primary": "heldout-final raw_return_mean after epoch 90",
+                    "secondary": "best fixed-validation raw_return_mean",
+                    "tertiary": "lower heldout-final raw_return_std",
+                    "single_seed_pilot_only": True,
+                },
                 "acquisition_gate": {
                     "task": "ALE/MsPacman-v5",
                     "after_completed_epochs": 90,
