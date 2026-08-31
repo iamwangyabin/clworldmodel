@@ -693,4 +693,22 @@ improvement. Its invariant, comparison budget, and historical-behavior
 isolation are documented in
 `docs/protocols/arrow_fastkan_ac_stable_targets_atari.md`.
 
+After the seed-0 screen reached raw MsPacman return `2410.625 +/- 713.700`, the
+registered follow-up restores the complete six-task continual curriculum. No
+task-prefix or duration override is supplied:
+
+```bash
+python scripts/run_arrow_ar50_atari.py \
+  --actor-network fast_kan_ac_stable \
+  --seed 0 \
+  --profile-stages \
+  --cpu-threads 12 \
+  --dry-run
+```
+
+This run measures the stable FastKAN behavior package against ARROW-50 using
+per-task acquisition and epoch-540 returns. The forgetting formula and the
+single-seed and architecture-attribution limits are predeclared in
+`docs/protocols/arrow_fastkan_ac_stable_targets_continual_atari.md`.
+
 Project-wide research and engineering constraints are defined in `AGENTS.md`.

@@ -422,12 +422,19 @@ def main() -> int:
             "fast_kan_ac_param_matched currently requires --task-prefix-length 1 "
             f"and --task-duration-epochs {FASTKAN_AC_PARAM_MATCHED_EPOCHS}"
         )
-    if args.actor_network == "fast_kan_ac_stable" and (
-        args.task_prefix_length != 1
-        or args.task_duration_epochs != FASTKAN_AC_STABLE_EPOCHS
+    stable_fastkan_t1 = (
+        args.task_prefix_length == 1
+        and args.task_duration_epochs == FASTKAN_AC_STABLE_EPOCHS
+    )
+    stable_fastkan_full_curriculum = (
+        args.task_prefix_length is None and args.task_duration_epochs is None
+    )
+    if args.actor_network == "fast_kan_ac_stable" and not (
+        stable_fastkan_t1 or stable_fastkan_full_curriculum
     ):
         parser.error(
-            "fast_kan_ac_stable currently requires --task-prefix-length 1 and "
+            "fast_kan_ac_stable requires either the frozen full curriculum without "
+            "task overrides or --task-prefix-length 1 and "
             f"--task-duration-epochs {FASTKAN_AC_STABLE_EPOCHS}"
         )
     if args.swanlab_experiment_name is not None and args.swanlab_project is None:
@@ -491,6 +498,7 @@ def main() -> int:
     }
     extended_fastkan_ac = args.actor_network == "fast_kan_ac_param_matched"
     stable_fastkan_ac = args.actor_network == "fast_kan_ac_stable"
+    full_stable_fastkan_ac = stable_fastkan_ac and args.task_prefix_length is None
     parameter_matched_fastkan_ac = extended_fastkan_ac or stable_fastkan_ac
     resolved_training_config = None
     launch_config_path = config_path
@@ -601,7 +609,9 @@ def main() -> int:
                 if is_kan_actor
                 else "matched-short-pilot-control"
             )
-    if stable_fastkan_ac:
+    if full_stable_fastkan_ac:
+        role = "actor-critic-continual-retention-pilot"
+    elif stable_fastkan_ac:
         role = "actor-critic-stable-target-correction-pilot"
     elif extended_fastkan_ac:
         role = "actor-critic-param-matched-replay-value-budget-extension"
@@ -711,6 +721,41 @@ def main() -> int:
                 else None
             ),
         },
+        "continual_retention_evaluation": (
+            {
+                "hypothesis": (
+                    "The stable FastKAN actor-critic retains previously learned "
+                    "behavior better than the matched ARROW-50 MLP actor-critic."
+                ),
+                "comparison_method": "ARROW-50",
+                "comparison_seed_id": args.seed,
+                "comparison_seed": config["seed"],
+                "same_curriculum_interaction_update_and_replay_budgets": True,
+                "task_identity_exposed_to_agent": False,
+                "evaluation_isolated_from_training_and_replay": True,
+                "periodic_evaluation_epochs": list(range(0, training_epochs, 10)),
+                "acquisition_evaluation_epochs": list(
+                    range(task_duration_epochs, training_epochs, task_duration_epochs)
+                ),
+                "final_comparable_evaluation_epoch": training_epochs - 1,
+                "raw_return_metric": "Perf/eval_raw_return_mean",
+                "per_task_forgetting_definition": (
+                    "maximum periodic raw return from the task acquisition "
+                    "evaluation through epoch 540 minus the epoch-540 raw return"
+                ),
+                "backward_transfer_definition": (
+                    "epoch-540 raw return minus the task acquisition-evaluation "
+                    "raw return"
+                ),
+                "aggregate_normalization": (
+                    "derived separately with fixed cited constants; raw per-task "
+                    "returns remain the source metrics"
+                ),
+                "multiple_seeds_required_for_claim": True,
+            }
+            if full_stable_fastkan_ac
+            else None
+        ),
         "curriculum": args.curriculum,
         "seed_id": args.seed,
         "seed": config["seed"],
