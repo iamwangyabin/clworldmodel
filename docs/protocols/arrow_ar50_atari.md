@@ -164,3 +164,25 @@ must therefore be labeled `vendored-optimized`, not bitwise-faithful upstream.
 
 Use `--curriculum reversed` or `--curriculum two-cycle` only for their named
 paper protocols. The primary default remains original order.
+
+## Mandatory metric report
+
+Every completed continual run must retain raw per-task mean/std returns at all
+evaluation checkpoints and generate the versioned report defined in
+`docs/protocols/continual_evaluation_metrics_v1.md`. At minimum, preserve and
+compare normalized task scores, ACC, min-ACC, WC-ACC, and forgetting. FT remains
+unavailable until aligned single-task learning curves are present; do not infer
+it from Table A.15 final constants.
+
+For one or more completed local runs:
+
+```bash
+python scripts/summarize_continual_metrics.py \
+  /persistent/path/RUN_A /persistent/path/RUN_B \
+  --output /persistent/path/continual_metric_comparison.json
+```
+
+The seed-level output is diagnostic. The official table requires all five
+predeclared seeds and reports median `[q25, q75]`. Partial curricula use explicit
+suffixes such as `ACC_3` and are not compared with the paper's six-task
+headline values.

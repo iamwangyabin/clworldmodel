@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "continual_metric_normalization_reference",
+  "reference_id": "arrow-v3-atari-table-a15-final-v1",
+  "benchmark": "Atari six-task default suite",
+  "paper": {
+    "title": "ARROW: Augmented Replay for RObust World models",
+    "arxiv_version": "2603.11395v3",
+    "version_date": "2026-06-11",
+    "url": "https://arxiv.org/html/2603.11395v3",
+    "source_table": "Table A.15"
+  },
+  "reference_semantics": {
+    "random": "Median unnormalized random-policy return across five seeds.",
+    "single_task": "Median unnormalized ARROW return across five single-task seeds at the end of the matched task budget.",
+    "normalization": "q=(raw_return-random)/(single_task_arrow-random); never clip q.",
+    "valid_uses": [
+      "task-boundary normalized scores after the matched per-task budget",
+      "single-pass ACC at task boundaries",
+      "single-pass forgetting",
+      "min-ACC over already learned tasks",
+      "task-boundary WC-ACC"
+    ],
+    "insufficient_alone_for": [
+      "forward transfer, which requires aligned continual and single-task learning curves",
+      "paper-style sample efficiency, which requires five-seed median curves and a shared cross-method maximum",
+      "time-aligned normalization during acquisition before the full per-task budget"
+    ]
+  },
+  "paper_evaluation_protocol": {
+    "task_duration_epochs": 90,
+    "evaluation_every_epochs": 10,
+    "evaluation_scope": "all tasks",
+    "evaluation_policy": "stochastic",
+    "rollouts_per_task": 16,
+    "reported_per_task_statistics": [
+      "raw_return_mean",
+      "raw_return_std"
+    ],
+    "aggregate_across_seeds": "median [25th percentile, 75th percentile] across five seeds",
+    "paper_named_atari_frames_per_task": 1474560,
+    "project_unambiguous_agent_decisions_per_task": 1474560,
+    "project_unambiguous_raw_ale_frames_per_task": 5898240,
+    "frame_repeat": 4
+  },
+  "tasks": [
+    {
+      "task_index": 0,
+      "task_name": "ALE/MsPacman-v5",
+      "paper_label": "Ms. Pac-Man",
+      "reward_scale": 0.05,
+      "random_return": 12.40,
+      "single_task_arrow_return": 1540.30
+    },
+    {
+      "task_index": 1,
+      "task_name": "ALE/Boxing-v5",
+      "paper_label": "Boxing",
+      "reward_scale": 1.0,
+      "random_return": 0.51,
+      "single_task_arrow_return": 90.27
+    },
+    {
+      "task_index": 2,
+      "task_name": "ALE/CrazyClimber-v5",
+      "paper_label": "Crazy Climber",
+      "reward_scale": 0.001,
+      "random_return": 7.49,
+      "single_task_arrow_return": 109245.16
+    },
+    {
+      "task_index": 3,
+      "task_name": "ALE/Frostbite-v5",
+      "paper_label": "Frostbite",
+      "reward_scale": 0.2,
+      "random_return": 14.48,
+      "single_task_arrow_return": 297.83
+    },
+    {
+      "task_index": 4,
+      "task_name": "ALE/Seaquest-v5",
+      "paper_label": "Seaquest",
+      "reward_scale": 0.5,
+      "random_return": 38.47,
+      "single_task_arrow_return": 439.62
+    },
+    {
+      "task_index": 5,
+      "task_name": "ALE/Enduro-v5",
+      "paper_label": "Enduro",
+      "reward_scale": 0.5,
+      "random_return": 0.01,
+      "single_task_arrow_return": 707.47
+    }
+  ]
+}

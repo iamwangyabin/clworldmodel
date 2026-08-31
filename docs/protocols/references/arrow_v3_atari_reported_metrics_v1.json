@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "published_continual_metric_reference",
+  "reference_id": "arrow-v3-atari-table-a3-v1",
+  "paper": {
+    "title": "ARROW: Augmented Replay for RObust World models",
+    "arxiv_version": "2603.11395v3",
+    "version_date": "2026-06-11",
+    "url": "https://arxiv.org/html/2603.11395v3",
+    "source_table": "Table A.3"
+  },
+  "statistics": "median [q25, q75] across five seeds",
+  "directions": {
+    "forgetting": "lower",
+    "forward_transfer": "higher",
+    "acc": "higher",
+    "min_acc": "higher",
+    "wc_acc": "higher",
+    "max_forgetting": "lower",
+    "recovery": "higher"
+  },
+  "default_order": {
+    "ARROW-50": {
+      "forgetting": [0.115, 0.093, 0.219],
+      "forward_transfer": [-0.190, -0.216, -0.105],
+      "acc": [0.553, 0.498, 0.687],
+      "min_acc": [0.546, 0.485, 0.616],
+      "wc_acc": [0.470, 0.420, 0.522]
+    },
+    "DreamerV3/FIFO": {
+      "forgetting": [2.263, 2.062, 2.732],
+      "forward_transfer": [0.612, 0.285, 0.813],
+      "acc": [-0.029, -0.046, 0.131],
+      "min_acc": [-0.249, -0.265, -0.181],
+      "wc_acc": [-0.141, -0.152, -0.128]
+    },
+    "TES-SAC": {
+      "forgetting": [0.192, 0.151, 0.213],
+      "forward_transfer": [-0.273, -0.589, -0.234],
+      "acc": [-0.010, -0.036, 0.044],
+      "min_acc": [-0.144, -0.148, -0.124],
+      "wc_acc": [-0.114, -0.119, -0.096]
+    }
+  },
+  "reversed_order": {
+    "ARROW-50": {
+      "forgetting": [0.264, 0.220, 1.012],
+      "forward_transfer": [-0.092, -0.106, 0.585],
+      "acc": [0.811, 0.538, 1.059],
+      "min_acc": [0.500, 0.446, 0.509],
+      "wc_acc": [0.482, 0.427, 0.493]
+    },
+    "DreamerV3/FIFO": {
+      "forgetting": [0.893, 0.744, 0.983],
+      "forward_transfer": [-0.299, -0.333, -0.198],
+      "acc": [0.012, -0.001, 0.091],
+      "min_acc": [-0.222, -0.235, -0.204],
+      "wc_acc": [-0.049, -0.090, -0.036]
+    },
+    "TES-SAC": {
+      "forgetting": [0.217, 0.214, 0.233],
+      "forward_transfer": [-0.314, -0.375, -0.119],
+      "acc": [-0.014, -0.050, 0.014],
+      "min_acc": [-0.176, -0.183, -0.132],
+      "wc_acc": [-0.115, -0.124, -0.105]
+    }
+  },
+  "two_cycle_default_order": {
+    "ARROW-50": {
+      "cycle1_forgetting": [0.076, -0.070, 0.077],
+      "cycle2_forgetting": [-0.031, -0.108, 0.084],
+      "max_forgetting": [0.081, -0.037, 0.244],
+      "cycle1_forward_transfer": [-0.335, -0.484, -0.309],
+      "cycle2_forward_transfer": [0.204, 0.075, 1.528],
+      "recovery": [2.450, 1.657, 4.592],
+      "acc": [0.689, 0.630, 0.703],
+      "min_acc": [0.356, 0.319, 0.436],
+      "wc_acc": [0.309, 0.300, 0.394]
+    },
+    "DreamerV3/FIFO": {
+      "cycle1_forgetting": [0.793, 0.599, 1.007],
+      "cycle2_forgetting": [0.718, 0.577, 0.873],
+      "max_forgetting": [1.121, 0.899, 1.177],
+      "cycle1_forward_transfer": [-0.342, -0.487, -0.246],
+      "cycle2_forward_transfer": [-0.545, -0.610, -0.449],
+      "recovery": [0.729, 0.673, 0.798],
+      "acc": [0.014, -0.008, 0.093],
+      "min_acc": [-0.294, -0.364, -0.236],
+      "wc_acc": [-0.226, -0.287, -0.174]
+    },
+    "TES-SAC": {
+      "cycle1_forgetting": [0.191, 0.144, 0.195],
+      "cycle2_forgetting": [0.136, 0.115, 0.141],
+      "max_forgetting": [0.133, 0.083, 0.179],
+      "cycle1_forward_transfer": [-0.587, -0.605, -0.560],
+      "cycle2_forward_transfer": [-0.359, -0.472, -0.263],
+      "recovery": [0.140, -2.060, 0.401],
+      "acc": [0.038, 0.025, 0.101],
+      "min_acc": [-0.165, -0.222, -0.160],
+      "wc_acc": [-0.137, -0.181, -0.132]
+    }
+  },
+  "comparison_warning": "Published entries are five-seed median/IQR values. A local seed-0 or partial-curriculum result must not be represented as a direct reproduction comparison."
+}
