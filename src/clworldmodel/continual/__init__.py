@@ -6,7 +6,6 @@ from .kan_consolidation import (
     capture_kan_parameter_values,
     finish_kan_importance_estimation,
     freeze_kan_coordinate_maps,
-    kan_consolidation_penalty,
     named_kan_residuals,
     protect_kan_parameter_updates,
 )
@@ -27,7 +26,6 @@ __all__ = [
     "capture_kan_parameter_values",
     "finish_kan_importance_estimation",
     "freeze_kan_coordinate_maps",
-    "kan_consolidation_penalty",
     "named_kan_residuals",
     "protect_kan_parameter_updates",
     "ComponentProjectionDiagnostic",

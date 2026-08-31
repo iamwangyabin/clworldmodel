@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 import sys
 import unittest
 from pathlib import Path
