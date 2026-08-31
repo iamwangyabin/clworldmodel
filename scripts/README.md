@@ -38,13 +38,18 @@ contains experiment-facing code.
   Three-task full curricula default to `fixed_v2`
   (`first_task_shared_core_lr=3e-4`); pass `--task0-profile fixed_v1` to
   reproduce the original `2e-4` protocol. The original-six pilot remains
-  fixed to its preregistered `fixed_v1` acquisition setting.
+  fixed to its preregistered `fixed_v1` acquisition setting. The separately
+  named `--behavior-profile shared_fastkan_stable` three-task composition uses
+  Shared-Frozen-Down Q/F/P mechanisms and one replay-rehearsed FastKAN Actor
+  and Critic across all task routes without adding behavior updates.
 - `smoke_evolving_atomic_rssm.py`: target-CUDA, production-shaped synthetic
   update covering the fixed 12-current/4-memory split, component projection,
   frozen old private state, and shared/private/route Adam steps. Its explicit
   compact-mechanism profile allocates the complete six-task compact topology.
   It performs no environment interaction and is evidence of execution
-  correctness only.
+  correctness only. With
+  `--behavior-profile shared_fastkan_stable` it also exercises the frozen shared
+  down bases and one old/current route update of the single FastKAN pair.
 - `run_evolving_task0_sweep.py`: fixed-order, seed-0 MsPacman acquisition
   launcher for the preregistered single-LR profiles or the 120/150/180/240
   duration profiles. It omits held-out-final evaluation and stops at the

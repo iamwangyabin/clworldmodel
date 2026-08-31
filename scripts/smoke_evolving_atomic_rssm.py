@@ -2,9 +2,10 @@
 """Run one production-shaped Evolving-Core optimizer update on a CUDA device.
 
 This is a synthetic execution smoke: it performs no environment interaction and
-does not produce a performance claim.  It exercises the exact 12-current / 4-LTDM
+does not produce a performance claim. It exercises the exact 12-current / 4-LTDM
 memory update, interface losses, component gradient projection, and all three
-world-model optimizer classes used by the named Atari protocol.
+world-model optimizer classes. The shared-FastKAN profile additionally performs
+one old-route and one current-route update on the single Actor-Critic.
 """
 
 from __future__ import annotations
@@ -34,12 +35,15 @@ import train  # noqa: E402
 from wm import WorldModel  # noqa: E402
 
 from run_evolving_atomic_rssm import (  # noqa: E402
+    BEHAVIOR_PROFILES,
     COMPACT_MECHANISM_PROFILE,
     DEFAULT_MECHANISM_PROFILE,
     DENSE_PRIVATE_PARAMETERIZATION,
     MECHANISM_PROFILE_WIDTHS,
     MECHANISM_PARAMETERIZATIONS,
+    PRIVATE_MLP_BEHAVIOR,
     SHARED_DOWN_PARAMETERIZATION,
+    SHARED_FASTKAN_STABLE_BEHAVIOR,
     _resolved_config,
 )
 
@@ -57,6 +61,11 @@ def _parser() -> argparse.ArgumentParser:
         "--mechanism-parameterization",
         choices=MECHANISM_PARAMETERIZATIONS,
         default=DENSE_PRIVATE_PARAMETERIZATION,
+    )
+    parser.add_argument(
+        "--behavior-profile",
+        choices=BEHAVIOR_PROFILES,
+        default=PRIVATE_MLP_BEHAVIOR,
     )
     return parser
 
@@ -80,12 +89,16 @@ def _source_config() -> Path:
 def _config(
     mechanism_profile: str = DEFAULT_MECHANISM_PROFILE,
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
+    behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
 ) -> Config:
     source = Config.from_file(_source_config()).to_dict()
     task_order = (
         "arrow-original-six"
-        if mechanism_profile == COMPACT_MECHANISM_PROFILE
-        or mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION
+        if behavior_profile == PRIVATE_MLP_BEHAVIOR
+        and (
+            mechanism_profile == COMPACT_MECHANISM_PROFILE
+            or mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION
+        )
         else "mspacman-boxing-crazyclimber"
     )
     return Config.from_dict(
@@ -94,6 +107,7 @@ def _config(
             task_order=task_order,
             mechanism_profile=mechanism_profile,
             mechanism_parameterization=mechanism_parameterization,
+            behavior_profile=behavior_profile,
         )
     )
 
@@ -172,7 +186,7 @@ def _synthetic_batch(
     config: Config,
     *,
     task_id: int,
-    time: int = 2,
+    time: int = 4,
     sequences: int = 16,
 ) -> tuple[torch.Tensor, ...]:
     action_ids = torch.arange(time * sequences).reshape(time, sequences)
@@ -217,7 +231,9 @@ def main() -> int:
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
     config = _config(
-        args.mechanism_profile, args.mechanism_parameterization
+        args.mechanism_profile,
+        args.mechanism_parameterization,
+        args.behavior_profile,
     )
     world_model = _world_model(config, device)
     world_model.activate_task_expert(0)
@@ -229,7 +245,7 @@ def main() -> int:
 
     replay = MultiTypeReplay(
         FifoReplay(
-            2,
+            4,
             32,
             config.action_space,
             "cpu",
@@ -237,7 +253,7 @@ def main() -> int:
             observation_dtype="uint8",
         ),
         LongTermReplay(
-            2,
+            4,
             32,
             config.action_space,
             "cpu",
@@ -264,18 +280,29 @@ def main() -> int:
         lr=config.task_route_lr,
         fused=True,
     )
-    actor = nn.Sequential(
-        nn.Linear(world_model.zh_transform.out_features, config.action_space),
-        nn.LogSoftmax(dim=-1),
-    ).to(device)
-    actor.requires_grad_(False)
-    actor_bank = SimpleNamespace(
-        get=lambda task_id: SimpleNamespace(
-            ac=SimpleNamespace(actor=actor)
+    shared_aco = None
+    if config.uses_replay_rehearsed_shared_behavior:
+        shared_aco = train.build_actor_critic_opt(
+            world_model,
+            lr=config.ac_lr,
+            **train._actor_critic_constructor_kwargs(config),
         )
-        if task_id == 0
-        else (_ for _ in ()).throw(ValueError("Smoke has only old task 0"))
-    )
+        actor = copy.deepcopy(shared_aco.ac.actor).eval()
+        actor.requires_grad_(False)
+        actor_bank = None
+    else:
+        actor = nn.Sequential(
+            nn.Linear(world_model.zh_transform.out_features, config.action_space),
+            nn.LogSoftmax(dim=-1),
+        ).to(device)
+        actor.requires_grad_(False)
+        actor_bank = SimpleNamespace(
+            get=lambda task_id: SimpleNamespace(
+                ac=SimpleNamespace(actor=actor)
+            )
+            if task_id == 0
+            else (_ for _ in ()).throw(ValueError("Smoke has only old task 0"))
+        )
     old_private = tuple(world_model.private_parameters(0))
 
     metrics, diagnostics, gradient_norm = train._evolving_world_model_update(
@@ -283,6 +310,9 @@ def main() -> int:
         wm=world_model,
         boundary_teacher=boundary_teacher,
         actor_critic_bank=actor_bank,
+        frozen_actor=(
+            actor if config.uses_replay_rehearsed_shared_behavior else None
+        ),
         replay_buffer=replay,
         current_task_id=1,
         memory_task_id=0,
@@ -315,6 +345,27 @@ def main() -> int:
     if any(parameter.grad is not None for parameter in old_private):
         raise RuntimeError("A completed task-private parameter received a gradient")
 
+    behavior_metrics = None
+    if shared_aco is not None:
+        shared_aco, _approx_perf, behavior_metrics = train.train_ac_from_wm(
+            world_model,
+            replay,
+            steps=2,
+            n_sync=2,
+            aco=shared_aco,
+            lr=config.ac_lr,
+            task_id_schedule=(0, 1),
+            **train._actor_critic_kwargs(
+                config,
+                feature_cache=None,
+                protect_residual_updates=False,
+            ),
+        )
+        if not all(np.isfinite(value) for value in behavior_metrics.values()):
+            raise FloatingPointError(
+                f"Non-finite shared FastKAN smoke metrics: {behavior_metrics}"
+            )
+
     result = {
         "schema_version": 1,
         "classification": "smoke",
@@ -323,6 +374,7 @@ def main() -> int:
         "device": str(device),
         "gpu": torch.cuda.get_device_name(device),
         "compute_dtype": config.compute_dtype,
+        "behavior_profile": args.behavior_profile,
         "mechanism_profile": config.task_mechanism_capacity_profile,
         "mechanism_parameterization": config.task_mechanism_parameterization,
         "mechanism_widths": [
@@ -345,6 +397,10 @@ def main() -> int:
             "route": _optimizer_step(route_optimizer),
         },
         "old_private_gradients_are_none": True,
+        "shared_behavior_route_schedule": (
+            [0, 1] if behavior_metrics is not None else None
+        ),
+        "shared_behavior_metrics": behavior_metrics,
         "peak_cuda_memory_bytes": torch.cuda.max_memory_allocated(device),
     }
     print(json.dumps(result, indent=2))

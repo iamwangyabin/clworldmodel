@@ -481,6 +481,40 @@ def _snapshot_checkpoint_replay_mmaps(
     return snapshotted
 
 
+def _actor_critic_opt_resumable_state_dict(aco: ActorCriticOpt) -> dict[str, Any]:
+    """Serialize one persistent actor-critic including optimizer/target state."""
+
+    return {
+        "schema_version": 1,
+        "actor_critic": aco.ac.state_dict(),
+        "optimizer": aco.opt.state_dict(),
+        "slow_critic": (
+            None if aco.slow_critic is None else aco.slow_critic.state_dict()
+        ),
+        "return_scale_ema": aco.return_scale_ema,
+        "return_mean_ema": aco.return_mean_ema,
+    }
+
+
+def _load_actor_critic_opt_resumable_state_dict(
+    aco: ActorCriticOpt, state: Mapping[str, Any]
+) -> None:
+    """Restore a shared actor-critic without replacing owned Parameter objects."""
+
+    if state.get("schema_version") != 1:
+        raise ValueError("Shared Actor-Critic state is not resumable schema v1")
+    aco.ac.load_state_dict(state["actor_critic"], strict=True)
+    aco.opt.load_state_dict(state["optimizer"])
+    slow_state = state.get("slow_critic")
+    if (aco.slow_critic is None) != (slow_state is None):
+        raise ValueError("Shared Actor-Critic slow-target topology changed on resume")
+    if aco.slow_critic is not None:
+        aco.slow_critic.load_state_dict(slow_state, strict=True)
+    for name in ("return_scale_ema", "return_mean_ema"):
+        value = state.get(name)
+        setattr(aco, name, None if value is None else value.detach().clone())
+
+
 def _save_evolving_resumable_checkpoint(
     path: Path,
     *,
@@ -491,6 +525,9 @@ def _save_evolving_resumable_checkpoint(
     private_optimizers: Mapping[int, torch.optim.Optimizer],
     route_optimizers: Mapping[int, torch.optim.Optimizer],
     actor_critic_bank,
+    aco: Optional[ActorCriticOpt] = None,
+    shared_behavior_update_rng: Optional[np.random.Generator] = None,
+    shared_behavior_replay_updates: Optional[Mapping[int, int]] = None,
     replay_buffer,
     environment_schedule,
     epoch: int,
@@ -513,8 +550,78 @@ def _save_evolving_resumable_checkpoint(
     replay_state = _snapshot_checkpoint_replay_mmaps(
         replay_buffer.state_dict(), checkpoint_path=path
     )
+    uses_shared_behavior = config.uses_replay_rehearsed_shared_behavior
+    if uses_shared_behavior:
+        if (
+            actor_critic_bank is not None
+            or aco is None
+            or shared_behavior_update_rng is None
+            or shared_behavior_replay_updates is None
+        ):
+            raise ValueError(
+                "Shared FastKAN checkpoints require exactly one actor-critic and "
+                "its independent route-schedule RNG plus routed update counters"
+            )
+    elif (
+        actor_critic_bank is None
+        or aco is not None
+        or shared_behavior_update_rng is not None
+        or shared_behavior_replay_updates is not None
+    ):
+        raise ValueError(
+            "Private-behavior Evolving-Core checkpoints require only an actor bank"
+        )
+    behavior_optimizer_state = (
+        {
+            "shared_actor_critic": _actor_critic_opt_resumable_state_dict(aco),
+        }
+        if uses_shared_behavior
+        else {"actor_critic_bank": actor_critic_bank.resumable_state_dict()}
+    )
+    rng_state = {
+        "python": random.getstate(),
+        "numpy_legacy": np.random.get_state(),
+        "torch_cpu": torch.random.get_rng_state(),
+        "torch_cuda": (
+            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        ),
+        "task_update": copy.deepcopy(task_update_rng.bit_generator.state),
+        "collection_environment": copy.deepcopy(
+            collection_environment_seed_rng.bit_generator.state
+        ),
+        "validation_environment": copy.deepcopy(
+            validation_environment_seed_rng.bit_generator.state
+        ),
+        "final_environment": copy.deepcopy(
+            final_environment_seed_rng.bit_generator.state
+        ),
+    }
+    if uses_shared_behavior:
+        rng_state["shared_behavior_update"] = copy.deepcopy(
+            shared_behavior_update_rng.bit_generator.state
+        )
+    routed_behavior_updates: dict[str, int] | None = None
+    if uses_shared_behavior:
+        routed_behavior_updates = {
+            str(int(task_id)): int(update_count)
+            for task_id, update_count in sorted(
+                shared_behavior_replay_updates.items()
+            )
+        }
+        if any(
+            int(task_id) < 0 or update_count < 0
+            for task_id, update_count in routed_behavior_updates.items()
+        ):
+            raise ValueError(
+                "Shared FastKAN routed update counters must be non-negative"
+            )
+        if sum(routed_behavior_updates.values()) != actor_critic_updates:
+            raise ValueError(
+                "Shared FastKAN routed update counters must sum to the total "
+                "Actor-Critic optimizer updates"
+            )
     payload = {
-        "schema_version": 1,
+        "schema_version": 2 if uses_shared_behavior else 1,
         "artifact_kind": "evolving_core_atomic_rssm_resumable_checkpoint",
         "resumable": True,
         "config": config.to_dict(),
@@ -524,27 +631,10 @@ def _save_evolving_resumable_checkpoint(
             "shared": shared_optimizer.state_dict(),
             "private_by_task": _optimizer_bank_state_dict(private_optimizers),
             "route_by_task": _optimizer_bank_state_dict(route_optimizers),
-            "actor_critic_bank": actor_critic_bank.resumable_state_dict(),
+            **behavior_optimizer_state,
         },
         "replay": replay_state,
-        "rng": {
-            "python": random.getstate(),
-            "numpy_legacy": np.random.get_state(),
-            "torch_cpu": torch.random.get_rng_state(),
-            "torch_cuda": (
-                torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
-            ),
-            "task_update": copy.deepcopy(task_update_rng.bit_generator.state),
-            "collection_environment": copy.deepcopy(
-                collection_environment_seed_rng.bit_generator.state
-            ),
-            "validation_environment": copy.deepcopy(
-                validation_environment_seed_rng.bit_generator.state
-            ),
-            "final_environment": copy.deepcopy(
-                final_environment_seed_rng.bit_generator.state
-            ),
-        },
+        "rng": rng_state,
         "schedule": {
             "environment_step": int(environment_schedule._step) + 1,
             "epoch": epoch,
@@ -555,12 +645,31 @@ def _save_evolving_resumable_checkpoint(
             "raw_environment_frames": total_env_steps,
             "world_model_updates": world_model_updates,
             "actor_critic_updates": actor_critic_updates,
+            **(
+                {
+                    "actor_critic_updates_by_task_route": (
+                        routed_behavior_updates
+                    )
+                }
+                if uses_shared_behavior
+                else {}
+            ),
         },
         "replay_checkpoint_semantics": (
             "mapped observations are copied into immutable checkpoint-owned assets; "
             "all other replay tensors and retention indices are embedded"
         ),
     }
+    if uses_shared_behavior:
+        payload["shared_behavior"] = {
+            "topology": "single_shared_fastkan_actor_critic",
+            "future_task_teacher_actor": aco.ac.actor.state_dict(),
+            "teacher_seen_tasks": current_task_id + 1,
+            "teacher_semantics": (
+                "the just-completed shared actor becomes the single frozen "
+                "cumulative policy-interface teacher for the next task"
+            ),
+        }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     torch.save(payload, temporary)
@@ -638,13 +747,15 @@ def _restore_evolving_resumable_checkpoint(
     route_optimizers: Mapping[int, torch.optim.Optimizer],
     actor_critic_bank,
     actor_critic_factory,
+    aco: Optional[ActorCriticOpt] = None,
+    shared_behavior_update_rng: Optional[np.random.Generator] = None,
     replay_buffer,
     environment_schedule,
     task_update_rng: np.random.Generator,
     collection_environment_seed_rng: np.random.Generator,
     validation_environment_seed_rng: np.random.Generator,
     final_environment_seed_rng: np.random.Generator,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Restore a preconstructed Evolving-Core training topology exactly."""
 
     path = path.expanduser().resolve()
@@ -663,13 +774,16 @@ def _restore_evolving_resumable_checkpoint(
     )
     if not isinstance(payload, Mapping):
         raise ValueError("Evolving-Core checkpoint must contain a mapping")
+    expected_schema = 2 if config.uses_replay_rehearsed_shared_behavior else 1
     if (
-        payload.get("schema_version") != 1
+        payload.get("schema_version") != expected_schema
         or payload.get("artifact_kind")
         != "evolving_core_atomic_rssm_resumable_checkpoint"
         or payload.get("resumable") is not True
     ):
-        raise ValueError("Checkpoint is not resumable Evolving-Core schema v1")
+        raise ValueError(
+            f"Checkpoint is not resumable Evolving-Core schema v{expected_schema}"
+        )
     if payload.get("config") != config.to_dict():
         raise ValueError("Resolved config changed across Evolving-Core resume")
 
@@ -686,9 +800,42 @@ def _restore_evolving_resumable_checkpoint(
             raise ValueError(f"Checkpoint {name} ownership does not match target")
         for task_id, optimizer in targets.items():
             optimizer.load_state_dict(states[str(task_id)])
-    actor_critic_bank.load_resumable_state_dict(
-        optimizers["actor_critic_bank"], actor_critic_factory
-    )
+    restored_teacher = None
+    restored_teacher_seen_tasks = 0
+    if config.uses_replay_rehearsed_shared_behavior:
+        if (
+            actor_critic_bank is not None
+            or aco is None
+            or shared_behavior_update_rng is None
+        ):
+            raise ValueError(
+                "Shared FastKAN restore requires exactly one actor-critic and "
+                "its independent route-schedule RNG"
+            )
+        _load_actor_critic_opt_resumable_state_dict(
+            aco, optimizers["shared_actor_critic"]
+        )
+        shared_behavior = payload.get("shared_behavior")
+        if not isinstance(shared_behavior, Mapping):
+            raise ValueError("Shared FastKAN checkpoint is missing behavior state")
+        restored_teacher = copy.deepcopy(aco.ac.actor).eval()
+        restored_teacher.requires_grad_(False)
+        restored_teacher.load_state_dict(
+            shared_behavior["future_task_teacher_actor"], strict=True
+        )
+        restored_teacher_seen_tasks = int(shared_behavior["teacher_seen_tasks"])
+    else:
+        if (
+            actor_critic_bank is None
+            or aco is not None
+            or shared_behavior_update_rng is not None
+        ):
+            raise ValueError(
+                "Private-behavior restore requires only an actor-critic bank"
+            )
+        actor_critic_bank.load_resumable_state_dict(
+            optimizers["actor_critic_bank"], actor_critic_factory
+        )
     replay_buffer.load_state_dict(payload["replay"])
 
     rng = payload["rng"]
@@ -704,16 +851,45 @@ def _restore_evolving_resumable_checkpoint(
         (final_environment_seed_rng, "final_environment"),
     ):
         generator.bit_generator.state = copy.deepcopy(rng[name])
+    if config.uses_replay_rehearsed_shared_behavior:
+        shared_behavior_update_rng.bit_generator.state = copy.deepcopy(
+            rng["shared_behavior_update"]
+        )
     schedule = payload["schedule"]
     environment_schedule._step = int(schedule["environment_step"])
     counters = payload["counters"]
-    return {
+    restored = {
         "completed_epochs": int(schedule["completed_epochs"]),
         "current_task_id": int(schedule["current_task_id"]),
         "raw_environment_frames": int(counters["raw_environment_frames"]),
         "world_model_updates": int(counters["world_model_updates"]),
         "actor_critic_updates": int(counters["actor_critic_updates"]),
     }
+    if config.uses_replay_rehearsed_shared_behavior:
+        restored["shared_actor_teacher"] = restored_teacher
+        restored["shared_actor_teacher_seen_tasks"] = restored_teacher_seen_tasks
+        routed_updates = counters.get("actor_critic_updates_by_task_route")
+        if not isinstance(routed_updates, Mapping):
+            raise ValueError(
+                "Shared FastKAN checkpoint is missing routed update counters"
+            )
+        restored_updates = {
+            int(task_id): int(update_count)
+            for task_id, update_count in routed_updates.items()
+        }
+        if (
+            any(
+                task_id < 0 or update_count < 0
+                for task_id, update_count in restored_updates.items()
+            )
+            or sum(restored_updates.values())
+            != restored["actor_critic_updates"]
+        ):
+            raise ValueError(
+                "Shared FastKAN checkpoint has inconsistent routed update counters"
+            )
+        restored["shared_behavior_replay_updates"] = restored_updates
+    return restored
 
 
 def _parameter_accounting(module: torch.nn.Module) -> dict[str, int]:
@@ -1703,6 +1879,7 @@ def _evolving_world_model_update(
     wm: WorldModel,
     boundary_teacher: Optional[WorldModel],
     actor_critic_bank,
+    frozen_actor: Optional[torch.nn.Module] = None,
     replay_buffer,
     current_task_id: int,
     memory_task_id: Optional[int],
@@ -1765,11 +1942,18 @@ def _evolving_world_model_update(
             config.memory_batch_n,
             source="ltdm",
         )
+        memory_actor = frozen_actor
+        if memory_actor is None:
+            if actor_critic_bank is None:
+                raise RuntimeError(
+                    "Old-task interface protection requires an actor teacher"
+                )
+            memory_actor = actor_critic_bank.get(memory_task_id).ac.actor
         memory_loss, memory_metrics = _evolving_memory_loss(
             config=config,
             wm=wm,
             teacher=boundary_teacher,
-            frozen_actor=actor_critic_bank.get(memory_task_id).ac.actor,
+            frozen_actor=memory_actor,
             batch=memory_batch,
             task_id=memory_task_id,
         )
@@ -2155,6 +2339,7 @@ def _consolidate_evolving_shared_core(
     shared_optimizer: torch.optim.Optimizer,
     replay_buffer,
     actor_critic_bank,
+    aco: Optional[ActorCriticOpt] = None,
     completed_task_id: int,
     eval_funcs,
     validation_task_seeds: Sequence[int],
@@ -2179,13 +2364,28 @@ def _consolidate_evolving_shared_core(
     learning_rates_before = [group["lr"] for group in shared_optimizer.param_groups]
     was_training = wm.training
 
+    if bool(getattr(config, "uses_shared_actor", False)):
+        if actor_critic_bank is not None or aco is None:
+            raise ValueError(
+                "Shared-behavior consolidation requires exactly one actor-critic"
+            )
+        evaluation_aco = aco
+        evaluation_bank = None
+    else:
+        if actor_critic_bank is None or aco is not None:
+            raise ValueError(
+                "Private-behavior consolidation requires only an actor bank"
+            )
+        evaluation_aco = actor_critic_bank.get(completed_task_id)
+        evaluation_bank = actor_critic_bank
+
     pre_scaled_mean, pre_scaled_std = _evaluate_policy_tasks(
         config,
         wm,
-        actor_critic_bank.get(completed_task_id),
+        evaluation_aco,
         seen_eval_funcs,
         seen_validation_seeds,
-        actor_critic_bank=actor_critic_bank,
+        actor_critic_bank=evaluation_bank,
     )
     pre_raw_mean, pre_raw_std = _raw_return_statistics(
         config.esc.env_configs[:seen_count], pre_scaled_mean, pre_scaled_std
@@ -2265,10 +2465,10 @@ def _consolidate_evolving_shared_core(
         post_scaled_mean, post_scaled_std = _evaluate_policy_tasks(
             config,
             wm,
-            actor_critic_bank.get(completed_task_id),
+            evaluation_aco,
             seen_eval_funcs,
             seen_validation_seeds,
-            actor_critic_bank=actor_critic_bank,
+            actor_critic_bank=evaluation_bank,
         )
         post_raw_mean, post_raw_std = _raw_return_statistics(
             config.esc.env_configs[:seen_count],
@@ -2949,6 +3149,7 @@ if __name__ == "__main__":
         "cnn_mechanism_bank_arrow",
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
+        "evolving_atomic_rssm_shared_fastkan_arrow",
     }:
         if task_bank_snapshot_dir is None:
             raise ValueError(
@@ -3042,7 +3243,7 @@ if __name__ == "__main__":
             raise ValueError(
                 "Incremental training must include at least one post-Task-1 epoch"
             )
-    elif config.uses_shared_actor:
+    elif config.continual_method == "cnn_compact_shared_actor_arrow":
         raise ValueError(
             "CNN-Compact-SharedActor requires --init-task1-boundary-snapshot"
         )
@@ -3145,6 +3346,22 @@ if __name__ == "__main__":
             f"reuse_probe_epochs={config.task_mechanism_reuse_probe_epochs} "
             f"route_lr_scale={config.task_mechanism_route_lr_scale} "
             f"current_fraction={config.dino_fullbank_current_task_fraction}"
+        )
+    elif config.uses_evolving_atomic_rssm:
+        behavior_topology = (
+            "single_shared_fastkan_stable"
+            if config.uses_replay_rehearsed_shared_behavior
+            else "per_task_mlp_bank"
+        )
+        print(
+            "Evolving-Core Atomic RSSM routing: "
+            f"tasks={config.rssm_num_experts} behavior={behavior_topology} "
+            "core=continually_updated_cnn_and_base_rssm "
+            "private=projector_atoms_and_heads "
+            f"mechanism_parameterization="
+            f"{config.task_mechanism_parameterization} "
+            f"behavior_current_fraction="
+            f"{config.evolving_shared_behavior_current_task_fraction}"
         )
     elif config.continual_method == "dino_fullbank_arrow":
         print(
@@ -3374,6 +3591,7 @@ if __name__ == "__main__":
         "cnn_mechanism_bank_arrow",
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
+        "evolving_atomic_rssm_shared_fastkan_arrow",
         "dino_patchbank_arrow",
         "dino_convbank_arrow",
     } and (not distributed_context.enabled or distributed_context.is_primary):
@@ -3458,6 +3676,7 @@ if __name__ == "__main__":
     actor_critic_bank = None
     shared_actor_teacher: Optional[torch.nn.Module] = None
     shared_actor_teacher_seen_tasks = 0
+    shared_behavior_update_rng: Optional[np.random.Generator] = None
     if config.uses_task_experts:
         from clworldmodel.continual import (
             ActorCriticBank,
@@ -3467,6 +3686,13 @@ if __name__ == "__main__":
         task_update_rng = np.random.default_rng(
             np.random.SeedSequence([config.seed, 0x4D4F4541])
         )
+        if config.uses_replay_rehearsed_shared_behavior:
+            # Keep behavior-route shuffling independent from Evolving-Core's
+            # old-task world-model sampling so replacing the behavior head does
+            # not silently change the v2 world-model replay sequence.
+            shared_behavior_update_rng = np.random.default_rng(
+                np.random.SeedSequence([config.seed, 0x464B414E])
+            )
 
         def build_task_actor_critic(task_id: int) -> ActorCriticOpt:
             # Task-bank construction must not perturb world-model sampling RNG.
@@ -3731,6 +3957,7 @@ if __name__ == "__main__":
         "distilled_states": 0,
         "burnin_state_uses": 0,
     }
+    shared_behavior_replay_updates: dict[int, int] = {}
     profile_stages = args.profile_stages and distributed_context.is_primary
 
     
@@ -4196,6 +4423,11 @@ if __name__ == "__main__":
                         wm=wm,
                         boundary_teacher=boundary_teacher,
                         actor_critic_bank=actor_critic_bank,
+                        frozen_actor=(
+                            shared_actor_teacher
+                            if config.uses_replay_rehearsed_shared_behavior
+                            else None
+                        ),
                         replay_buffer=replay,
                         current_task_id=current_task_id,
                         memory_task_id=memory_task_id,
@@ -4429,7 +4661,55 @@ if __name__ == "__main__":
             config.ac_train_sync
         )
 
-        if config.uses_shared_actor:
+        if config.uses_replay_rehearsed_shared_behavior:
+            if (
+                current_task_id is None
+                or aco is None
+                or shared_behavior_update_rng is None
+            ):
+                raise RuntimeError(
+                    "Shared FastKAN replay rehearsal requires an active route and "
+                    "actor-critic plus its independent schedule RNG"
+                )
+            replay_task_ids = replay.available_task_ids()
+            expected_replay_task_ids = tuple(range(current_task_id + 1))
+            if replay_task_ids != expected_replay_task_ids:
+                raise RuntimeError(
+                    "Shared FastKAN fixed-budget rehearsal requires Replay coverage "
+                    "for every seen task route: "
+                    f"available={replay_task_ids}, expected={expected_replay_task_ids}"
+                )
+            behavior_allocation = allocate_task_updates(
+                config.ac_train_steps,
+                current_task_id=current_task_id,
+                available_task_ids=replay_task_ids,
+                current_task_fraction=(
+                    config.evolving_shared_behavior_current_task_fraction
+                ),
+            )
+            behavior_schedule = shuffled_task_schedule(
+                behavior_allocation, shared_behavior_update_rng
+            )
+            for task_id, task_steps in behavior_allocation.items():
+                writer.add_scalar(
+                    f"EvolvingCoreSharedFastKAN/actor_critic_updates_task_{task_id}",
+                    task_steps,
+                    (epoch + 1) * config.ac_train_steps,
+                )
+                shared_behavior_replay_updates[task_id] = (
+                    shared_behavior_replay_updates.get(task_id, 0) + task_steps
+                )
+            aco, approx_perf, actor_critic_metrics = train_ac_from_wm(
+                wm,
+                replay,
+                config.ac_train_steps,
+                local_ac_train_sync,
+                aco=aco,
+                lr=scheduled_ac_lr,
+                task_id_schedule=behavior_schedule,
+                **actor_critic_kwargs,
+            )
+        elif config.uses_shared_actor:
             if current_task_id is None:
                 raise RuntimeError("Shared-actor training requires a current task route")
             distillation_kwargs = {}
@@ -4596,7 +4876,60 @@ if __name__ == "__main__":
                 encoding="utf-8",
             )
             os.replace(temporary_actor_accounting_path, actor_accounting_path)
-            if config.uses_shared_actor:
+            if config.uses_replay_rehearsed_shared_behavior:
+                replay_accounting = {
+                    "schema_version": 1,
+                    "artifact_kind": (
+                        "evolving_core_shared_behavior_replay_accounting"
+                    ),
+                    "method": config.continual_method,
+                    "topology": "single_shared_fastkan_actor_critic",
+                    "fixed_optimizer_updates_per_epoch": config.ac_train_steps,
+                    "optimizer_updates_are_extra": False,
+                    "current_task_fraction_when_old_tasks_exist": (
+                        config.evolving_shared_behavior_current_task_fraction
+                    ),
+                    "old_task_allocation": "uniform_over_available_completed_tasks",
+                    "route_schedule": "independently_seeded_shuffled_exact_counts",
+                    "replay_source": (
+                        "task-conditioned ARROW mixed replay; unchanged FIFO/LTDM "
+                        "weights are renormalized over sub-buffers containing the "
+                        "requested task"
+                    ),
+                    "real_old_task_replay_used": any(
+                        task_id < current_task_id
+                        and update_count > 0
+                        for task_id, update_count in shared_behavior_replay_updates.items()
+                    ),
+                    "evaluation_transitions_enter_training": False,
+                    "actor_and_critic_both_updated_on_rehearsal": True,
+                    "world_model_interface_teacher": (
+                        "one transient frozen cumulative shared actor from the "
+                        "previous task boundary"
+                    ),
+                    "actor_imagination_distillation": False,
+                    "optimizer_updates_by_task_route": dict(
+                        sorted(shared_behavior_replay_updates.items())
+                    ),
+                    "optimizer_updates_total": sum(
+                        shared_behavior_replay_updates.values()
+                    ),
+                }
+                replay_accounting_path = (
+                    log_dir / "shared_behavior_replay_accounting.json"
+                )
+                temporary_replay_accounting_path = (
+                    replay_accounting_path.with_suffix(".json.tmp")
+                )
+                temporary_replay_accounting_path.write_text(
+                    json.dumps(replay_accounting, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(
+                    temporary_replay_accounting_path,
+                    replay_accounting_path,
+                )
+            elif config.uses_shared_actor:
                 distillation_accounting = {
                     "schema_version": 1,
                     "method": config.continual_method,
@@ -4655,9 +4988,23 @@ if __name__ == "__main__":
                     "Evolving-Core boundary task does not match the active route: "
                     f"{completed_task_id} != {current_task_id}"
                 )
-            if evolving_shared_optimizer is None or actor_critic_bank is None:
+            if evolving_shared_optimizer is None:
                 raise RuntimeError(
-                    "Evolving-Core boundary requires shared and Actor-Critic optimizers"
+                    "Evolving-Core boundary requires its shared optimizer"
+                )
+            if config.uses_replay_rehearsed_shared_behavior:
+                if (
+                    actor_critic_bank is not None
+                    or aco is None
+                    or shared_behavior_update_rng is None
+                ):
+                    raise RuntimeError(
+                        "Shared FastKAN boundary requires one actor-critic and its "
+                        "route-schedule RNG"
+                    )
+            elif actor_critic_bank is None:
+                raise RuntimeError(
+                    "Private-behavior Evolving-Core boundary requires an actor bank"
                 )
             provisional_teacher = copy.deepcopy(wm).eval()
             provisional_teacher.requires_grad_(False)
@@ -4674,6 +5021,19 @@ if __name__ == "__main__":
                 private_optimizers=evolving_private_optimizers,
                 route_optimizers=evolving_route_optimizers,
                 actor_critic_bank=actor_critic_bank,
+                aco=(
+                    aco if config.uses_replay_rehearsed_shared_behavior else None
+                ),
+                shared_behavior_update_rng=(
+                    shared_behavior_update_rng
+                    if config.uses_replay_rehearsed_shared_behavior
+                    else None
+                ),
+                shared_behavior_replay_updates=(
+                    shared_behavior_replay_updates
+                    if config.uses_replay_rehearsed_shared_behavior
+                    else None
+                ),
                 replay_buffer=replay,
                 environment_schedule=envs,
                 epoch=epoch,
@@ -4698,6 +5058,11 @@ if __name__ == "__main__":
                     shared_optimizer=evolving_shared_optimizer,
                     replay_buffer=replay,
                     actor_critic_bank=actor_critic_bank,
+                    aco=(
+                        aco
+                        if config.uses_replay_rehearsed_shared_behavior
+                        else None
+                    ),
                     completed_task_id=completed_task_id,
                     eval_funcs=envs.eval_funcs(),
                     validation_task_seeds=validation_task_seeds,
@@ -4758,6 +5123,19 @@ if __name__ == "__main__":
                 private_optimizers=evolving_private_optimizers,
                 route_optimizers=evolving_route_optimizers,
                 actor_critic_bank=actor_critic_bank,
+                aco=(
+                    aco if config.uses_replay_rehearsed_shared_behavior else None
+                ),
+                shared_behavior_update_rng=(
+                    shared_behavior_update_rng
+                    if config.uses_replay_rehearsed_shared_behavior
+                    else None
+                ),
+                shared_behavior_replay_updates=(
+                    shared_behavior_replay_updates
+                    if config.uses_replay_rehearsed_shared_behavior
+                    else None
+                ),
                 replay_buffer=replay,
                 environment_schedule=envs,
                 epoch=epoch,

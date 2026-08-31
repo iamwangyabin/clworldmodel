@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +24,13 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on the GPU host
 if torch is not None:
     sys.path.insert(0, str(PROJECT_SRC))
     sys.path.insert(0, str(VENDORED_ATARI))
-    from ac import ActorCritic, dream_rollout, replay_lambda_returns
+    from ac import (
+        ActorCritic,
+        ActorCriticOpt,
+        dream_rollout,
+        replay_lambda_returns,
+        train_ac_from_wm,
+    )
     from clworldmodel.models.fast_kan import (
         FastKANActor,
         FastKANCritic,
@@ -99,6 +108,87 @@ class FastKANActorCriticTests(unittest.TestCase):
         self.assertAlmostEqual(rbf.bandwidth, 4.0 / 7.0)
         basis = rbf(rbf.centers)
         torch.testing.assert_close(torch.diagonal(basis), torch.ones(8))
+
+    def test_actor_training_route_schedule_has_one_id_per_optimizer_step(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly one task id"):
+            train_ac_from_wm(
+                None,
+                None,
+                steps=2,
+                n_sync=1,
+                task_id_schedule=(0,),
+            )
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            train_ac_from_wm(
+                None,
+                None,
+                steps=1,
+                n_sync=1,
+                task_id=0,
+                task_id_schedule=(0,),
+            )
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            train_ac_from_wm(
+                None,
+                None,
+                steps=1,
+                n_sync=1,
+                task_id_schedule=(-1,),
+            )
+
+    def test_actor_training_route_schedule_updates_one_shared_fastkan_pair(
+        self,
+    ) -> None:
+        torch.manual_seed(5)
+        actor_critic = ActorCritic(
+            6,
+            3,
+            actor_network="fast_kan_ac_stable",
+            fastkan_hidden_features=4,
+        )
+        aco = ActorCriticOpt(
+            actor_critic,
+            torch.optim.Adam(actor_critic.parameters(), lr=1e-3),
+        )
+        actor_before = copy.deepcopy(actor_critic.actor.state_dict())
+        critic_before = copy.deepcopy(actor_critic.critic.state_dict())
+        routed_task_ids: list[int] = []
+
+        def fake_dream_rollout(_wm, _ac, _data, **kwargs):
+            routed_task_ids.append(kwargs["task_id"])
+            states = torch.randn(2, 1, 6)
+            actions = torch.zeros(2, 1, 3)
+            actions[..., 0] = 1.0
+            rewards = torch.zeros(2, 1, 1)
+            returns = torch.tensor([[[1.0]], [[2.0]]])
+            return states, actions, rewards, returns, SimpleNamespace()
+
+        with mock.patch("ac.dream_rollout", side_effect=fake_dream_rollout):
+            trained, _performance, metrics = train_ac_from_wm(
+                SimpleNamespace(compute_dtype="float32"),
+                None,
+                steps=3,
+                n_sync=1,
+                aco=aco,
+                lr=1e-3,
+                task_id_schedule=(0, 2, 1),
+            )
+
+        self.assertIs(trained, aco)
+        self.assertEqual(routed_task_ids, [0, 2, 1])
+        self.assertTrue(
+            any(
+                not torch.equal(value, actor_before[name])
+                for name, value in actor_critic.actor.state_dict().items()
+            )
+        )
+        self.assertTrue(
+            any(
+                not torch.equal(value, critic_before[name])
+                for name, value in actor_critic.critic.state_dict().items()
+            )
+        )
+        self.assertTrue(all(torch.isfinite(torch.tensor(v)) for v in metrics.values()))
 
     def test_layer_is_vectorized_and_both_branches_receive_gradients(self) -> None:
         torch.manual_seed(7)

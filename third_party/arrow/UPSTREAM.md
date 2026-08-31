@@ -510,6 +510,32 @@ documented here, covered by focused parity tests, and followed by regenerating
     materialized gradients, while the pushed-commit CUDA A/B harness records
     update-state hashes and scalar metrics on identical synthetic batches.
 
+55. Add the separately named, task-aware
+    `Evolving-Core-SharedFrozenDown-SharedFastKANAC-StableTargets-ARROW-v1`
+    profile. The Q/F/P banks each register one full-width down projection,
+    freeze it at seeded initialization, and give every task private
+    LayerNorm/FiLM/zero-up state; the shared matrices are checkpointed and
+    counted once and never enter shared or private optimizers. The profile
+    otherwise preserves the fixed-v2 evolving-core optimizer/loss contract,
+    12/4 current-memory split, Replay capacity, environment budget, and 800
+    Actor-Critic updates per epoch. It replaces the per-task MLP behavior bank
+    with one persistent width-53 FastKAN Actor/Critic. Later epochs route 75%
+    of the unchanged behavior update budget to the current task and split 25%
+    uniformly over completed task-conditioned ARROW Replay routes. A separately
+    seeded schedule RNG keeps that shuffle from perturbing world-model
+    memory-task sampling. The shared pair uses the existing StableTargets
+    LaProp, EMA critic, replay-value, persistent-normalization, and corrected-
+    bootstrap bundle. One transient frozen previous-boundary Actor protects the
+    old world-model interface without actor-only imagination distillation.
+    Resumable checkpoint schema v2 stores the shared online pair and optimizer,
+    slow critic, return EMAs, future-task teacher, and behavior schedule RNG.
+    Runtime accounting separates the frozen shared basis, task-private state,
+    online behavior weights, training-only target/teacher copies, routed Replay
+    updates, and unchanged optimizer-step budgets. Focused tests cover exact
+    zero effect, single-copy/frozen-basis ownership, strict config isolation,
+    routed update and parameter ledgers, schedule validation, and shared
+    behavior checkpoint restoration.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from
