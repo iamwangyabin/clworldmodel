@@ -51,6 +51,31 @@ The storage-only overrides are:
 
 The published default remains float32 and existing JSON files remain unchanged.
 
+## Formal-run reproducibility
+
+Project formal runs also set:
+
+```json
+{"deterministic_runtime_seeding": true}
+```
+
+This seeds Python's replay-buffer selector with the configured run seed and
+passes explicit seeds to every Procgen constructor. Training and evaluation use
+separate deterministic streams; task `i` starts at `seed + i * 1,000,000` for
+training and adds `1,000,000,000` for evaluation, modulo `2**31`. Repeated
+constructors increment that task/stream seed by one. This changes neither the
+Procgen distribution settings nor task identity available to the agent.
+
+The released JSON files retain their original unseeded Procgen/Python-random
+behavior by default. Therefore a project formal run records the deterministic
+execution option as an explicit compatibility correction rather than silently
+presenting it as byte-identical released-code execution.
+
+At every evaluation checkpoint, `evaluation_returns.jsonl` stores all complete
+raw episode returns with the epoch, gradient-update counter, task index, and
+task name. TensorBoard means and standard deviations remain derived outputs;
+they are not the only retained evaluation record.
+
 ## Byte accounting
 
 For each sub-buffer, observations have shape `[512, 512, 3, 64, 64]`.
@@ -73,7 +98,9 @@ float32 replay sample exactly for these source values. Focused tests cover:
 - exact FIFO values and overwrite order through wraparound;
 - exact LTDM random-key retention and sampled values under matched NumPy RNG;
 - one byte per stored observation coordinate; and
-- rejection of invalid normalized observations.
+- rejection of invalid normalized observations;
+- deterministic, disjoint training/evaluation Procgen seed streams; and
+- preservation of hand-computed raw episode returns.
 
 Every run must record storage dtype, storage device, sample capacity, allocated
 bytes, and the fact that only sampled data moves to CUDA.

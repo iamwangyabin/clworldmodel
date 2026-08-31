@@ -445,6 +445,17 @@ documented here, covered by focused parity tests, and followed by regenerating
     wraparound, LTDM random-key parity, byte accounting, default isolation, and
     invalid-value rejection.
 
+49. Add an opt-in deterministic CoinRun runtime seed path and preserve raw
+    evaluation returns for project formal runs. With
+    `deterministic_runtime_seeding=true`, the trainer seeds Python's
+    whole-minibatch replay selector and supplies distinct, reproducible Procgen
+    seeds from disjoint training and evaluation streams. The published default
+    remains unseeded for parity. Evaluation now appends every complete raw
+    episode return, task name/index, epoch, and update counter to
+    `evaluation_returns.jsonl`; TensorBoard aggregates are unchanged. Focused
+    tests cover default isolation, constructor seed sequences, train/eval stream
+    separation, schedule validation, and hand-computed episode returns.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

@@ -2,9 +2,11 @@
 import time
 from datetime import datetime
 import argparse
+import json
 from pathlib import Path
 from typing import Optional
 import os
+import random
 import socket
 from datetime import datetime
 import numpy as np
@@ -136,7 +138,13 @@ if __name__ == "__main__":
     
     torch.random.manual_seed(config.seed)
     np.random.seed(config.seed)
+    if config.deterministic_runtime_seeding:
+        random.seed(config.seed)
     print("Training with seed: ", config.seed)
+    print(
+        "Deterministic Python/Procgen seeding: ",
+        config.deterministic_runtime_seeding,
+    )
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
         _print_cuda_memory("startup")
@@ -195,6 +203,7 @@ if __name__ == "__main__":
     writer = SummaryWriter(log_dir=log_dir)
     log_dir = Path(log_dir)
     config.save(log_dir / "config.json")
+    evaluation_returns_path = log_dir / "evaluation_returns.jsonl"
 
     
     total_env_steps = 0        # number of *real* environment interactions so far
@@ -256,17 +265,32 @@ if __name__ == "__main__":
             eval_results_mean = []
             eval_results_std = []
             eval_funcs = envs.eval_funcs()
-            for env_fns in eval_funcs:
-                ev_eps_mean, ev_eps_std = evaluate(
+            for task_index, env_fns in enumerate(eval_funcs):
+                ev_eps_mean, ev_eps_std, ev_episode_returns = evaluate(
                     config.n_sync,
                     wm=wm,
                     ac=aco.ac if aco is not None else aco,
                     env_fns=env_fns,
                     env_repeat=config.env_repeat,
                     n_rollouts=256,
+                    return_episode_returns=True,
                 )
                 eval_results_mean.append(ev_eps_mean)
                 eval_results_std.append(ev_eps_std)
+                record = {
+                    "schema_version": 1,
+                    "epoch": epoch,
+                    "global_step": global_step,
+                    "task_index": task_index,
+                    "task_name": config.esc.env_configs[task_index].name,
+                    "returns": ev_episode_returns,
+                    "mean": ev_eps_mean,
+                    "std": ev_eps_std,
+                }
+                with open(evaluation_returns_path, "a") as fp:
+                    fp.write(json.dumps(record) + "\n")
+                    fp.flush()
+                    os.fsync(fp.fileno())
             writer.add_scalars(
                 "Perf/eval_rew_eps_mean",
                 {f"{i}": m for i, m in enumerate(eval_results_mean)},
