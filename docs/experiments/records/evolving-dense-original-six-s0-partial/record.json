@@ -1,0 +1,538 @@
+{
+  "schema_version": 1,
+  "record_id": "evolving-dense-original-six-s0-partial",
+  "run_id": "arrow_original_six_s0_pilot",
+  "method": "Evolving-Core Atomic RSSM (dense full-width 512/512/256)",
+  "protocol": "Evolving-Core-Atomic-RSSM-ARROW-v2-OriginalSix-Atari-TaskAware-Pilot",
+  "evidence_level": "pilot",
+  "classification": "pilot",
+  "status": "partial",
+  "recorded_at_utc": "2026-08-31T12:36:20Z",
+  "project_git": {
+    "commit": "9ee4cf7642b0d50a77e235fe000f39b38ae9cbd3",
+    "clean": true,
+    "upstream": "origin/codex/evolving-core-original-six-task-v1",
+    "ahead": 0,
+    "behind": 0
+  },
+  "seed": {
+    "id": 0,
+    "value": 123456789
+  },
+  "task_awareness": "task_aware",
+  "task_order": [
+    "ALE/MsPacman-v5",
+    "ALE/Boxing-v5",
+    "ALE/CrazyClimber-v5",
+    "ALE/Frostbite-v5",
+    "ALE/Seaquest-v5",
+    "ALE/Enduro-v5"
+  ],
+  "completion": {
+    "total_task_count": 6,
+    "completed_task_count": 4,
+    "completed_epochs": 404,
+    "final_evaluation_performed": false,
+    "started_at_utc": "2026-08-29T18:16:52.315216+00:00",
+    "run_status_artifact_present": false,
+    "final_evaluation_artifact_present": false
+  },
+  "evaluation": {
+    "metric": "raw_environment_return",
+    "policy": "deterministic_argmax_and_latent_mode",
+    "cohort_protocol": "fixed_validation_at_boundaries_and_periodic_checkpoints",
+    "evaluation_transitions_enter_replay": false,
+    "checkpoints": [
+      {
+        "checkpoint_id": "task-boundary-01-accepted",
+        "stage": "accepted_post_consolidation",
+        "completed_epochs": 90,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1994.375,
+            "raw_return_std": 297.5728639762033
+          }
+        ],
+        "consolidation": {
+          "steps": 1000,
+          "learning_rate": 2e-05,
+          "rollback": false,
+          "rollback_reasons": [],
+          "validation_task_seeds": [
+            2127245496
+          ],
+          "pre_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 2025.625,
+              "raw_return_std": 325.9786946642372
+            }
+          ],
+          "candidate_post_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 1994.375,
+              "raw_return_std": 297.5728639762033
+            }
+          ],
+          "accepted_stage": "post_consolidation"
+        }
+      },
+      {
+        "checkpoint_id": "task-boundary-02-accepted",
+        "stage": "accepted_post_consolidation",
+        "completed_epochs": 180,
+        "completed_task_count": 2,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2105.625,
+            "raw_return_std": 444.7607327260355
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 88.25,
+            "raw_return_std": 4.968651728587948
+          }
+        ],
+        "consolidation": {
+          "steps": 1000,
+          "learning_rate": 2e-05,
+          "rollback": false,
+          "rollback_reasons": [],
+          "validation_task_seeds": [
+            2127245496,
+            3442395849
+          ],
+          "pre_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 2110.625,
+              "raw_return_std": 516.762381927129
+            },
+            {
+              "task_index": 1,
+              "task_name": "ALE/Boxing-v5",
+              "raw_return_mean": 89.0,
+              "raw_return_std": 4.58257569495584
+            }
+          ],
+          "candidate_post_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 2105.625,
+              "raw_return_std": 444.7607327260355
+            },
+            {
+              "task_index": 1,
+              "task_name": "ALE/Boxing-v5",
+              "raw_return_mean": 88.25,
+              "raw_return_std": 4.968651728587948
+            }
+          ],
+          "accepted_stage": "post_consolidation"
+        }
+      },
+      {
+        "checkpoint_id": "task-boundary-03-accepted",
+        "stage": "accepted_post_consolidation",
+        "completed_epochs": 270,
+        "completed_task_count": 3,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2164.375,
+            "raw_return_std": 772.5037924664188
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 86.625,
+            "raw_return_std": 5.818880906153691
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 96550.00114440918,
+            "raw_return_std": 2814.250330189575
+          }
+        ],
+        "consolidation": {
+          "steps": 1000,
+          "learning_rate": 2e-05,
+          "rollback": false,
+          "rollback_reasons": [],
+          "validation_task_seeds": [
+            2127245496,
+            3442395849,
+            1476374980
+          ],
+          "pre_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 2215.625,
+              "raw_return_std": 420.08881129470706
+            },
+            {
+              "task_index": 1,
+              "task_name": "ALE/Boxing-v5",
+              "raw_return_mean": 89.6875,
+              "raw_return_std": 3.703355741756387
+            },
+            {
+              "task_index": 2,
+              "task_name": "ALE/CrazyClimber-v5",
+              "raw_return_mean": 84028.57153756278,
+              "raw_return_std": 28674.01474405314
+            }
+          ],
+          "candidate_post_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 2164.375,
+              "raw_return_std": 772.5037924664188
+            },
+            {
+              "task_index": 1,
+              "task_name": "ALE/Boxing-v5",
+              "raw_return_mean": 86.625,
+              "raw_return_std": 5.818880906153691
+            },
+            {
+              "task_index": 2,
+              "task_name": "ALE/CrazyClimber-v5",
+              "raw_return_mean": 96550.00114440918,
+              "raw_return_std": 2814.250330189575
+            }
+          ],
+          "accepted_stage": "post_consolidation"
+        }
+      },
+      {
+        "checkpoint_id": "task-boundary-04-accepted",
+        "stage": "accepted_post_consolidation",
+        "completed_epochs": 360,
+        "completed_task_count": 4,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2074.375,
+            "raw_return_std": 416.95276635969213
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 87.5625,
+            "raw_return_std": 4.197748652551746
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 87457.14378356934,
+            "raw_return_std": 41226.54814780773
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 272.5,
+            "raw_return_std": 4.330127018922193
+          }
+        ],
+        "consolidation": {
+          "steps": 1000,
+          "learning_rate": 2e-05,
+          "rollback": false,
+          "rollback_reasons": [],
+          "validation_task_seeds": [
+            2127245496,
+            3442395849,
+            1476374980,
+            3105150620
+          ],
+          "pre_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 1877.5,
+              "raw_return_std": 199.60899278339141
+            },
+            {
+              "task_index": 1,
+              "task_name": "ALE/Boxing-v5",
+              "raw_return_mean": 90.0,
+              "raw_return_std": 5.361902647381804
+            },
+            {
+              "task_index": 2,
+              "task_name": "ALE/CrazyClimber-v5",
+              "raw_return_mean": 87400.0,
+              "raw_return_std": 70301.55037376376
+            },
+            {
+              "task_index": 3,
+              "task_name": "ALE/Frostbite-v5",
+              "raw_return_mean": 270.625,
+              "raw_return_std": 2.4206145913796355
+            }
+          ],
+          "candidate_post_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 2074.375,
+              "raw_return_std": 416.95276635969213
+            },
+            {
+              "task_index": 1,
+              "task_name": "ALE/Boxing-v5",
+              "raw_return_mean": 87.5625,
+              "raw_return_std": 4.197748652551746
+            },
+            {
+              "task_index": 2,
+              "task_name": "ALE/CrazyClimber-v5",
+              "raw_return_mean": 87457.14378356934,
+              "raw_return_std": 41226.54814780773
+            },
+            {
+              "task_index": 3,
+              "task_name": "ALE/Frostbite-v5",
+              "raw_return_mean": 272.5,
+              "raw_return_std": 4.330127018922193
+            }
+          ],
+          "accepted_stage": "post_consolidation"
+        }
+      },
+      {
+        "checkpoint_id": "periodic-epoch-400-partial-task-04",
+        "stage": "periodic_during_partial_seaquest_training",
+        "completed_epochs": 400,
+        "completed_task_count": 4,
+        "cohort": "fixed_validation_periodic",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1921.25,
+            "raw_return_std": 187.01186459687523
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 88.4375,
+            "raw_return_std": 4.961964706645947
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 69722.22434149847,
+            "raw_return_std": 36542.6025684483
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 274.375,
+            "raw_return_std": 4.960783708246107
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 765.3333333333334,
+            "raw_return_std": 134.1574530997895
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.125,
+            "raw_return_std": 0.33071891388307384
+          }
+        ],
+        "accepted_task_boundary": false
+      }
+    ]
+  },
+  "headline": {
+    "summary": "Latest accepted four-task boundary raw returns: MsPacman 2074.375; Boxing 87.5625; CrazyClimber 87457.144; Frostbite 272.5. Training is partial, not a six-task final result."
+  },
+  "budgets": {
+    "planned_task_duration_epochs": [
+      90,
+      90,
+      90,
+      90,
+      90,
+      90
+    ],
+    "planned_raw_environment_frames": 35389440,
+    "planned_online_world_model_updates": 540000,
+    "planned_boundary_consolidation_world_model_updates": 6000,
+    "planned_actor_critic_updates": 432000,
+    "online_sequence_batch_total": 16,
+    "later_task_current_memory_split": [
+      12,
+      4
+    ],
+    "replay_transition_capacity": 524288,
+    "replay_observation_dtype": "uint8",
+    "replay_observation_bytes": 6442450944,
+    "consolidation_is_extra_compute": true
+  },
+  "parameter_accounting": {
+    "world_model_parameters": 85414770,
+    "world_model_parameter_and_buffer_bytes": 341660526,
+    "shared_observation_encoder_parameters": 691104,
+    "mechanism_widths": {
+      "recurrent": 512,
+      "representation_posterior": 512,
+      "transition_prior": 256
+    },
+    "mechanism_parameters_per_task": {
+      "task_0": 3816192,
+      "task_1": 3816204,
+      "task_2": 3816216,
+      "task_3": 3816228,
+      "task_4": 3816240,
+      "task_5": 3816252
+    },
+    "actor_critic_topology": "per_task_actor_critic_bank"
+  },
+  "runtime": {
+    "accelerator": "NVIDIA GeForce RTX 4090",
+    "torch": "2.3.0+cu118",
+    "cuda_build": "11.8",
+    "python": "3.10.21"
+  },
+  "comparability": {
+    "direct_comparison_group": "evolving-task0-s0-fixed-validation-90e-v1",
+    "claim": "Direct Task-0 acquisition diagnostic against Compact and SharedDown is valid for the same seed, fixed cohort, duration, and rollout count; later-task or ARROW superiority claims are not valid.",
+    "limitations": [
+      "Only four of six task boundaries completed.",
+      "The method exposes task identity and adds 1,000 world-model consolidation updates per completed boundary.",
+      "Its fixed validation cohort differs from the advancing stochastic cohort in the legacy ARROW/DV3/FastKAN records.",
+      "No held-out final evaluation exists.",
+      "The termination cause is not established by the preserved artifacts.",
+      "Only the Task-0 acquisition checkpoint belongs to the direct Compact/SharedDown comparison group."
+    ]
+  },
+  "source_artifacts": [
+    {
+      "role": "source_metadata",
+      "name": "launch.json",
+      "sha256": "f2bcc8321f1e9d1f62fabddc7b50684141de649deeecaa940ee7612abf330a7e",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "resolved_training_config.json",
+      "sha256": "a1ffa701e1579e0540ae97198fbf2f9b52b8d52a1ac90aec59b5f450ed732878",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "model_parameter_accounting.json",
+      "sha256": "a4a227c687315c2c3693d07cf53ee8072c91c6a45e22b0ea5d20634d2447e285",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "actor_critic_parameter_accounting.json",
+      "sha256": "82ddfc8f3efb24482be7ea3cfb312ee359620cfe040329893fdeccaf088a631f",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "replay_mmap_storage_accounting.json",
+      "sha256": "a8eea4ef481bedf32973a63fcf87785542737d928b76145e7346f50362c9a61d",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evaluation_seed_manifest.json",
+      "sha256": "5abd59223d399706d3aae275a0cd71c866079a7cf03b585ef2e2d4aa44211adc",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "full_training_log",
+      "name": "train.log",
+      "sha256": "d519af84d26db1e1eaefeaa342453ee12a5d4261c5c53d4e460e752c2e52ef75",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_00_boundary.json",
+      "sha256": "b4db08c246441ff276eea05881efaeb8575cbce1cc5a510293c8d0b24bbab95f",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_00_pre_validation.json",
+      "sha256": "2a78de6db4ce2fad2c7b314263869825cc9c76800d240b0802bfa26a1ac93cd3",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_01_boundary.json",
+      "sha256": "cef07c75a915922db0128621c19c2b5a3923e0a1f4d5855dd32daf059544608f",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_01_pre_validation.json",
+      "sha256": "a55292b6e125f77c75958269ee213f4c18b4e84f7193c5d9c80b601d01665165",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_02_boundary.json",
+      "sha256": "de0fe1a0999a6d0aad62688caecfd2b55d688ef66585eac5ddff794977d44be1",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_02_pre_validation.json",
+      "sha256": "249ce7262f03c4a3fb38e31c40b3cf873b2216927d8f07380a69cef1dd2256b1",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_03_boundary.json",
+      "sha256": "4596e6816e816069475a3d4253e4e5dbf1619761479af8103355c86dd51a3a81",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_03_pre_validation.json",
+      "sha256": "8b733dc5e1a767b73718a20f00b164fa29955d0cc741b820d4ce1e7187a07bde",
+      "repository_copy_excluded": false
+    }
+  ],
+  "notes": [
+    "Boundary JSON files are authoritative; accepted post-consolidation values are retained separately from the pre-consolidation values.",
+    "The epoch-400 evaluation occurred during Seaquest training and is preserved as a partial periodic checkpoint, not a task boundary.",
+    "The source log ends after “Starting Epoch 404” with no run_status.json, final_evaluation.json, traceback, or recorded error.",
+    "No model weights, task snapshots, Replay mmap files, TensorBoard events, or full training log are copied into Git."
+  ]
+}

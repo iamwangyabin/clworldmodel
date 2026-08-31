@@ -15,4 +15,10 @@ tb/
 *.pt
 *.pth
 *.ckpt
+*.safetensors
+*.onnx
+*.mmap
+events.out.tfevents*
+replay_mmaps/
+videos/
 .pnpm-store/

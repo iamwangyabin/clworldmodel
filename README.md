@@ -47,6 +47,24 @@ project-owned Dreamer implementation. The native R2 route owns its integration
 trainer and replay adapter while vendoring the checked R2-Dreamer model
 primitives.
 
+## Experiment records
+
+The single entry point for preserved experiment evidence is
+[`docs/experiments/README.md`](docs/experiments/README.md). Its generated
+[`RESULTS.md`](docs/experiments/RESULTS.md) index currently covers the matched
+ARROW/DV3/FastKAN seed-0 runs, task-aware CNN pilots, the partial dense and
+compact Evolving-Core runs, and the SharedDown Task-0 pilot.
+
+The repository keeps structured provenance, raw per-task boundary results,
+source hashes, and small evaluation-log excerpts. It deliberately excludes
+weights, checkpoints, Replay storage, TensorBoard events, full logs, and other
+generated run data. Rebuild and validate the index with:
+
+```bash
+python scripts/experiment_registry.py write
+python scripts/experiment_registry.py check
+```
+
 ## Setup
 
 The reference environment uses Python 3.10, PyTorch 2.3.0, and CUDA 11.8.
@@ -487,15 +505,20 @@ state.
 ```bash
 python scripts/run_evolving_atomic_rssm.py \
   --task-order mspacman-boxing-crazyclimber \
+  --task0-profile fixed_v2 \
   --seed 0 \
   --classification pilot \
   --dry-run
 ```
 
-The launcher also supports the two predeclared first-task swaps. This is a
-task-aware experimental protocol with no validated performance result. See
-`docs/protocols/evolving_core_atomic_rssm_arrow_v1_atari.md` for its fixed
-losses, optimizer ownership, checkpoint contract, budgets, and claim limits.
+The launcher also supports the two predeclared first-task swaps. Its formal
+default is the separately named `fixed_v2` profile, which changes only the
+Task-0 shared-core learning rate from `2e-4` to `3e-4`; later tasks remain at
+`1e-4`. Pass `--task0-profile fixed_v1` for exact v1 reproduction. This is a
+task-aware experimental protocol with no validated multi-seed performance
+result. See `docs/protocols/evolving_core_atomic_rssm_arrow_v2_atari.md` for
+the promotion evidence and claim limits, and the v1 protocol for the unchanged
+model, loss, ownership, checkpoint, and budget contract.
 
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control

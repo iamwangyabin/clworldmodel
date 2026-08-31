@@ -24,12 +24,16 @@ contains experiment-facing code.
   one frozen CNN/base RSSM, per-task spatial projectors and nonlinear recurrent,
   posterior, and prior mechanisms, optional zero-initialized reuse of frozen old
   mechanisms, private world-model heads, and independent Actor-Critics. The
-  `no-reuse` mode is the capacity-matched routing ablation.
+  `no-reuse` mode is the capacity-matched routing ablation. The same launcher
+  owns REC-RSSM through `--method-profile rec-rssm`; there is no separate
+  wrapper launcher.
 - `run_evolving_atomic_rssm.py`: from-scratch three-task Evolving-Core Atomic
   RSSM with a continually updated shared CNN/RSSM, symmetric per-task
   projectors/atoms/heads, independent Actor-Critics, replay-protected
   component gradients, and boundary consolidation. It supports the three
-  predeclared task orders and always disables world-model compilation.
+  predeclared task orders and always disables world-model compilation. The
+  formal default is `fixed_v2` (`first_task_shared_core_lr=3e-4`); pass
+  `--task0-profile fixed_v1` to reproduce the original `2e-4` protocol.
 - `smoke_evolving_atomic_rssm.py`: target-CUDA, production-shaped synthetic
   update covering the fixed 12-current/4-memory split, component projection,
   frozen old private state, and shared/private/route Adam steps. It performs no
@@ -68,6 +72,13 @@ python scripts/run_moe_arrow_atari.py --method dino-convbank ...
 - `summarize_component_audit.py`: paired audit conclusion data.
 - `render_p1_full_audit_dossier.py`: render the completed P1 audit dossier.
 - `extract_arrow_baseline_results.py`: convert ARROW logs into a result bundle.
+- `summarize_continual_metrics.py`: preserve raw checkpoint matrices and compute
+  versioned ARROW-style ACC, min-ACC, WC-ACC, and forgetting reports; it leaves
+  FT/sample-efficiency unavailable unless their required reference curves exist.
+- `experiment_registry.py`: validate the small, text-only records under
+  `docs/experiments/records/` and deterministically rebuild `registry.json` plus
+  the human-readable `RESULTS.md`; it rejects weights, Replay, TensorBoard, full
+  logs, binaries, and oversized evidence.
 - `evaluate_cnn_mechanism_bank_reuse.py`: fixed-cohort Task-3 gate ablations,
   functional mechanism contribution ratios, shared-trajectory latent/reward
   diagnostics, and the epoch-260/270 cross-cohort check. It does not train or
@@ -75,8 +86,12 @@ python scripts/run_moe_arrow_atari.py --method dino-convbank ...
 
 ## Shared Support
 
+- `artifact_io.py`: dependency-free checksums and atomic artifact writers used
+  by audits and post-hoc probes.
 - `git_provenance.py`: clean-commit and upstream-sync checks used by training
   launchers and audits.
+- `launcher_support.py`: dependency-free runtime-manifest, JSON, and
+  subprocess-log helpers used by standalone launchers.
 
 Run offline audit commands from the repository root. Training launchers should
 be inspected with `--dry-run` before any environment interaction.

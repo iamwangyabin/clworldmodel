@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "record_id": "evolving-shared-down-task0-s0",
+  "run_id": "shared_frozen_down_full_width_task0_s0_pilot",
+  "method": "Evolving-Core Shared Frozen Down + Private LayerNorm/FiLM/Up",
+  "protocol": "Evolving-Core-Atomic-RSSM-SharedFrozenDown-FiLM-ARROW-v1-OriginalSixRouteAllocation-Task0-Acquisition-Pilot",
+  "evidence_level": "pilot",
+  "classification": "pilot",
+  "status": "complete",
+  "recorded_at_utc": "2026-08-31T12:36:20Z",
+  "project_git": {
+    "commit": "91a1a1d8260be89ca860a58dd53ccaa54d3844d8",
+    "clean": true,
+    "upstream": "origin/codex/evolving-core-shared-down-task0-v1",
+    "ahead": 0,
+    "behind": 0
+  },
+  "seed": {
+    "id": 0,
+    "value": 123456789
+  },
+  "task_awareness": "task_aware",
+  "task_order": [
+    "ALE/MsPacman-v5",
+    "ALE/Boxing-v5",
+    "ALE/CrazyClimber-v5",
+    "ALE/Frostbite-v5",
+    "ALE/Seaquest-v5",
+    "ALE/Enduro-v5"
+  ],
+  "completion": {
+    "total_task_count": 1,
+    "completed_task_count": 1,
+    "completed_epochs": 90,
+    "final_evaluation_performed": false,
+    "return_code": 0,
+    "started_at_utc": "2026-08-30T11:18:37.706076+00:00",
+    "finished_at_utc": "2026-08-30T18:32:10.430080+00:00",
+    "route_allocation_task_count": 6
+  },
+  "evaluation": {
+    "metric": "raw_environment_return",
+    "policy": "deterministic_argmax_and_latent_mode",
+    "cohort_protocol": "fixed_validation",
+    "evaluation_transitions_enter_replay": false,
+    "checkpoints": [
+      {
+        "checkpoint_id": "task-boundary-01-accepted",
+        "stage": "accepted_pre_consolidation_after_rollback",
+        "completed_epochs": 90,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1588.75,
+            "raw_return_std": 270.22849128098983
+          }
+        ],
+        "consolidation": {
+          "steps": 1000,
+          "learning_rate": 2e-05,
+          "rollback": true,
+          "rollback_reasons": [
+            {
+              "task_id": 0,
+              "pre_return": 1588.75,
+              "candidate_post_return": 1497.5,
+              "relative_drop": 0.057435090479937057
+            }
+          ],
+          "validation_task_seeds": [
+            2127245496
+          ],
+          "pre_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 1588.75,
+              "raw_return_std": 270.22849128098983
+            }
+          ],
+          "candidate_post_tasks": [
+            {
+              "task_index": 0,
+              "task_name": "ALE/MsPacman-v5",
+              "raw_return_mean": 1497.5,
+              "raw_return_std": null
+            }
+          ],
+          "accepted_stage": "pre_consolidation_restored"
+        }
+      }
+    ]
+  },
+  "headline": {
+    "summary": "Task-0 fixed-validation raw return 1588.75 ± 270.228 before consolidation; the 1497.5 candidate triggered rollback, so 1588.75 was accepted."
+  },
+  "budgets": {
+    "task_duration_epochs": 90,
+    "raw_environment_frames": 5898240,
+    "online_world_model_updates": 90000,
+    "boundary_consolidation_world_model_updates": 1000,
+    "actor_critic_updates": 72000,
+    "online_sequence_batch_total": 16,
+    "replay_transition_capacity": 524288,
+    "replay_observation_dtype": "uint8",
+    "replay_observation_bytes": 6442450944,
+    "consolidation_is_extra_compute": true
+  },
+  "parameter_accounting": {
+    "world_model_parameters": 71661170,
+    "world_model_trainable_parameters": 20598053,
+    "world_model_parameter_and_buffer_bytes": 286646126,
+    "mechanism_widths": {
+      "recurrent": 512,
+      "representation_posterior": 512,
+      "transition_prior": 256
+    },
+    "private_mechanism_parameters_per_task": 1064960,
+    "shared_frozen_down_parameters": 2753792,
+    "mechanism_and_route_parameters_for_six_routes": 9143732
+  },
+  "runtime": {
+    "accelerator": "NVIDIA GeForce RTX 4090",
+    "torch": "2.3.0+cu118",
+    "cuda_build": "11.8",
+    "python": "3.10.21"
+  },
+  "comparability": {
+    "direct_comparison_group": "evolving-task0-s0-fixed-validation-90e-v1",
+    "claim": "Direct Task-0 acquisition diagnostic against the dense and compact Evolving-Core controls is valid for this same seed, cohort, duration, and rollout count; no retention claim follows.",
+    "limitations": [
+      "Only Task 0 was trained.",
+      "Only one seed was evaluated.",
+      "No held-out final evaluation was allowed by the selection protocol.",
+      "The result cannot establish six-task retention or task-agnostic performance."
+    ]
+  },
+  "source_artifacts": [
+    {
+      "role": "source_metadata",
+      "name": "launch.json",
+      "sha256": "d92fd060a2904ab826317f15d17ce640169ae38f7d0f5047bc720478819be8de",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "resolved_training_config.json",
+      "sha256": "7b59813b6c93bfbb7a3ac694c8aae40f5e847503d939d7d1ed42334e4b5d97c2",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "model_parameter_accounting.json",
+      "sha256": "3fd7f4363b6d8bd321e7cc814547fca28a4a9a4f8ee4301a4932bd8142912901",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "actor_critic_parameter_accounting.json",
+      "sha256": "4a307caa8aa0654a15fb099632327d4d2e729bd019d416f017053336aec22602",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "replay_mmap_storage_accounting.json",
+      "sha256": "7eb600a9bac64eae74d4318d566a2b4f9facd60215ee4125dabecc5cd4410533",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evaluation_seed_manifest.json",
+      "sha256": "5abd59223d399706d3aae275a0cd71c866079a7cf03b585ef2e2d4aa44211adc",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_00_boundary.json",
+      "sha256": "3935cf5500dee1beb3848020e83ea7f7cf27f9d74688a1b1a5f02ecb16e05aec",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "evolving_core_consolidation/task_00_pre_validation.json",
+      "sha256": "9fdc919c52f5edb698b93273c1f0604049a0f9aac2a357a016b3a45aa34f6532",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "task0_result.json",
+      "sha256": "6301f7cb4952fa0ca29dd323dfcd786b6aed9f123e4934ba192ad45b77770cd8",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "source_metadata",
+      "name": "run_status.json",
+      "sha256": "208aed447420d8588ab2420b7bff9c8f26b845d1ad03ef675a49c81a9170f32e",
+      "repository_copy_excluded": false
+    },
+    {
+      "role": "full_training_log",
+      "name": "train.log",
+      "sha256": "e9791fbf7ac32e1c3ad82f38458a48456a4f061d3e1ab36630503d1155f14ece",
+      "repository_copy_excluded": true
+    }
+  ],
+  "notes": [
+    "The pre-consolidation fixed-validation score is the predeclared selection metric.",
+    "The boundary artifact reports the accepted post field after restoring the pre-consolidation state; the rejected 1497.5 candidate is preserved explicitly.",
+    "No model weights, snapshots, Replay mmap storage, TensorBoard events, or full training log are copied into Git."
+  ]
+}

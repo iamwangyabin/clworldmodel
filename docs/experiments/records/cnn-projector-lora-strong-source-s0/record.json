@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "record_id": "cnn-projector-lora-strong-source-s0",
+  "run_id": "cnn_projector_rssm_lora_arrow_v1_task1strongseeded_three_task_t270_single_gpu_r128_128_32_bf16_uint8_seed0_cpu12_taskaware_plasticity_pilot_v1_f61feae_20260827_run1",
+  "method": "CNN-Projector-RSSM-LoRA-ARROW-v1 (strong Task-1 source)",
+  "protocol": "CNN-Projector-RSSM-LoRA-ARROW-v1-Task1SnapshotSeeded-Atari-TaskAware",
+  "evidence_level": "pilot",
+  "classification": "single_seed_snapshot_seeded_incremental_pilot",
+  "status": "complete",
+  "recorded_at_utc": "2026-08-31T12:36:20Z",
+  "project_git": {
+    "commit": "f61feaec40d58157c2359fa24ae4aaa88f5436c0",
+    "clean": true,
+    "upstream": "origin/codex/cnn-compact-shared-actor",
+    "ahead": 0,
+    "behind": 0
+  },
+  "seed": {
+    "id": 0,
+    "value": 123456789
+  },
+  "task_awareness": "task_aware",
+  "task_order": [
+    "ALE/MsPacman-v5",
+    "ALE/Boxing-v5",
+    "ALE/CrazyClimber-v5"
+  ],
+  "completion": {
+    "total_task_count": 3,
+    "completed_task_count": 3,
+    "completed_epochs": 270,
+    "final_evaluation_performed": true,
+    "return_code": 0,
+    "started_at_utc": "2026-08-27T04:39:01.372905+00:00",
+    "finished_at_utc": "2026-08-27T10:33:12.974831+00:00"
+  },
+  "evaluation": {
+    "metric": "raw_environment_return",
+    "policy": "deterministic_argmax_and_latent_mode",
+    "cohort_protocol": "heldout_final",
+    "evaluation_transitions_enter_replay": false,
+    "checkpoints": [
+      {
+        "checkpoint_id": "heldout-final",
+        "stage": "heldout_final",
+        "completed_epochs": 270,
+        "completed_task_count": 3,
+        "cohort": "heldout_final",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2595.625,
+            "raw_return_std": 491.7820750850929
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 59.6875,
+            "raw_return_std": 12.25621653488547
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 15900.00057220459,
+            "raw_return_std": 624.337059334558
+          }
+        ]
+      }
+    ]
+  },
+  "headline": {
+    "summary": "Held-out seed-0 raw returns: MsPacman 2595.62; Boxing 59.6875; CrazyClimber 15900."
+  },
+  "budgets": {
+    "source_completed_task1_epochs": 90,
+    "new_training_epochs": 180,
+    "new_raw_environment_frames": 11796480,
+    "new_world_model_updates": 90000,
+    "new_actor_critic_updates": 72000,
+    "replay_initial_state": "empty",
+    "source_replay_reused": false
+  },
+  "parameter_accounting": {
+    "rssm_lora_ranks": {
+      "recurrent": 128,
+      "representation": 128,
+      "transition": 32
+    },
+    "rssm_adapter_parameters_per_later_task": 2455808,
+    "projector_parameters_per_later_task": 34240,
+    "world_model_parameters": 41604207,
+    "actor_critic_topology": "per_task_actor_critic_bank",
+    "actor_critic_parameters": 5147955,
+    "aggregate_model_plus_actor_critic_parameters": 46752162
+  },
+  "comparability": {
+    "direct_comparison_group": null,
+    "claim": "Single-seed task-aware pilot evidence only; no fair superiority or task-agnostic claim is allowed.",
+    "limitations": [
+      "The FullBank pilot uses half the original ARROW optimizer updates and twice the sampled-frame use per task.",
+      "The snapshot-seeded methods restart Replay, optimizers, RNG, and schedule state at Boxing and are not equivalent resumes.",
+      "The two high-capacity LoRA runs use different Task-1 source snapshots, so their raw returns must not be treated as a controlled seed comparison.",
+      "The compact independent-Actor result is a two-epoch target-GPU smoke only."
+    ]
+  },
+  "source_artifacts": [
+    {
+      "role": "curated_source_result",
+      "name": "cnn_incremental_seed0_results_20260827.json",
+      "repository_path": "docs/protocols/references/cnn_incremental_seed0_results_20260827.json",
+      "sha256": "5300227d384289b7259bd784121ae345e29cc9f2f725a2ae0718339e333c6a99"
+    },
+    {
+      "role": "actor_critic_parameter_accounting",
+      "name": "actor_critic_parameter_accounting.json",
+      "sha256": "346c5f72bb956016663137d378410faefc96ebf6501dd9763e3af0d09c08cb05",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "evaluation_seed_manifest",
+      "name": "evaluation_seed_manifest.json",
+      "sha256": "3736cfa01ff32141d9babb61bc675edd0a60fa6b95dbcc20958086483271f3f6",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "final_evaluation",
+      "name": "final_evaluation.json",
+      "sha256": "3989586c5361c21ddc42ec440bcb66dc46f72c266f484df08821443bd45344a2",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "launch",
+      "name": "launch.json",
+      "sha256": "5a5d70f18095675cdf283cb2d5ad5c727309f827a172760ffebce7c1ce1f0181",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "model_parameter_accounting",
+      "name": "model_parameter_accounting.json",
+      "sha256": "24bca4d3ceef20671eeabb13d6d680a96b3894d88065f4ed10d8fdea9cebfc94",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "resolved_training_config",
+      "name": "resolved_training_config.json",
+      "sha256": "dec56b40062cafdf0c1321105843e7964336b98be69c5ec9a04334cecff55039",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "run_status",
+      "name": "run_status.json",
+      "sha256": "9d08b1e9cf5ec006276a58e4ce92602f94aea156358cea7e209f86ee6fcf791f",
+      "repository_copy_excluded": true
+    }
+  ],
+  "notes": [
+    "Evaluation transitions did not enter Replay.",
+    "The aggregate source artifact intentionally excludes weights, checkpoints, Replay storage, TensorBoard events, and full training logs."
+  ]
+}
