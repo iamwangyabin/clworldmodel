@@ -163,6 +163,16 @@ def _world_model(config: Config, device: torch.device) -> WorldModel:
         full_task_rssm_experts=config.uses_full_task_rssm_experts,
         task_private_heads=config.uses_task_private_heads,
         task_shared_prediction_heads=config.uses_shared_prediction_heads,
+        task_private_prediction_adapters=(
+            config.task_private_prediction_adapters
+        ),
+        prediction_adapter_rank=config.prediction_adapter_rank,
+        prediction_adapter_residual_scale=(
+            config.prediction_adapter_residual_scale
+        ),
+        freeze_shared_prediction_heads_after_task0=(
+            config.freeze_shared_prediction_heads_after_task0
+        ),
         evolving_shared_core=config.evolving_shared_core,
         task_banked_image_encoder=config.task_banked_image_encoder,
         task_projected_image_encoder=config.task_projected_image_encoder,
@@ -188,6 +198,7 @@ def _world_model(config: Config, device: torch.device) -> WorldModel:
         task_mechanism_residual_scale=config.task_mechanism_residual_scale,
         task_mechanism_num_atoms=config.task_mechanism_num_atoms,
         task_mechanism_parameterization=config.task_mechanism_parameterization,
+        task_mechanism_low_rank=config.task_mechanism_low_rank,
         task_symmetric_mechanisms=config.task_atomic_routes,
     ).to(device)
 

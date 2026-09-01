@@ -144,6 +144,10 @@ class WorldModel(nn.Module):
         full_task_rssm_experts: Optional[bool] = None,
         task_private_heads: Optional[bool] = None,
         task_shared_prediction_heads: bool = False,
+        task_private_prediction_adapters: bool = False,
+        prediction_adapter_rank: int = 0,
+        prediction_adapter_residual_scale: float = 0.1,
+        freeze_shared_prediction_heads_after_task0: bool = False,
         evolving_shared_core: bool = False,
         task_banked_image_encoder: bool = False,
         task_projected_image_encoder: bool = False,
@@ -161,6 +165,7 @@ class WorldModel(nn.Module):
         task_mechanism_residual_scale: float = 0.1,
         task_mechanism_num_atoms: int = 1,
         task_mechanism_parameterization: str = "dense_private",
+        task_mechanism_low_rank: int = 0,
         task_symmetric_mechanisms: bool = False,
         image_embedder: Optional[nn.Module] = None,
         compute_dtype: str = "float32",
@@ -199,6 +204,12 @@ class WorldModel(nn.Module):
             raise TypeError("task_private_heads must be a boolean")
         if not isinstance(task_shared_prediction_heads, bool):
             raise TypeError("task_shared_prediction_heads must be a boolean")
+        if not isinstance(task_private_prediction_adapters, bool):
+            raise TypeError("task_private_prediction_adapters must be a boolean")
+        if not isinstance(freeze_shared_prediction_heads_after_task0, bool):
+            raise TypeError(
+                "freeze_shared_prediction_heads_after_task0 must be a boolean"
+            )
         if not isinstance(evolving_shared_core, bool):
             raise TypeError("evolving_shared_core must be a boolean")
         if task_private_heads and task_shared_prediction_heads:
@@ -208,6 +219,36 @@ class WorldModel(nn.Module):
         if task_shared_prediction_heads and not evolving_shared_core:
             raise ValueError(
                 "Task-shared prediction heads require an evolving shared core"
+            )
+        if task_private_prediction_adapters:
+            if not task_shared_prediction_heads:
+                raise ValueError(
+                    "Task-private prediction adapters require shared prediction heads"
+                )
+            if num_task_experts < 2:
+                raise ValueError(
+                    "Task-private prediction adapters require multiple task routes"
+                )
+            if prediction_adapter_rank < 1:
+                raise ValueError("Prediction-adapter rank must be positive")
+            if prediction_adapter_residual_scale <= 0:
+                raise ValueError(
+                    "Prediction-adapter residual scale must be positive"
+                )
+            if not freeze_shared_prediction_heads_after_task0:
+                raise ValueError(
+                    "Private prediction adapters require frozen Task-0 base heads"
+                )
+        elif prediction_adapter_rank != 0:
+            raise ValueError(
+                "Prediction-adapter rank requires task-private prediction adapters"
+            )
+        if (
+            freeze_shared_prediction_heads_after_task0
+            and not task_private_prediction_adapters
+        ):
+            raise ValueError(
+                "Frozen Task-0 prediction heads require private prediction adapters"
             )
         if task_private_heads and observation_objective not in {
             "reconstruction",
@@ -236,6 +277,16 @@ class WorldModel(nn.Module):
         self.full_task_rssm_experts = bool(full_task_rssm_experts)
         self.task_private_heads = task_private_heads
         self.task_shared_prediction_heads = task_shared_prediction_heads
+        self.task_private_prediction_adapters = (
+            task_private_prediction_adapters
+        )
+        self.prediction_adapter_rank = int(prediction_adapter_rank)
+        self.prediction_adapter_residual_scale = float(
+            prediction_adapter_residual_scale
+        )
+        self.freeze_shared_prediction_heads_after_task0 = (
+            freeze_shared_prediction_heads_after_task0
+        )
         self.evolving_shared_core = evolving_shared_core
 
         self.rssm = Rssm(
@@ -281,6 +332,7 @@ class WorldModel(nn.Module):
             task_mechanism_residual_scale=task_mechanism_residual_scale,
             task_mechanism_num_atoms=task_mechanism_num_atoms,
             task_mechanism_parameterization=task_mechanism_parameterization,
+            task_mechanism_low_rank=task_mechanism_low_rank,
             task_symmetric_mechanisms=task_symmetric_mechanisms,
             residual_correction=residual_correction,
             residual_bottleneck_features=residual_bottleneck_features,
@@ -474,11 +526,52 @@ class WorldModel(nn.Module):
         self.continue_experts = nn.ModuleList(
             copy.deepcopy(self.continue_fc) for _ in range(return_head_expert_count)
         )
+        self.prediction_adapters = nn.ModuleDict()
+        if self.task_private_prediction_adapters:
+            from clworldmodel.models.prediction_adapters import (
+                ZeroEffectFeatureAdapter,
+            )
+
+            # Adapter allocation must not perturb the Actor-Critic or any other
+            # downstream initialization in the matched Task-0 protocol.
+            with torch.random.fork_rng(devices=[]):
+                for head_name in ("observation", "reward", "continue"):
+                    self.prediction_adapters[head_name] = nn.ModuleList(
+                        ZeroEffectFeatureAdapter(
+                            self.zh_transform.out_features,
+                            self.prediction_adapter_rank,
+                            residual_scale=(
+                                self.prediction_adapter_residual_scale
+                            ),
+                        )
+                        for _ in range(num_task_experts - 1)
+                    )
         initialized = None
         if num_task_experts > 1:
             initialized = torch.zeros(num_task_experts, dtype=torch.bool)
             initialized[0] = True
         self.register_buffer("task_expert_initialized", initialized)
+
+    def prediction_adapter_for(
+        self,
+        head_name: str,
+        task_id: Optional[int | torch.Tensor],
+    ) -> Optional[nn.Module]:
+        if head_name not in {"observation", "reward", "continue"}:
+            raise ValueError(f"Unknown prediction-adapter head: {head_name!r}")
+        task_index = self.rssm._task_index(task_id)
+        if not self.task_private_prediction_adapters or task_index == 0:
+            return None
+        return self.prediction_adapters[head_name][task_index - 1]
+
+    def prediction_features_for(
+        self,
+        head_name: str,
+        model_state: torch.Tensor,
+        task_id: Optional[int | torch.Tensor],
+    ) -> torch.Tensor:
+        adapter = self.prediction_adapter_for(head_name, task_id)
+        return model_state if adapter is None else adapter(model_state)
 
     def _head_for(
         self,
@@ -551,6 +644,14 @@ class WorldModel(nn.Module):
                 self.feature_predictor_for(target_index).load_state_dict(
                     self.feature_predictor_for(source_index).state_dict()
                 )
+        elif self.task_private_prediction_adapters and target_index > 0:
+            for head_name in ("observation", "reward", "continue"):
+                adapter = self.prediction_adapter_for(head_name, target_index)
+                if adapter is None or not hasattr(adapter, "reset_parameters"):
+                    raise RuntimeError(
+                        "A private prediction adapter is missing its reset contract"
+                    )
+                adapter.reset_parameters()
         self.task_expert_initialized[target_index] = True
         return True
 
@@ -644,12 +745,22 @@ class WorldModel(nn.Module):
                 self.rssm.representation_for(index).requires_grad_(is_active)
                 self.rssm.transition_for(index).requires_grad_(is_active)
         if self.task_shared_prediction_heads:
-            self.reward_fc.requires_grad_(True)
-            self.continue_fc.requires_grad_(True)
+            base_head_is_active = (
+                not self.freeze_shared_prediction_heads_after_task0
+                or task_index == 0
+            )
+            self.reward_fc.requires_grad_(base_head_is_active)
+            self.continue_fc.requires_grad_(base_head_is_active)
             if self.observation_objective == "reconstruction":
-                self.decoder.requires_grad_(True)
+                self.decoder.requires_grad_(base_head_is_active)
             else:
-                self.feature_predictor.requires_grad_(True)
+                self.feature_predictor.requires_grad_(base_head_is_active)
+            if self.task_private_prediction_adapters:
+                for head_name in ("observation", "reward", "continue"):
+                    for adapter_index, adapter in enumerate(
+                        self.prediction_adapters[head_name], start=1
+                    ):
+                        adapter.requires_grad_(adapter_index == task_index)
         else:
             for index in range(self.rssm.num_task_experts):
                 is_active = index == task_index
@@ -684,7 +795,10 @@ class WorldModel(nn.Module):
 
         groups = self.rssm.shared_parameter_groups()
         groups["latent_interface"] = list(self.zh_transform.parameters())
-        if self.task_shared_prediction_heads:
+        if (
+            self.task_shared_prediction_heads
+            and not self.freeze_shared_prediction_heads_after_task0
+        ):
             observation_head = (
                 self.decoder
                 if self.observation_objective == "reconstruction"
@@ -703,7 +817,25 @@ class WorldModel(nn.Module):
 
         task_index = self.rssm._task_index(task_id)
         parameters = list(self.rssm.private_parameters(task_index))
-        if not self.task_shared_prediction_heads:
+        if self.task_private_prediction_adapters:
+            if task_index == 0:
+                parameters.extend(self.reward_fc.parameters())
+                parameters.extend(self.continue_fc.parameters())
+                observation_head = (
+                    self.decoder
+                    if self.observation_objective == "reconstruction"
+                    else self.feature_predictor
+                )
+                parameters.extend(observation_head.parameters())
+            else:
+                for head_name in ("observation", "reward", "continue"):
+                    adapter = self.prediction_adapter_for(head_name, task_index)
+                    if adapter is None:
+                        raise RuntimeError(
+                            "A later task is missing its private prediction adapter"
+                        )
+                    parameters.extend(adapter.parameters())
+        elif not self.task_shared_prediction_heads:
             parameters.extend(
                 self._head_for(
                     self.reward_fc, self.reward_experts, task_index
@@ -750,7 +882,10 @@ class WorldModel(nn.Module):
             "prior": copy.deepcopy(self.rssm.transition.state_dict()),
             "latent_interface": copy.deepcopy(self.zh_transform.state_dict()),
         }
-        if self.task_shared_prediction_heads:
+        if (
+            self.task_shared_prediction_heads
+            and not self.freeze_shared_prediction_heads_after_task0
+        ):
             observation_head = (
                 self.decoder
                 if self.observation_objective == "reconstruction"
@@ -780,7 +915,10 @@ class WorldModel(nn.Module):
             "prior",
             "latent_interface",
         }
-        if self.task_shared_prediction_heads:
+        if (
+            self.task_shared_prediction_heads
+            and not self.freeze_shared_prediction_heads_after_task0
+        ):
             required.update(
                 {"observation_head", "reward_head", "continue_head"}
             )
@@ -796,7 +934,10 @@ class WorldModel(nn.Module):
         self.rssm.recurrent.load_state_dict(state["recurrent"], strict=True)
         self.rssm.transition.load_state_dict(state["prior"], strict=True)
         self.zh_transform.load_state_dict(state["latent_interface"], strict=True)
-        if self.task_shared_prediction_heads:
+        if (
+            self.task_shared_prediction_heads
+            and not self.freeze_shared_prediction_heads_after_task0
+        ):
             observation_head = (
                 self.decoder
                 if self.observation_objective == "reconstruction"
@@ -813,22 +954,49 @@ class WorldModel(nn.Module):
     def predict_reward_symlog(
         self, model_state: torch.Tensor, task_id: Optional[int | torch.Tensor] = None
     ) -> torch.Tensor:
+        head_features = self.prediction_features_for(
+            "reward", model_state, task_id
+        )
         prediction = self._head_for(
             self.reward_fc, self.reward_experts, task_id
-        )(model_state)
+        )(head_features)
         if self.reward_residual is not None:
-            prediction = prediction + self.reward_residual(model_state)
+            prediction = prediction + self.reward_residual(head_features)
         return prediction
 
     def predict_continue_logits(
         self, model_state: torch.Tensor, task_id: Optional[int | torch.Tensor] = None
     ) -> torch.Tensor:
+        head_features = self.prediction_features_for(
+            "continue", model_state, task_id
+        )
         logits = self._head_for(
             self.continue_fc, self.continue_experts, task_id
-        )(model_state)
+        )(head_features)
         if self.continue_residual is not None:
-            logits = logits + self.continue_residual(model_state)
+            logits = logits + self.continue_residual(head_features)
         return logits
+
+    def predict_observation(
+        self,
+        model_state: torch.Tensor,
+        task_id: Optional[int | torch.Tensor] = None,
+    ) -> torch.Tensor:
+        head_features = self.prediction_features_for(
+            "observation", model_state, task_id
+        )
+        if self.observation_objective == "reconstruction":
+            return self.decoder_for(task_id)(head_features)
+        if hasattr(self, "feature_predictor"):
+            prediction = self.feature_predictor_for(task_id)(head_features)
+            if self.feature_predictor_residual is not None:
+                prediction = prediction + self.feature_predictor_residual(
+                    head_features
+                )
+            return prediction
+        raise RuntimeError(
+            "The configured observation objective has no prediction head"
+        )
 
     def predict_continue(
         self, model_state: torch.Tensor, task_id: Optional[int | torch.Tensor] = None
@@ -1041,7 +1209,9 @@ class WorldModel(nn.Module):
         t, n, x = zhs.shape
         zhs_f12 = zhs.view(-1, x)
         if self.observation_objective == "reconstruction":
-            recon = self.decoder_for(task_id)(zhs_f12).view(t, n, *xs.shape[-3:])
+            recon = self.predict_observation(zhs_f12, task_id).view(
+                t, n, *xs.shape[-3:]
+            )
             observation_prediction = recon
             # Loss shape [ T N C 64 64 ]
             observation_losses = (recon.float() - xs.float()).square().sum([2, 3, 4])
@@ -1069,11 +1239,7 @@ class WorldModel(nn.Module):
             if embeddings is None:
                 raise RuntimeError("DINOv3 objective requires frozen observation features")
             prior_states = self.zh_transform(z_priors.exp(), hiddens)
-            predicted_features = self.feature_predictor_for(task_id)(prior_states)
-            if self.feature_predictor_residual is not None:
-                predicted_features = predicted_features + self.feature_predictor_residual(
-                    prior_states
-                )
+            predicted_features = self.predict_observation(prior_states, task_id)
             observation_prediction = predicted_features
             feature_losses = 1.0 - F.cosine_similarity(
                 predicted_features.float(),
@@ -1099,11 +1265,7 @@ class WorldModel(nn.Module):
         else:
             if embeddings is None:
                 raise RuntimeError("DINOv3 objective requires frozen observation features")
-            predicted_features = self.feature_predictor_for(task_id)(zhs)
-            if self.feature_predictor_residual is not None:
-                predicted_features = predicted_features + self.feature_predictor_residual(
-                    zhs
-                )
+            predicted_features = self.predict_observation(zhs, task_id)
             observation_prediction = predicted_features
             feature_losses, constant_losses = batch_standardized_smooth_l1(
                 predicted_features,

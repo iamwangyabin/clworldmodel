@@ -136,6 +136,113 @@ class ResidualMechanism(nn.Module):
         }
 
 
+class LearnedBaseLowRankMechanism(nn.Module):
+    """Task-private low-rank delta on a learned Task-0 mechanism.
+
+    ``base`` is owned and serialized by ``MechanismBank.mechanisms[0]``.  The
+    reference here is intentionally non-owning so every later task reuses the
+    exact frozen Task-0 function without duplicating its parameters in the
+    module state.  Only ``up_out`` is zero initialized, which makes the private
+    delta exactly zero while preserving a first-step gradient into that layer.
+    """
+
+    def __init__(
+        self,
+        base: ResidualMechanism,
+        *,
+        rank: int,
+        num_atoms: int = 1,
+    ) -> None:
+        super().__init__()
+        if rank < 1:
+            raise ValueError("Learned-base adapter rank must be positive")
+        if num_atoms < 1:
+            raise ValueError("Learned-base adapter atom count must be positive")
+        if rank % num_atoms:
+            raise ValueError("Learned-base adapter rank must be divisible by atoms")
+
+        self.in_features = base.in_features
+        self.out_features = base.out_features
+        self.hidden_features = base.hidden_features
+        self.residual_scale = base.residual_scale
+        self.rank = int(rank)
+        self.num_atoms = int(num_atoms)
+        self.atom_width = self.rank // self.num_atoms
+        # Avoid registering the bank-owned base a second time.  Deepcopy keeps
+        # this reference tied to the copied bank base through Python's memo.
+        object.__setattr__(self, "_base", base)
+        self.norm = nn.LayerNorm(self.in_features, eps=1e-3)
+        self.down_basis = nn.Linear(self.in_features, self.rank, bias=False)
+        self.down_expand = nn.Linear(self.rank, self.hidden_features)
+        self.up_basis = nn.Linear(self.hidden_features, self.rank, bias=False)
+        self.up_out = nn.Linear(self.rank, self.out_features)
+        self.reset_parameters()
+
+    def base_mechanism(self) -> ResidualMechanism:
+        base = self._base
+        if not isinstance(base, ResidualMechanism):
+            raise RuntimeError("A learned-base adapter lost its Task-0 mechanism")
+        return base
+
+    def reset_parameters(self) -> None:
+        self.norm.reset_parameters()
+        self.down_basis.reset_parameters()
+        self.down_expand.reset_parameters()
+        self.up_basis.reset_parameters()
+        nn.init.zeros_(self.up_out.weight)
+        nn.init.zeros_(self.up_out.bias)
+
+    def private_features_for(self, inputs: torch.Tensor) -> torch.Tensor:
+        if inputs.shape[-1] != self.in_features:
+            raise ValueError(
+                f"Expected {self.in_features} learned-base features, "
+                f"got {inputs.shape[-1]}"
+            )
+        hidden = self.down_expand(self.down_basis(self.norm(inputs)))
+        return self.up_basis(F.silu(hidden))
+
+    def private_delta(self, inputs: torch.Tensor) -> torch.Tensor:
+        features = self.private_features_for(inputs)
+        return self.residual_scale * self.up_out(features)
+
+    def forward_with_private_delta(
+        self, inputs: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        private_delta = self.private_delta(inputs)
+        return self.base_mechanism()(inputs) + private_delta, private_delta
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        output, _private_delta = self.forward_with_private_delta(inputs)
+        return output
+
+    def atom_outputs(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Return a lossless atom partition of the private delta only."""
+
+        features = self.private_features_for(inputs).unflatten(
+            -1, (self.num_atoms, self.atom_width)
+        )
+        weight = self.up_out.weight.reshape(
+            self.out_features, self.num_atoms, self.atom_width
+        )
+        outputs = torch.einsum("...ad,oad->...ao", features, weight)
+        outputs = outputs + self.up_out.bias / self.num_atoms
+        return self.residual_scale * outputs
+
+    def parameter_report(self) -> dict[str, int | float | str]:
+        return {
+            "kind": "learned_task0_base_plus_zero_effect_low_rank_delta",
+            "in_features": self.in_features,
+            "out_features": self.out_features,
+            "hidden_features": self.hidden_features,
+            "rank": self.rank,
+            "num_atoms": self.num_atoms,
+            "atom_width": self.atom_width,
+            "residual_scale": self.residual_scale,
+            "parameterization": "learned_task0_low_rank",
+            "parameters": sum(parameter.numel() for parameter in self.parameters()),
+        }
+
+
 class ReuseRoute(nn.Module):
     """Independent tanh gates over atoms learned by earlier tasks."""
 
@@ -251,6 +358,7 @@ class MechanismBank(nn.Module):
         num_atoms: int = 1,
         include_task0: bool = False,
         parameterization: str = "dense_private",
+        low_rank_rank: int = 0,
     ) -> None:
         super().__init__()
         if num_tasks < 2:
@@ -267,11 +375,36 @@ class MechanismBank(nn.Module):
         if parameterization not in {
             "dense_private",
             "shared_frozen_down_film",
+            "learned_task0_low_rank",
         }:
             raise ValueError(
                 f"Unknown mechanism parameterization: {parameterization!r}"
             )
         self.parameterization = parameterization
+        self.low_rank_rank = int(low_rank_rank)
+        if self.low_rank_rank < 0:
+            raise ValueError("Mechanism low-rank size must be non-negative")
+        if self.parameterization == "learned_task0_low_rank":
+            if not self.include_task0:
+                raise ValueError(
+                    "Learned Task-0 mechanisms require symmetric task allocation"
+                )
+            if self.reuse_enabled:
+                raise ValueError(
+                    "Learned Task-0 low-rank mechanisms do not compose with atom reuse"
+                )
+            if self.low_rank_rank < 1:
+                raise ValueError(
+                    "Learned Task-0 low-rank mechanisms require a positive rank"
+                )
+            if self.low_rank_rank % self.num_atoms:
+                raise ValueError(
+                    "Mechanism low-rank size must be divisible by the atom count"
+                )
+        elif self.low_rank_rank:
+            raise ValueError(
+                "Mechanism low-rank size is valid only for learned_task0_low_rank"
+            )
         self.shared_down: nn.Linear | None
         if self.parameterization == "shared_frozen_down_film":
             self.shared_down = nn.Linear(self.in_features, self.hidden_features)
@@ -282,20 +415,42 @@ class MechanismBank(nn.Module):
         self._recorded_atom_norm_sum: torch.Tensor | None = None
         self._recorded_correction_norm_sum: torch.Tensor | None = None
         self._recorded_value_count = 0
-        self.mechanisms = nn.ModuleList(
-            ResidualMechanism(
+        if self.parameterization == "learned_task0_low_rank":
+            base = ResidualMechanism(
                 in_features=self.in_features,
                 out_features=self.out_features,
                 hidden_features=self.hidden_features,
                 residual_scale=self.residual_scale,
                 num_atoms=self.num_atoms,
-                shared_down=self.shared_down,
-                hidden_film=self.shared_down is not None,
             )
-            for _ in range(
-                self.num_tasks if self.include_task0 else self.num_tasks - 1
+            self.mechanisms = nn.ModuleList(
+                [
+                    base,
+                    *(
+                        LearnedBaseLowRankMechanism(
+                            base,
+                            rank=self.low_rank_rank,
+                            num_atoms=self.num_atoms,
+                        )
+                        for _ in range(self.num_tasks - 1)
+                    ),
+                ]
             )
-        )
+        else:
+            self.mechanisms = nn.ModuleList(
+                ResidualMechanism(
+                    in_features=self.in_features,
+                    out_features=self.out_features,
+                    hidden_features=self.hidden_features,
+                    residual_scale=self.residual_scale,
+                    num_atoms=self.num_atoms,
+                    shared_down=self.shared_down,
+                    hidden_film=self.shared_down is not None,
+                )
+                for _ in range(
+                    self.num_tasks if self.include_task0 else self.num_tasks - 1
+                )
+            )
         self.routes = nn.ModuleList(
             ReuseRoute(
                 num_old_mechanisms=(
@@ -327,7 +482,7 @@ class MechanismBank(nn.Module):
             return None
         return task_index if self.include_task0 else task_index - 1
 
-    def mechanism_for(self, task_id: int) -> ResidualMechanism | None:
+    def mechanism_for(self, task_id: int) -> nn.Module | None:
         """Return the private mechanism owned by ``task_id``, if one exists."""
 
         index = self._mechanism_index(task_id)
@@ -360,8 +515,12 @@ class MechanismBank(nn.Module):
             zeros = inputs.new_zeros(output_shape)
             return zeros, zeros
 
-        current_output = self.mechanisms[current_index](inputs)
-        correction = current_output
+        mechanism = self.mechanisms[current_index]
+        if isinstance(mechanism, LearnedBaseLowRankMechanism):
+            correction, current_output = mechanism.forward_with_private_delta(inputs)
+        else:
+            correction = mechanism(inputs)
+            current_output = correction
         recorded_atom_norms = None
         if self.reuse_enabled:
             route_index = self._route_index(task_index)
@@ -612,6 +771,12 @@ class MechanismBank(nn.Module):
             "reuse_enabled": self.reuse_enabled,
             "include_task0": self.include_task0,
             "parameterization": self.parameterization,
+            "low_rank_rank": self.low_rank_rank,
+            "low_rank_atom_width": (
+                self.low_rank_rank // self.num_atoms
+                if self.low_rank_rank
+                else 0
+            ),
             "shared_down_parameters": shared_down_parameters,
             "shared_down_trainable_parameters": (
                 0

@@ -18,6 +18,7 @@ from .residual_corrections import (
     soft_basis_support_overlap,
 )
 from .r2 import R2BarlowObjective, R2Projector, barlow_twins_loss
+from .prediction_adapters import ZeroEffectFeatureAdapter
 from .relu_kan import (
     AdaptiveReLUKANActor,
     BoundedReLUKANActor,
@@ -46,6 +47,7 @@ __all__ = [
     "RMSNorm",
     "ResidualCorrection",
     "ReLUKANActor",
+    "ZeroEffectFeatureAdapter",
     "barlow_twins_loss",
     "build_residual_correction",
     "soft_basis_support_overlap",

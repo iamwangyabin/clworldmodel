@@ -62,11 +62,11 @@ For the fixed three-task Atari topology:
 - One online FastKAN pair: `1,700,670` (`793,692` Actor and `906,978` Critic).
 - New-method online total: `44,376,209` parameters.
 - The same Shared-Frozen-Down world model with three private MLP pairs would
-  use `47,820,422`, so sharing the FastKAN pair removes `3,444,213` online
+  use `47,823,494`, so sharing the FastKAN pair removes `3,447,285` online
   parameters.
-- Dense Evolving-Core v2 with three private MLP pairs uses `53,320,326`; the
-  combined world-model and behavior change is `8,944,117` parameters smaller.
-- Plain ARROW-50 uses `21,213,814`, so the new method remains `23,162,395`
+- Dense Evolving-Core v2 with three private MLP pairs uses `53,323,398`; the
+  combined world-model and behavior change is `8,947,189` parameters smaller.
+- Plain ARROW-50 uses `21,214,838`, so the new method remains `23,161,371`
   parameters larger.
 
 The StableTargets slow critic adds `906,978` training-only parameters and the

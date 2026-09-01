@@ -555,7 +555,27 @@ documented here, covered by focused parity tests, and followed by regenerating
     Focused tests cover exact Task-0 forward parity, single-copy ownership,
     output distillation, head-wise projection, persistent optimizer groups,
     rollback coverage, strict config isolation, and the exact six-task
-    `52,891,391`-parameter ledger.
+    `52,897,535`-parameter ledger. Parameter-only accounting also corrects the
+    MLP critic reference to include its 1,024 LayerNorm scale/bias parameters.
+
+57. Add the separately named, task-aware
+    `Evolving-Core-LearnedTask0Base-LowRank32QFP-PrivatePredictionAdapters-PrivateMLPAC-ARROW-v1`
+    pilot. Task 0 learns the existing full-width Dense recurrent/posterior/prior
+    mechanisms; those functions then become frozen, single-copy bases for
+    exact-zero Rank-32 private residuals on later tasks. Old-atom reuse is
+    disabled. The Task-0 decoder/reward/continuation set is likewise frozen
+    after acquisition, while every later task receives three independent
+    exact-zero Rank-32 input-feature adapters. Independent MLP Actor-Critics,
+    ARROW-50 Replay, environment/update budgets, real old-task Dreamer loss,
+    interface and prediction-output distillation, shared-core consolidation,
+    rollback, and fixed evaluation cohorts remain unchanged. Config validation
+    fixes rank 32 and rejects random/shared-down relabeling, adapter drift, or
+    reuse. Runtime accounting records the learned base, private residuals,
+    prediction adapters, inactive route tensors, and exact six-task
+    `37,156,095`-parameter online ledger. Focused tests cover zero-effect
+    initialization, non-duplicating base ownership and deepcopy/state behavior,
+    optimizer isolation, Task-0 head freezing, exact routing, strict protocol
+    validation, and analytic/runtime parameter parity.
 
 ## Known issues at import
 

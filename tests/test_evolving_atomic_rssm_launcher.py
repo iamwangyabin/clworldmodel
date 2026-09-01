@@ -429,17 +429,17 @@ class EvolvingAtomicRssmLauncherTests(unittest.TestCase):
             parameters["comparison_to_matched_world_model_private_mlp"][
                 "difference"
             ],
-            -3_444_213,
+            -3_447_285,
         )
         self.assertEqual(
             parameters["comparison_to_dense_evolving_v2_private_mlp"][
                 "difference"
             ],
-            -8_944_117,
+            -8_947_189,
         )
         self.assertEqual(
             parameters["comparison_to_arrow_50"]["difference"],
-            23_162_395,
+            23_161_371,
         )
         self.assertEqual(
             parameters["per_task_world_model_additions"],
@@ -506,9 +506,9 @@ class EvolvingAtomicRssmLauncherTests(unittest.TestCase):
 
         self.assertEqual(parameters["prediction_head_topology"], "single_shared")
         self.assertEqual(parameters["world_model_parameters"], 42_601_625)
-        self.assertEqual(parameters["behavior_parameters"], 10_289_766)
-        self.assertEqual(parameters["online_parameters"], 52_891_391)
-        self.assertEqual(parameters["fp32_parameter_bytes"], 211_565_564)
+        self.assertEqual(parameters["behavior_parameters"], 10_295_910)
+        self.assertEqual(parameters["online_parameters"], 52_897_535)
+        self.assertEqual(parameters["fp32_parameter_bytes"], 211_590_140)
         self.assertEqual(
             parameters["per_task_world_model_additions"],
             {
@@ -528,7 +528,7 @@ class EvolvingAtomicRssmLauncherTests(unittest.TestCase):
             parameters["comparison_to_dense_evolving_v2_private_mlp"][
                 "relative_difference"
             ],
-            -0.4473470829010654,
+            -0.447318366142629,
         )
         self.assertEqual(
             parameters["training_only_prediction_head_teacher"]["parameters"],

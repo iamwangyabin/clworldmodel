@@ -117,7 +117,7 @@ KAN_ACTOR_METADATA = {
         "anchor_parameters": 0,
         "trainable_parameters": 795_730,
         "critic_network": "mlp",
-        "critic_trainable_parameters": 917_759,
+        "critic_trainable_parameters": 918_783,
     },
     "relu_kan_bounded": {
         "method": "ARROW-KANActorBounded-50",
@@ -129,7 +129,7 @@ KAN_ACTOR_METADATA = {
         "anchor_parameters": 0,
         "trainable_parameters": 795_858,
         "critic_network": "mlp",
-        "critic_trainable_parameters": 917_759,
+        "critic_trainable_parameters": 918_783,
     },
     "relu_kan_adaptive": {
         "method": "ARROW-KANActorAdaptive-50",
@@ -141,7 +141,7 @@ KAN_ACTOR_METADATA = {
         "anchor_parameters": 25_600,
         "trainable_parameters": 821_458,
         "critic_network": "mlp",
-        "critic_trainable_parameters": 917_759,
+        "critic_trainable_parameters": 918_783,
     },
     "fast_kan_ac": {
         "method": "ARROW-FastKANAC-KDAligned-50",
@@ -1015,7 +1015,7 @@ def main() -> int:
                     "critic_trainable_parameters"
                 ]
                 if is_kan_actor
-                else 917_759
+                else 918_783
             ),
             "combined_trainable_parameters": (
                 KAN_ACTOR_METADATA[args.actor_network]["trainable_parameters"]
@@ -1023,15 +1023,15 @@ def main() -> int:
                     "critic_trainable_parameters"
                 ]
                 if is_kan_actor
-                else 1_714_961
+                else 1_715_985
             ),
-            "mlp_combined_trainable_parameters": 1_714_961,
+            "mlp_combined_trainable_parameters": 1_715_985,
             "combined_parameter_difference_from_mlp": (
                 KAN_ACTOR_METADATA[args.actor_network]["trainable_parameters"]
                 + KAN_ACTOR_METADATA[args.actor_network][
                     "critic_trainable_parameters"
                 ]
-                - 1_714_961
+                - 1_715_985
                 if is_kan_actor
                 else 0
             ),

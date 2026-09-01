@@ -118,8 +118,8 @@ later head copies.
 |---|---:|---:|---:|---:|
 | three-task shared heads + Dense Q/F/P + 3 private MLP pairs | `31,050,185` | `5,144,883` | `36,195,068` | `144,780,272` |
 | three-task Dense reference | `48,175,443` | `5,144,883` | `53,320,326` | `213,281,304` |
-| six-task shared heads + Dense Q/F/P + 6 private MLP pairs | `42,601,625` | `10,289,766` | `52,891,391` | `211,565,564` |
-| six-task Dense reference | `85,414,770` | `10,289,766` | `95,704,536` | `382,818,144` |
+| six-task shared heads + Dense Q/F/P + 6 private MLP pairs | `42,601,625` | `10,295,910` | `52,897,535` | `211,590,140` |
+| six-task Dense reference | `85,414,770` | `10,295,910` | `95,710,680` | `382,842,720` |
 
 The six per-task world-model additions are `3,850,432`, `3,850,444`,
 `3,850,456`, `3,850,468`, `3,850,480`, and `3,850,492`. The six-task reduction

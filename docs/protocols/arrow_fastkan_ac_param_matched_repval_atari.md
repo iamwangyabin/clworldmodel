@@ -23,8 +23,8 @@ from 34 to 53.
 | Behavior head | MLP reference | Width-53 FastKAN | Difference |
 | --- | ---: | ---: | ---: |
 | Actor | 797,202 | 793,692 | -3,510 |
-| Critic | 917,759 | 906,978 | -10,781 |
-| Combined | 1,714,961 | 1,700,670 | -14,291 (-0.83%) |
+| Critic | 918,783 | 906,978 | -11,805 |
+| Combined | 1,715,985 | 1,700,670 | -15,315 (-0.89%) |
 
 The slow critic remains frozen training state and is not included in online
 model parameter matching.

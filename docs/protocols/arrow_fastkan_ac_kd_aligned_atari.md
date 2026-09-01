@@ -49,12 +49,12 @@ the paper's stated direct replacement.
 | Behavior head | Trainable parameters |
 | --- | ---: |
 | ARROW MLP actor | 797,202 |
-| ARROW MLP critic | 917,759 |
+| ARROW MLP critic | 918,783 |
 | FastKAN actor | 498,090 |
 | FastKAN critic | 570,849 |
 
-The online FastKAN pair has 1,068,939 trainable parameters, 646,022 fewer
-(`37.67%`) than ARROW's 1,714,961-parameter MLP pair. Width 34 is copied from
+The online FastKAN pair has 1,068,939 trainable parameters, 647,046 fewer
+(`37.71%`) than ARROW's 1,715,985-parameter MLP pair. Width 34 is copied from
 KAN-Dreamer's approximately 10.5M whole-model comparison; it does not
 parameter-match ARROW's shallower width-512 behavior heads. The critic EMA adds
 another 570,849 frozen training-state parameters and is reported separately in

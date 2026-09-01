@@ -36,6 +36,7 @@ ContinualMethod = Literal[
     "rec_rssm_arrow",
     "evolving_atomic_rssm_arrow",
     "evolving_atomic_rssm_shared_heads_arrow",
+    "evolving_atomic_rssm_learned_base_adapters_arrow",
     "evolving_atomic_rssm_shared_fastkan_arrow",
     "dino_fullbank_arrow",
     "dino_patchbank_arrow",
@@ -74,6 +75,7 @@ TaskMechanismCapacityProfile = Literal[
 TaskMechanismParameterization = Literal[
     "dense_private",
     "shared_frozen_down_film",
+    "learned_task0_low_rank",
 ]
 EvaluationSeedProtocol = Literal[
     "advancing",
@@ -332,6 +334,7 @@ class Config(Serialisable):
     task_mechanism_reuse: bool = True
     task_mechanism_capacity_profile: TaskMechanismCapacityProfile = "matched_512"
     task_mechanism_parameterization: TaskMechanismParameterization = "dense_private"
+    task_mechanism_low_rank: int = 0
     task_mechanism_recurrent_width: int = 512
     task_mechanism_representation_width: int = 512
     task_mechanism_transition_width: int = 256
@@ -365,6 +368,10 @@ class Config(Serialisable):
     evolving_shared_behavior_current_task_fraction: float = 1.0
     task_private_heads: bool = False
     task_shared_prediction_heads: bool = False
+    task_private_prediction_adapters: bool = False
+    prediction_adapter_rank: int = 0
+    prediction_adapter_residual_scale: float = 0.1
+    freeze_shared_prediction_heads_after_task0: bool = False
     shared_prediction_distill_scale: float = 0.0
     task_private_actor_critic: bool = False
     task_atomic_routes: bool = False
@@ -476,6 +483,7 @@ class Config(Serialisable):
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
@@ -502,14 +510,38 @@ class Config(Serialisable):
             self.continual_method
             == "evolving_atomic_rssm_shared_heads_arrow"
         )
+        is_evolving_learned_base_adapters = (
+            self.continual_method
+            == "evolving_atomic_rssm_learned_base_adapters_arrow"
+        )
+        uses_evolving_shared_heads = (
+            is_evolving_shared_heads or is_evolving_learned_base_adapters
+        )
         is_evolving_atomic = self.continual_method in {
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }
         if not isinstance(self.task_shared_prediction_heads, bool):
             raise ValueError("task_shared_prediction_heads must be a boolean")
-        if self.task_shared_prediction_heads and not is_evolving_shared_heads:
+        if not isinstance(self.task_private_prediction_adapters, bool):
+            raise ValueError(
+                "task_private_prediction_adapters must be a boolean"
+            )
+        if not isinstance(
+            self.freeze_shared_prediction_heads_after_task0, bool
+        ):
+            raise ValueError(
+                "freeze_shared_prediction_heads_after_task0 must be a boolean"
+            )
+        if self.prediction_adapter_rank < 0:
+            raise ValueError("prediction_adapter_rank must be non-negative")
+        if self.prediction_adapter_residual_scale <= 0:
+            raise ValueError(
+                "prediction_adapter_residual_scale must be positive"
+            )
+        if self.task_shared_prediction_heads and not uses_evolving_shared_heads:
             raise ValueError(
                 "Task-shared prediction heads require the separately named "
                 "shared prediction heads Evolving-Core method"
@@ -536,6 +568,7 @@ class Config(Serialisable):
         if self.task_mechanism_parameterization not in {
             "dense_private",
             "shared_frozen_down_film",
+            "learned_task0_low_rank",
         }:
             raise ValueError(
                 "Unknown mechanism parameterization: "
@@ -550,6 +583,34 @@ class Config(Serialisable):
                 raise ValueError(
                     "shared_frozen_down_film preserves the matched_512 hidden widths"
                 )
+        if self.task_mechanism_low_rank < 0:
+            raise ValueError("task_mechanism_low_rank must be non-negative")
+        if not isinstance(self.task_mechanism_num_atoms, int) or (
+            self.task_mechanism_num_atoms < 1
+        ):
+            raise ValueError("task_mechanism_num_atoms must be a positive integer")
+        if self.task_mechanism_parameterization == "learned_task0_low_rank":
+            if not is_evolving_learned_base_adapters:
+                raise ValueError(
+                    "learned_task0_low_rank is validated only for the named "
+                    "learned-base adapter method"
+                )
+            if self.task_mechanism_low_rank < 1:
+                raise ValueError(
+                    "learned_task0_low_rank requires a positive low-rank size"
+                )
+            if self.task_mechanism_reuse:
+                raise ValueError(
+                    "learned_task0_low_rank disables old-atom reuse"
+                )
+            if self.task_mechanism_low_rank % self.task_mechanism_num_atoms:
+                raise ValueError(
+                    "task_mechanism_low_rank must be divisible by atom count"
+                )
+        elif self.task_mechanism_low_rank:
+            raise ValueError(
+                "task_mechanism_low_rank requires learned_task0_low_rank"
+            )
         if (
             is_evolving_shared_fastkan
             and self.task_mechanism_parameterization
@@ -575,6 +636,20 @@ class Config(Serialisable):
                 "The shared-prediction-head Evolving-Core method requires "
                 "dense matched_512 Q/F/P mechanisms"
             )
+        if is_evolving_learned_base_adapters:
+            if self.task_mechanism_capacity_profile != "matched_512":
+                raise ValueError(
+                    "The learned-base adapter method preserves matched_512 widths"
+                )
+            if self.task_mechanism_parameterization != "learned_task0_low_rank":
+                raise ValueError(
+                    "The learned-base adapter method requires "
+                    "parameterization='learned_task0_low_rank'"
+                )
+            if self.task_mechanism_low_rank != 32:
+                raise ValueError(
+                    "The learned-base adapter pilot fixes Q/F/P low-rank size to 32"
+                )
         if (
             self.continual_method == "evolving_atomic_rssm_arrow"
             and self.task_mechanism_parameterization
@@ -590,10 +665,6 @@ class Config(Serialisable):
             self.task_mechanism_reuse, bool
         ):
             raise ValueError("Mechanism-bank enable/reuse settings must be booleans")
-        if not isinstance(self.task_mechanism_num_atoms, int) or (
-            self.task_mechanism_num_atoms < 1
-        ):
-            raise ValueError("task_mechanism_num_atoms must be a positive integer")
         if not isinstance(self.task_mechanism_reuse_probe_epochs, int) or (
             self.task_mechanism_reuse_probe_epochs < 0
         ):
@@ -629,6 +700,10 @@ class Config(Serialisable):
             "evolving_shared_behavior_current_task_fraction": 1.0,
             "task_private_heads": False,
             "task_shared_prediction_heads": False,
+            "task_private_prediction_adapters": False,
+            "prediction_adapter_rank": 0,
+            "prediction_adapter_residual_scale": 0.1,
+            "freeze_shared_prediction_heads_after_task0": False,
             "shared_prediction_distill_scale": 0.0,
             "task_private_actor_critic": False,
             "task_atomic_routes": False,
@@ -674,10 +749,10 @@ class Config(Serialisable):
                 **evolving_defaults,
                 "evolving_task0_profile": self.evolving_task0_profile,
                 "evolving_shared_core": True,
-                "task_private_heads": not is_evolving_shared_heads,
-                "task_shared_prediction_heads": is_evolving_shared_heads,
+                "task_private_heads": not uses_evolving_shared_heads,
+                "task_shared_prediction_heads": uses_evolving_shared_heads,
                 "shared_prediction_distill_scale": (
-                    0.1 if is_evolving_shared_heads else 0.0
+                    0.1 if uses_evolving_shared_heads else 0.0
                 ),
                 "task_private_actor_critic": not is_evolving_shared_fastkan,
                 "task_atomic_routes": True,
@@ -687,6 +762,15 @@ class Config(Serialisable):
                 expected_evolving[
                     "evolving_shared_behavior_current_task_fraction"
                 ] = 0.75
+            if is_evolving_learned_base_adapters:
+                expected_evolving.update(
+                    {
+                        "task_private_prediction_adapters": True,
+                        "prediction_adapter_rank": 32,
+                        "prediction_adapter_residual_scale": 0.1,
+                        "freeze_shared_prediction_heads_after_task0": True,
+                    }
+                )
             expected_evolving.update(
                 task0_profile_overrides[self.evolving_task0_profile]
             )
@@ -1087,7 +1171,11 @@ class Config(Serialisable):
                         "consolidation settings to "
                         f"{expected_atom_settings}, got {atom_settings}"
                 )
-                if (is_rec_rssm or is_evolving_atomic) and not self.task_mechanism_reuse:
+                if (
+                    (is_rec_rssm or is_evolving_atomic)
+                    and not is_evolving_learned_base_adapters
+                    and not self.task_mechanism_reuse
+                ):
                     raise ValueError("Atomic RSSM requires atom reuse")
                 if self.fresh_ac is not False:
                     raise ValueError(
@@ -1815,6 +1903,7 @@ class Config(Serialisable):
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
@@ -1846,6 +1935,7 @@ class Config(Serialisable):
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
@@ -1882,7 +1972,10 @@ class Config(Serialisable):
 
         return (
             self.continual_method
-            == "evolving_atomic_rssm_shared_heads_arrow"
+            in {
+                "evolving_atomic_rssm_shared_heads_arrow",
+                "evolving_atomic_rssm_learned_base_adapters_arrow",
+            }
         )
 
     @property
@@ -1890,6 +1983,7 @@ class Config(Serialisable):
         if self.continual_method in {
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }:
             return self.full_task_rssm_experts
@@ -1900,6 +1994,7 @@ class Config(Serialisable):
         return self.continual_method in {
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }
 

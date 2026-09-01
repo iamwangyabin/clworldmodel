@@ -241,7 +241,7 @@ class FastKANActorCriticTests(unittest.TestCase):
         self.assertEqual(actor_parameters, 498_090)
         self.assertEqual(critic_parameters, 570_849)
         self.assertEqual(actor_parameters + critic_parameters, 1_068_939)
-        self.assertLess(actor_parameters + critic_parameters, 1_714_961)
+        self.assertLess(actor_parameters + critic_parameters, 1_715_985)
 
     def test_width_53_fastkan_pair_matches_the_arrow_mlp_budget(self) -> None:
         actor_critic = ActorCritic(
@@ -255,7 +255,7 @@ class FastKANActorCriticTests(unittest.TestCase):
         self.assertEqual(actor_parameters, 793_692)
         self.assertEqual(critic_parameters, 906_978)
         self.assertEqual(actor_parameters + critic_parameters, 1_700_670)
-        self.assertEqual(actor_parameters + critic_parameters - 1_714_961, -14_291)
+        self.assertEqual(actor_parameters + critic_parameters - 1_715_985, -15_315)
 
     def test_stable_bridge_keeps_both_parameter_matched_fastkan_heads(self) -> None:
         actor_critic = ActorCritic(

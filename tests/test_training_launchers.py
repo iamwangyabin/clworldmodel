@@ -2739,7 +2739,7 @@ class TrainingLauncherTests(unittest.TestCase):
         self.assertEqual(actor["trainable_parameters"], 793_692)
         self.assertEqual(actor["critic_trainable_parameters"], 906_978)
         self.assertEqual(actor["combined_trainable_parameters"], 1_700_670)
-        self.assertEqual(actor["combined_parameter_difference_from_mlp"], -14_291)
+        self.assertEqual(actor["combined_parameter_difference_from_mlp"], -15_315)
 
         training = launch["actor_critic_training"]
         self.assertEqual(training["critic_replay_loss_scale"], 0.3)

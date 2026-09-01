@@ -1071,6 +1071,7 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         "rssm_task_mechanism_parameterization": (
             wm.rssm.task_mechanism_parameterization
         ),
+        "rssm_task_mechanism_low_rank": wm.rssm.task_mechanism_low_rank,
         "rssm_task_symmetric_mechanisms": wm.rssm.task_symmetric_mechanisms,
         "rssm_task_mechanism_banks": mechanism_banks,
         "rssm_task_mechanism_parameters_per_later_task": (
@@ -1092,13 +1093,35 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         "observation_head_name": observation_head_name,
         "observation_head": _parameter_accounting(observation_head),
         "prediction_head_topology": (
-            "single_shared"
+            "frozen_task0_base_plus_private_feature_adapters"
+            if wm.task_private_prediction_adapters
+            else "single_shared"
             if wm.task_shared_prediction_heads
             else "task_routed"
             if wm.rssm.num_task_experts > 1
             else "single_task"
         ),
         "task_shared_prediction_heads": wm.task_shared_prediction_heads,
+        "task_private_prediction_adapters": (
+            wm.task_private_prediction_adapters
+        ),
+        "freeze_shared_prediction_heads_after_task0": (
+            wm.freeze_shared_prediction_heads_after_task0
+        ),
+        "prediction_adapter_rank": wm.prediction_adapter_rank,
+        "prediction_adapter_residual_scale": (
+            wm.prediction_adapter_residual_scale
+        ),
+        "prediction_adapter_parameters_per_task": {
+            str(task_id): sum(
+                parameter.numel()
+                for head_name in ("observation", "reward", "continue")
+                for adapter in [wm.prediction_adapter_for(head_name, task_id)]
+                if adapter is not None
+                for parameter in adapter.parameters()
+            )
+            for task_id in range(wm.rssm.num_task_experts)
+        },
         "reward_head": _parameter_accounting(wm.reward_fc),
         "continue_head": _parameter_accounting(wm.continue_fc),
         "prediction_head_expert_parameters": sum(
@@ -1810,7 +1833,10 @@ def _evolving_shared_optimizer_parameter_groups(
     groups: list[dict[str, Any]] = [
         {"params": core, "lr": core_lr, "ownership": "core"}
     ]
-    if wm.task_shared_prediction_heads:
+    if (
+        wm.task_shared_prediction_heads
+        and not wm.freeze_shared_prediction_heads_after_task0
+    ):
         if not prediction_heads:
             raise RuntimeError("Shared prediction heads have no optimizer parameters")
         groups.append(
@@ -3299,6 +3325,7 @@ if __name__ == "__main__":
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
+        "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
     }:
         if task_bank_snapshot_dir is None:
@@ -3460,18 +3487,26 @@ if __name__ == "__main__":
     elif config.continual_method in {
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
+        "evolving_atomic_rssm_learned_base_adapters_arrow",
     }:
         prediction_topology = (
-            "single_shared_decoder_reward_continue"
+            "frozen_task0_base_heads_plus_private_feature_adapters"
+            if config.task_private_prediction_adapters
+            else "single_shared_decoder_reward_continue"
             if config.uses_shared_prediction_heads
             else "per_task_decoder_reward_continue"
+        )
+        private_topology = (
+            "projector_qfp_low_rank_prediction_adapters_actor_critic"
+            if config.task_private_prediction_adapters
+            else "projector_qfp_atoms_actor_critic"
         )
         print(
             "Evolving-Core Atomic RSSM routing: "
             f"tasks={config.rssm_num_experts} actor_bank=per_task "
             "base=continually_updated_shared_cnn_rssm "
             f"prediction_heads={prediction_topology} "
-            "private=projector_qfp_atoms_actor_critic "
+            f"private={private_topology} "
             f"widths={config.task_mechanism_recurrent_width}/"
             f"{config.task_mechanism_representation_width}/"
             f"{config.task_mechanism_transition_width} "
@@ -3643,6 +3678,16 @@ if __name__ == "__main__":
         full_task_rssm_experts=config.uses_full_task_rssm_experts,
         task_private_heads=config.uses_task_private_heads,
         task_shared_prediction_heads=config.uses_shared_prediction_heads,
+        task_private_prediction_adapters=(
+            config.task_private_prediction_adapters
+        ),
+        prediction_adapter_rank=config.prediction_adapter_rank,
+        prediction_adapter_residual_scale=(
+            config.prediction_adapter_residual_scale
+        ),
+        freeze_shared_prediction_heads_after_task0=(
+            config.freeze_shared_prediction_heads_after_task0
+        ),
         evolving_shared_core=config.evolving_shared_core,
         task_banked_image_encoder=config.task_banked_image_encoder,
         task_projected_image_encoder=config.task_projected_image_encoder,
@@ -3668,6 +3713,7 @@ if __name__ == "__main__":
         task_mechanism_parameterization=(
             config.task_mechanism_parameterization
         ),
+        task_mechanism_low_rank=config.task_mechanism_low_rank,
         task_symmetric_mechanisms=config.task_atomic_routes,
     ).to(device)
     resume_world_model_opened: list[str] = []
@@ -3755,6 +3801,7 @@ if __name__ == "__main__":
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
+        "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
         "dino_patchbank_arrow",
         "dino_convbank_arrow",
@@ -4719,7 +4766,10 @@ if __name__ == "__main__":
                         )
                         zhs = wm.zh_transform(z, h)
                         recon = torch.stack(
-                            [wm.decoder_for(current_task_id)(zh) for zh in zhs]
+                            [
+                                wm.predict_observation(zh, current_task_id)
+                                for zh in zhs
+                            ]
                         )
 
                         writer.add_images(

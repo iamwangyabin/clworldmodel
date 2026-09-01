@@ -25,7 +25,7 @@ left unchanged so their recorded results remain reproducible.
 The online actor and critic remain width-53 FastKAN heads with three hidden
 layers, eight fixed Gaussian centers over `[-2, 2]`, RMSNorm, a SiLU base
 branch, 1% actor unimix, and a zero-initialized 255-bin symlog critic output.
-Their combined online parameter count remains 1,700,670, which is 14,291
+Their combined online parameter count remains 1,700,670, which is 15,315
 parameters below the ARROW MLP pair.
 
 Only the value-target path changes:

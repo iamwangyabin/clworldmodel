@@ -109,9 +109,9 @@ The analytic online inference ledger for the three-task topology is:
 
 | Topology | World model | Behavior | Online total |
 |---|---:|---:|---:|
-| ARROW-50 | 19,498,853 | 1,714,961 | 21,213,814 |
-| Dense Evolving-Core v2 + 3 private MLP pairs | 48,175,443 | 5,144,883 | 53,320,326 |
-| Shared-Frozen-Down + 3 private MLP pairs | 42,675,539 | 5,144,883 | 47,820,422 |
+| ARROW-50 | 19,498,853 | 1,715,985 | 21,214,838 |
+| Dense Evolving-Core v2 + 3 private MLP pairs | 48,175,443 | 5,147,955 | 53,323,398 |
+| Shared-Frozen-Down + 3 private MLP pairs | 42,675,539 | 5,147,955 | 47,823,494 |
 | **New method: Shared-Frozen-Down + 1 shared FastKAN pair** | **42,675,539** | **1,700,670** | **44,376,209** |
 
 The world-model total contains `2,753,792` frozen shared-down parameters once
@@ -119,9 +119,9 @@ and `1,064,960` private mechanism parameters per task. Including projectors,
 route gates, and later private heads, per-task world-model additions excluding
 the shared bases are `1,099,200`, `9,661,841`, and `9,661,853`.
 
-The new method is `3,444,213` online parameters smaller than the matched
-Shared-Frozen-Down/private-MLP topology and `8,944,117` smaller than dense v2,
-but `23,162,395` larger than ARROW-50. Its FP32 online parameters occupy
+The new method is `3,447,285` online parameters smaller than the matched
+Shared-Frozen-Down/private-MLP topology and `8,947,189` smaller than dense v2,
+but `23,161,371` larger than ARROW-50. Its FP32 online parameters occupy
 `177,504,836` bytes before buffers, gradients, optimizer state, Replay, or
 activations.
 

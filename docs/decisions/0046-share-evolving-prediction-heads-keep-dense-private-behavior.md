@@ -12,7 +12,7 @@ acquisition than the Shared-Frozen-Down plus shared-FastKAN pilot, but its
 online state grows in two independent places. Every task owns a learned
 `512/512/256` Q/F/P mechanism and an independent MLP Actor-Critic, and every
 later task also duplicates the large decoder/reward/continue prediction-head
-set. The six-task Dense topology has `95,704,536` online parameters.
+set. The six-task Dense topology has `95,710,680` online parameters.
 
 The evidence does not justify compressing the parts that isolate acquisition
 and behavior. The requested hypothesis is narrower: the full-width learned
@@ -63,8 +63,8 @@ six-task topology by `42,813,145` parameters:
 
 | topology | world model | behavior | online total |
 |---|---:|---:|---:|
-| Dense Evolving-Core, six private head sets and six private MLP pairs | `85,414,770` | `10,289,766` | `95,704,536` |
-| Shared prediction heads, Dense Q/F/P, six private MLP pairs | `42,601,625` | `10,289,766` | `52,891,391` |
+| Dense Evolving-Core, six private head sets and six private MLP pairs | `85,414,770` | `10,295,910` | `95,710,680` |
+| Shared prediction heads, Dense Q/F/P, six private MLP pairs | `42,601,625` | `10,295,910` | `52,897,535` |
 
 The new total occupies `211,565,564` FP32 parameter bytes before buffers,
 gradients, optimizer state, activations, Replay, or the common boundary teacher.

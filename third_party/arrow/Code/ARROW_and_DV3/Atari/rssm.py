@@ -124,6 +124,7 @@ class Rssm(nn.Module):
         task_mechanism_residual_scale: float = 0.1,
         task_mechanism_num_atoms: int = 1,
         task_mechanism_parameterization: str = "dense_private",
+        task_mechanism_low_rank: int = 0,
         task_symmetric_mechanisms: bool = False,
         residual_correction: str = "none",
         residual_bottleneck_features: int = 64,
@@ -207,6 +208,7 @@ class Rssm(nn.Module):
         if task_mechanism_parameterization not in {
             "dense_private",
             "shared_frozen_down_film",
+            "learned_task0_low_rank",
         }:
             raise ValueError(
                 "Unknown RSSM mechanism parameterization: "
@@ -218,6 +220,29 @@ class Rssm(nn.Module):
         ):
             raise ValueError(
                 "A non-default RSSM mechanism parameterization requires mechanism banks"
+            )
+        if task_mechanism_low_rank < 0:
+            raise ValueError("RSSM mechanism low-rank size must be non-negative")
+        if task_mechanism_parameterization == "learned_task0_low_rank":
+            if not task_symmetric_mechanisms:
+                raise ValueError(
+                    "Learned Task-0 low-rank mechanisms require symmetric mechanisms"
+                )
+            if task_mechanism_reuse:
+                raise ValueError(
+                    "Learned Task-0 low-rank mechanisms disable old-atom reuse"
+                )
+            if task_mechanism_low_rank < 1:
+                raise ValueError(
+                    "Learned Task-0 low-rank mechanisms require a positive rank"
+                )
+            if task_mechanism_low_rank % task_mechanism_num_atoms:
+                raise ValueError(
+                    "RSSM mechanism low-rank size must be divisible by atoms"
+                )
+        elif task_mechanism_low_rank:
+            raise ValueError(
+                "RSSM mechanism low-rank size requires learned_task0_low_rank"
             )
         if task_mechanism_bank and not task_projected_image_encoder:
             raise ValueError("RSSM mechanism banks require task image projectors")
@@ -282,6 +307,7 @@ class Rssm(nn.Module):
         self.task_mechanism_residual_scale = task_mechanism_residual_scale
         self.task_mechanism_num_atoms = task_mechanism_num_atoms
         self.task_mechanism_parameterization = task_mechanism_parameterization
+        self.task_mechanism_low_rank = int(task_mechanism_low_rank)
         self.task_symmetric_mechanisms = bool(task_symmetric_mechanisms)
 
         self.recurrent = Recurrent(
@@ -448,6 +474,7 @@ class Rssm(nn.Module):
                     num_atoms=task_mechanism_num_atoms,
                     include_task0=self.task_symmetric_mechanisms,
                     parameterization=task_mechanism_parameterization,
+                    low_rank_rank=task_mechanism_low_rank,
                 )
                 self.representation_mechanism_bank = MechanismBank(
                     num_tasks=num_task_experts,
@@ -459,6 +486,7 @@ class Rssm(nn.Module):
                     num_atoms=task_mechanism_num_atoms,
                     include_task0=self.task_symmetric_mechanisms,
                     parameterization=task_mechanism_parameterization,
+                    low_rank_rank=task_mechanism_low_rank,
                 )
                 self.transition_mechanism_bank = MechanismBank(
                     num_tasks=num_task_experts,
@@ -470,6 +498,7 @@ class Rssm(nn.Module):
                     num_atoms=task_mechanism_num_atoms,
                     include_task0=self.task_symmetric_mechanisms,
                     parameterization=task_mechanism_parameterization,
+                    low_rank_rank=task_mechanism_low_rank,
                 )
             self.task_mechanism_reports = {
                 "recurrent": self.recurrent_mechanism_bank.parameter_report(),
@@ -959,7 +988,7 @@ class Rssm(nn.Module):
     def route_parameters(self, task_id: int) -> list[nn.Parameter]:
         """Return only the selected task's old-atom gate parameters."""
 
-        if not self.task_mechanism_bank_enabled:
+        if not self.task_mechanism_bank_enabled or not self.task_mechanism_reuse:
             return []
         task_index = self._task_index(task_id)
         modules: list[nn.Module] = []
