@@ -279,6 +279,64 @@ def assign_component_projected_gradients(
     return diagnostics
 
 
+def prediction_head_distillation_losses(
+    student_outputs: Mapping[str, torch.Tensor],
+    teacher_outputs: Mapping[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Match one shared prediction-head student to a frozen boundary teacher.
+
+    The observation and symlog-reward outputs use mean squared error.  The
+    continuation term is the Bernoulli KL from the stopped teacher probability
+    to the student logit.  Mean reductions keep the distillation scale
+    independent of Atari image size and minibatch shape; the ordinary old-task
+    Dreamer loss still supplies the unchanged pixel-summed reconstruction
+    objective against real LTDM observations.
+    """
+
+    required = {"observation", "reward_symlog", "continue_logits"}
+    if set(student_outputs) != required or set(teacher_outputs) != required:
+        raise ValueError(
+            "Prediction-head outputs must contain exactly observation, "
+            "reward_symlog, and continue_logits"
+        )
+    for name in required:
+        if student_outputs[name].shape != teacher_outputs[name].shape:
+            raise ValueError(
+                f"Prediction-head student/teacher shape mismatch for {name}"
+            )
+
+    observation = F.mse_loss(
+        student_outputs["observation"].float(),
+        teacher_outputs["observation"].detach().float(),
+        reduction="mean",
+    )
+    reward = F.mse_loss(
+        student_outputs["reward_symlog"].float(),
+        teacher_outputs["reward_symlog"].detach().float(),
+        reduction="mean",
+    )
+    student_continue = student_outputs["continue_logits"].float()
+    teacher_continue = teacher_outputs["continue_logits"].detach().float()
+    teacher_probability = torch.sigmoid(teacher_continue)
+    cross_entropy = F.binary_cross_entropy_with_logits(
+        student_continue,
+        teacher_probability,
+        reduction="none",
+    )
+    teacher_entropy = F.binary_cross_entropy_with_logits(
+        teacher_continue,
+        teacher_probability,
+        reduction="none",
+    )
+    continuation = (cross_entropy - teacher_entropy).mean().clamp_min(0.0)
+    return {
+        "observation": observation,
+        "reward": reward,
+        "continue": continuation,
+        "total": observation + reward + continuation,
+    }
+
+
 def assign_unprojected_current_gradients(
     loss: torch.Tensor,
     parameters: Sequence[torch.nn.Parameter],

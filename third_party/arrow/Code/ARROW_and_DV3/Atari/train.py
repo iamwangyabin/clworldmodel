@@ -1091,6 +1091,27 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         "posterior_embedding_size": wm.rssm.observation_embedding_size,
         "observation_head_name": observation_head_name,
         "observation_head": _parameter_accounting(observation_head),
+        "prediction_head_topology": (
+            "single_shared"
+            if wm.task_shared_prediction_heads
+            else "task_routed"
+            if wm.rssm.num_task_experts > 1
+            else "single_task"
+        ),
+        "task_shared_prediction_heads": wm.task_shared_prediction_heads,
+        "reward_head": _parameter_accounting(wm.reward_fc),
+        "continue_head": _parameter_accounting(wm.continue_fc),
+        "prediction_head_expert_parameters": sum(
+            parameter.numel()
+            for modules in (
+                wm.decoder_experts,
+                wm.feature_predictor_experts,
+                wm.reward_experts,
+                wm.continue_experts,
+            )
+            for module in modules
+            for parameter in module.parameters()
+        ),
         "accounting_scope": (
             "legacy component entries count parameters only; "
             "world_model_parameter_and_buffer_state also counts registered buffers; "
@@ -1751,6 +1772,90 @@ def _flatten_parameter_groups(
     return parameters
 
 
+_SHARED_PREDICTION_GROUP_NAMES = frozenset(
+    {"observation_head", "reward_head", "continue_head"}
+)
+
+
+def _evolving_shared_optimizer_parameter_groups(
+    wm: WorldModel,
+    *,
+    core_lr: float,
+    prediction_head_lr: float,
+) -> list[dict[str, Any]]:
+    """Build persistent Adam groups without changing Dense Task-0 head LR."""
+
+    if min(core_lr, prediction_head_lr) <= 0:
+        raise ValueError("Evolving shared optimizer learning rates must be positive")
+    named = wm.shared_parameter_groups()
+    core = [
+        parameter
+        for name, parameters in named.items()
+        if name not in _SHARED_PREDICTION_GROUP_NAMES
+        for parameter in parameters
+    ]
+    prediction_heads = [
+        parameter
+        for name, parameters in named.items()
+        if name in _SHARED_PREDICTION_GROUP_NAMES
+        for parameter in parameters
+    ]
+    all_parameters = (*core, *prediction_heads)
+    if not core or len({id(parameter) for parameter in all_parameters}) != len(
+        all_parameters
+    ):
+        raise RuntimeError(
+            "Evolving shared optimizer groups are empty or overlapping"
+        )
+    groups: list[dict[str, Any]] = [
+        {"params": core, "lr": core_lr, "ownership": "core"}
+    ]
+    if wm.task_shared_prediction_heads:
+        if not prediction_heads:
+            raise RuntimeError("Shared prediction heads have no optimizer parameters")
+        groups.append(
+            {
+                "params": prediction_heads,
+                "lr": prediction_head_lr,
+                "ownership": "prediction_heads",
+            }
+        )
+    elif prediction_heads:
+        raise RuntimeError(
+            "Private prediction-head topology leaked into shared optimizer groups"
+        )
+    return groups
+
+
+def _set_evolving_shared_optimizer_learning_rates(
+    optimizer: torch.optim.Optimizer,
+    *,
+    core_lr: float,
+    prediction_head_lr: float,
+) -> None:
+    """Change core LR by task while retaining the Dense private-head LR."""
+
+    if min(core_lr, prediction_head_lr) <= 0:
+        raise ValueError("Evolving shared optimizer learning rates must be positive")
+    observed = []
+    for group in optimizer.param_groups:
+        ownership = group.get("ownership")
+        observed.append(ownership)
+        if ownership == "core":
+            group["lr"] = core_lr
+        elif ownership == "prediction_heads":
+            group["lr"] = prediction_head_lr
+        else:
+            raise ValueError(
+                "Evolving shared optimizer lost its ownership metadata"
+            )
+    expected = ["core", "prediction_heads"] if len(observed) == 2 else ["core"]
+    if observed != expected:
+        raise ValueError(
+            f"Unexpected Evolving shared optimizer groups: {observed}"
+        )
+
+
 def _ensure_evolving_private_optimizers(
     *,
     wm: WorldModel,
@@ -1826,7 +1931,10 @@ def _evolving_memory_loss(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute old-task Dreamer and Q/H/policy interface protection losses."""
 
-    from clworldmodel.continual import interface_distillation_losses
+    from clworldmodel.continual import (
+        interface_distillation_losses,
+        prediction_head_distillation_losses,
+    )
 
     actions, observations, rewards, continues, resets = batch
     cpu_state = torch.random.get_rng_state()
@@ -1857,11 +1965,31 @@ def _evolving_memory_loss(
             teacher_trace=teacher_trace,
             frozen_actor=frozen_actor,
         )
+        prediction_distillation = None
+        if config.uses_shared_prediction_heads:
+            student_outputs = student_trace.get("prediction_head_outputs")
+            teacher_outputs = teacher_trace.get("prediction_head_outputs")
+            if not isinstance(student_outputs, Mapping) or not isinstance(
+                teacher_outputs, Mapping
+            ):
+                raise RuntimeError(
+                    "Shared prediction-head distillation requires output traces"
+                )
+            prediction_distillation = prediction_head_distillation_losses(
+                student_outputs,
+                teacher_outputs,
+            )
         total = (
             dreamer_loss
             + config.interface_q_scale * interface["posterior"]
             + config.interface_h_scale * interface["hidden"]
             + config.interface_actor_scale * interface["actor"]
+            + (
+                config.shared_prediction_distill_scale
+                * prediction_distillation["total"]
+                if prediction_distillation is not None
+                else 0.0
+            )
         )
     metrics = {
         **dreamer_metrics,
@@ -1870,6 +1998,24 @@ def _evolving_memory_loss(
         "Loss/evolving_interface_actor": interface["actor"].detach(),
         "Loss/evolving_memory_total": total.detach(),
     }
+    if prediction_distillation is not None:
+        metrics.update(
+            {
+                "Loss/evolving_prediction_observation_distill": (
+                    prediction_distillation["observation"].detach()
+                ),
+                "Loss/evolving_prediction_reward_distill": (
+                    prediction_distillation["reward"].detach()
+                ),
+                "Loss/evolving_prediction_continue_distill": (
+                    prediction_distillation["continue"].detach()
+                ),
+                "Loss/evolving_prediction_distill_scaled": (
+                    config.shared_prediction_distill_scale
+                    * prediction_distillation["total"].detach()
+                ),
+            }
+        )
     return total, metrics
 
 
@@ -2524,6 +2670,9 @@ def _consolidate_evolving_shared_core(
             "learning_rate": config.boundary_consolidation_lr,
             "sampling": "round-robin task-balanced LTDM",
             "private_modules_frozen": True,
+            "shared_prediction_heads_consolidated": bool(
+                getattr(config, "uses_shared_prediction_heads", False)
+            ),
             "loss_mean": float(np.mean(losses)),
             "validation": {
                 "task_seeds": list(seen_validation_seeds),
@@ -3149,6 +3298,7 @@ if __name__ == "__main__":
         "cnn_mechanism_bank_arrow",
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
+        "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
     }:
         if task_bank_snapshot_dir is None:
@@ -3307,12 +3457,21 @@ if __name__ == "__main__":
             "old_policy_retention=frozen_route_imagination "
             f"current_fraction={config.dino_fullbank_current_task_fraction}"
         )
-    elif config.continual_method == "evolving_atomic_rssm_arrow":
+    elif config.continual_method in {
+        "evolving_atomic_rssm_arrow",
+        "evolving_atomic_rssm_shared_heads_arrow",
+    }:
+        prediction_topology = (
+            "single_shared_decoder_reward_continue"
+            if config.uses_shared_prediction_heads
+            else "per_task_decoder_reward_continue"
+        )
         print(
             "Evolving-Core Atomic RSSM routing: "
             f"tasks={config.rssm_num_experts} actor_bank=per_task "
             "base=continually_updated_shared_cnn_rssm "
-            "private=projector_qfp_atoms_heads_actor_critic "
+            f"prediction_heads={prediction_topology} "
+            "private=projector_qfp_atoms_actor_critic "
             f"widths={config.task_mechanism_recurrent_width}/"
             f"{config.task_mechanism_representation_width}/"
             f"{config.task_mechanism_transition_width} "
@@ -3483,6 +3642,7 @@ if __name__ == "__main__":
         full_task_experts=config.uses_full_task_experts,
         full_task_rssm_experts=config.uses_full_task_rssm_experts,
         task_private_heads=config.uses_task_private_heads,
+        task_shared_prediction_heads=config.uses_shared_prediction_heads,
         evolving_shared_core=config.evolving_shared_core,
         task_banked_image_encoder=config.task_banked_image_encoder,
         task_projected_image_encoder=config.task_projected_image_encoder,
@@ -3540,8 +3700,11 @@ if __name__ == "__main__":
     evolving_route_optimizers: dict[int, torch.optim.Optimizer] = {}
     if config.uses_evolving_atomic_rssm:
         evolving_shared_optimizer = Adam(
-            _flatten_parameter_groups(wm.shared_parameter_groups()),
-            lr=config.first_task_shared_core_lr,
+            _evolving_shared_optimizer_parameter_groups(
+                wm,
+                core_lr=config.first_task_shared_core_lr,
+                prediction_head_lr=config.task_private_lr,
+            ),
             fused=args.fused_adam,
         )
         # Keep ``opt`` as the shared optimizer for generic accounting paths;
@@ -3591,6 +3754,7 @@ if __name__ == "__main__":
         "cnn_mechanism_bank_arrow",
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
+        "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
         "dino_patchbank_arrow",
         "dino_convbank_arrow",
@@ -4061,7 +4225,7 @@ if __name__ == "__main__":
                 print(
                     f"Initialized independent actor-critic for task {current_task_id}"
                 )
-            if config.uses_task_private_heads:
+            if config.uses_task_private_heads or config.uses_evolving_atomic_rssm:
                 wm.activate_task_expert(
                     current_task_id, mechanism_phase=mechanism_phase
                 )
@@ -4082,11 +4246,14 @@ if __name__ == "__main__":
             if config.uses_evolving_atomic_rssm:
                 if evolving_shared_optimizer is None:
                     raise RuntimeError("Evolving-Core shared optimizer was not initialized")
-                _set_optimizer_learning_rate(
+                _set_evolving_shared_optimizer_learning_rates(
                     evolving_shared_optimizer,
-                    config.first_task_shared_core_lr
-                    if current_task_id == 0
-                    else config.shared_core_lr,
+                    core_lr=(
+                        config.first_task_shared_core_lr
+                        if current_task_id == 0
+                        else config.shared_core_lr
+                    ),
+                    prediction_head_lr=config.task_private_lr,
                 )
                 _ensure_evolving_private_optimizers(
                     wm=wm,

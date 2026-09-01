@@ -546,6 +546,29 @@ result. See
 `docs/protocols/evolving_core_shared_frozen_down_shared_fastkan_arrow_v1_atari.md`
 for exact mechanism, target, Replay, checkpoint, parameter, and claim semantics.
 
+The separate Shared-Distilled-Heads profile returns to the strong Dense
+Evolving-Core topology: every task keeps its learned full-width `512/512/256`
+Q/F/P mechanisms and independent MLP Actor-Critic. Only
+decoder/reward/continue are one shared plastic set. Old LTDM sequences supply
+the unchanged real Dreamer loss plus boundary-teacher output distillation; the
+three heads also participate in component gradient projection, boundary
+consolidation, and rollback:
+
+```bash
+python scripts/run_evolving_atomic_rssm.py \
+  --task-order arrow-original-six \
+  --prediction-head-profile shared_distilled \
+  --seed 0 \
+  --classification pilot \
+  --dry-run
+```
+
+The six-task online topology is prospectively `52,891,391` parameters
+(`211,565,564` FP32 bytes), `42,813,145` or `44.7347%` below the Dense
+private-head reference. Q/F/P and private behavior still grow per task. This
+configuration has no performance result yet; see
+`docs/protocols/evolving_core_dense_qfp_shared_distilled_heads_v1_atari.md`.
+
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control
 and tests 120, 150, 180, and 240 MsPacman epochs on the spare GPUs:

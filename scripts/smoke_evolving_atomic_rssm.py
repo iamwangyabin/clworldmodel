@@ -41,7 +41,9 @@ from run_evolving_atomic_rssm import (  # noqa: E402
     DENSE_PRIVATE_PARAMETERIZATION,
     MECHANISM_PROFILE_WIDTHS,
     MECHANISM_PARAMETERIZATIONS,
+    PREDICTION_HEAD_PROFILES,
     PRIVATE_MLP_BEHAVIOR,
+    PRIVATE_PREDICTION_HEADS_PROFILE,
     SHARED_DOWN_PARAMETERIZATION,
     SHARED_FASTKAN_STABLE_BEHAVIOR,
     _resolved_config,
@@ -67,6 +69,11 @@ def _parser() -> argparse.ArgumentParser:
         choices=BEHAVIOR_PROFILES,
         default=PRIVATE_MLP_BEHAVIOR,
     )
+    parser.add_argument(
+        "--prediction-head-profile",
+        choices=PREDICTION_HEAD_PROFILES,
+        default=PRIVATE_PREDICTION_HEADS_PROFILE,
+    )
     return parser
 
 
@@ -90,6 +97,7 @@ def _config(
     mechanism_profile: str = DEFAULT_MECHANISM_PROFILE,
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
+    prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
 ) -> Config:
     source = Config.from_file(_source_config()).to_dict()
     task_order = (
@@ -108,6 +116,7 @@ def _config(
             mechanism_profile=mechanism_profile,
             mechanism_parameterization=mechanism_parameterization,
             behavior_profile=behavior_profile,
+            prediction_head_profile=prediction_head_profile,
         )
     )
 
@@ -153,6 +162,7 @@ def _world_model(config: Config, device: torch.device) -> WorldModel:
         full_task_experts=config.uses_full_task_experts,
         full_task_rssm_experts=config.uses_full_task_rssm_experts,
         task_private_heads=config.uses_task_private_heads,
+        task_shared_prediction_heads=config.uses_shared_prediction_heads,
         evolving_shared_core=config.evolving_shared_core,
         task_banked_image_encoder=config.task_banked_image_encoder,
         task_projected_image_encoder=config.task_projected_image_encoder,
@@ -234,6 +244,7 @@ def main() -> int:
         args.mechanism_profile,
         args.mechanism_parameterization,
         args.behavior_profile,
+        args.prediction_head_profile,
     )
     world_model = _world_model(config, device)
     world_model.activate_task_expert(0)
@@ -266,8 +277,11 @@ def main() -> int:
         replay.add(*_synthetic_batch(config, task_id=task_id), task_id=task_id)
 
     shared_optimizer = torch.optim.Adam(
-        train._flatten_parameter_groups(world_model.shared_parameter_groups()),
-        lr=config.shared_core_lr,
+        train._evolving_shared_optimizer_parameter_groups(
+            world_model,
+            core_lr=config.shared_core_lr,
+            prediction_head_lr=config.task_private_lr,
+        ),
         fused=True,
     )
     private_optimizer = torch.optim.Adam(
@@ -340,6 +354,10 @@ def main() -> int:
         "prior",
         "latent_interface",
     }
+    if config.uses_shared_prediction_heads:
+        expected_components.update(
+            {"observation_head", "reward_head", "continue_head"}
+        )
     if set(diagnostics) != expected_components:
         raise RuntimeError(f"Projection groups changed: {sorted(diagnostics)}")
     if any(parameter.grad is not None for parameter in old_private):
@@ -375,6 +393,7 @@ def main() -> int:
         "gpu": torch.cuda.get_device_name(device),
         "compute_dtype": config.compute_dtype,
         "behavior_profile": args.behavior_profile,
+        "prediction_head_profile": args.prediction_head_profile,
         "mechanism_profile": config.task_mechanism_capacity_profile,
         "mechanism_parameterization": config.task_mechanism_parameterization,
         "mechanism_widths": [

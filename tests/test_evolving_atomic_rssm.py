@@ -34,6 +34,7 @@ if torch is not None:
     sys.path.insert(0, str(VENDORED_ATARI))
     from clworldmodel.continual import (
         assign_component_projected_gradients,
+        prediction_head_distillation_losses,
         project_component_gradients,
     )
     from clworldmodel.continual.evolving_core import (
@@ -133,6 +134,8 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
     @staticmethod
     def _world_model(
         mechanism_parameterization: str = "dense_private",
+        *,
+        shared_prediction_heads: bool = False,
     ) -> WorldModel:
         class WideEmbedder(nn.Module):
             output_size = 4096
@@ -156,7 +159,8 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
             num_task_experts=3,
             full_task_experts=False,
             full_task_rssm_experts=False,
-            task_private_heads=True,
+            task_private_heads=not shared_prediction_heads,
+            task_shared_prediction_heads=shared_prediction_heads,
             evolving_shared_core=True,
             task_projected_image_encoder=True,
             task_symmetric_image_projectors=True,
@@ -171,6 +175,19 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
             task_symmetric_mechanisms=True,
             image_embedder=WideEmbedder(),
         )
+
+    @classmethod
+    def _shared_head_method_config_data(cls) -> dict:
+        data = cls._method_config_data()
+        data.update(
+            {
+                "continual_method": "evolving_atomic_rssm_shared_heads_arrow",
+                "task_private_heads": False,
+                "task_shared_prediction_heads": True,
+                "shared_prediction_distill_scale": 0.1,
+            }
+        )
+        return data
 
     @staticmethod
     def _replay_batch(time: int, sequences: int, task_id: int) -> tuple:
@@ -213,6 +230,33 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "checkpoint retention"):
             Config.from_dict(invalid_retention)
 
+    def test_shared_head_method_is_dense_with_private_mlp_behavior(self) -> None:
+        config = Config.from_dict(self._shared_head_method_config_data())
+
+        self.assertTrue(config.uses_evolving_atomic_rssm)
+        self.assertTrue(config.uses_shared_prediction_heads)
+        self.assertFalse(config.uses_task_private_heads)
+        self.assertTrue(config.task_private_actor_critic)
+        self.assertFalse(config.uses_shared_actor)
+        self.assertEqual(config.actor_network, "mlp")
+        self.assertEqual(config.task_mechanism_parameterization, "dense_private")
+        self.assertEqual(config.shared_prediction_distill_scale, 0.1)
+
+        invalid = self._shared_head_method_config_data()
+        invalid["task_mechanism_parameterization"] = "shared_frozen_down_film"
+        with self.assertRaisesRegex(ValueError, "dense_private"):
+            Config.from_dict(invalid)
+
+        invalid = self._shared_head_method_config_data()
+        invalid["task_private_actor_critic"] = False
+        with self.assertRaisesRegex(ValueError, "fixed optimizer, replay, interface"):
+            Config.from_dict(invalid)
+
+        invalid = self._method_config_data()
+        invalid["task_shared_prediction_heads"] = True
+        with self.assertRaisesRegex(ValueError, "shared prediction heads"):
+            Config.from_dict(invalid)
+
     def test_task0_has_zero_effect_projector_atoms_and_private_heads(self) -> None:
         torch.manual_seed(7)
         wm = self._world_model()
@@ -244,6 +288,134 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
             wm._head_for(wm.reward_fc, wm.reward_experts, 0),
             wm._head_for(wm.reward_fc, wm.reward_experts, 1),
         )
+
+    def test_shared_prediction_heads_are_single_copy_and_shared_owned(self) -> None:
+        wm = self._world_model(shared_prediction_heads=True)
+
+        self.assertTrue(wm.task_shared_prediction_heads)
+        self.assertEqual(len(wm.decoder_experts), 0)
+        self.assertEqual(len(wm.reward_experts), 0)
+        self.assertEqual(len(wm.continue_experts), 0)
+        for task_id in range(3):
+            self.assertIs(wm.decoder_for(task_id), wm.decoder)
+            self.assertIs(
+                wm._head_for(wm.reward_fc, wm.reward_experts, task_id),
+                wm.reward_fc,
+            )
+            self.assertIs(
+                wm._head_for(wm.continue_fc, wm.continue_experts, task_id),
+                wm.continue_fc,
+            )
+
+        groups = wm.shared_parameter_groups()
+        self.assertIn("observation_head", groups)
+        self.assertIn("reward_head", groups)
+        self.assertIn("continue_head", groups)
+        shared_ids = {
+            id(parameter) for values in groups.values() for parameter in values
+        }
+        private_ids = {
+            id(parameter)
+            for task_id in range(3)
+            for parameter in wm.private_parameters(task_id)
+        }
+        self.assertFalse(shared_ids & private_ids)
+        self.assertTrue(
+            {id(parameter) for parameter in wm.decoder.parameters()} <= shared_ids
+        )
+        self.assertTrue(
+            {id(parameter) for parameter in wm.reward_fc.parameters()} <= shared_ids
+        )
+        self.assertTrue(
+            {id(parameter) for parameter in wm.continue_fc.parameters()} <= shared_ids
+        )
+
+        self.assertTrue(wm.initialize_task_expert(1, 0))
+        wm.activate_task_expert(1)
+        self.assertTrue(
+            all(parameter.requires_grad for parameter in wm.decoder.parameters())
+        )
+        self.assertTrue(
+            all(parameter.requires_grad for parameter in wm.reward_fc.parameters())
+        )
+        self.assertTrue(
+            all(parameter.requires_grad for parameter in wm.continue_fc.parameters())
+        )
+        self.assertTrue(
+            all(
+                not parameter.requires_grad
+                for parameter in wm.private_parameters(0)
+            )
+        )
+        self.assertTrue(
+            all(parameter.requires_grad for parameter in wm.private_parameters(1))
+        )
+
+    def test_shared_head_task0_forward_matches_private_dense_topology(self) -> None:
+        torch.manual_seed(83)
+        private = self._world_model()
+        torch.manual_seed(83)
+        shared = self._world_model(shared_prediction_heads=True)
+        batch = self._replay_batch(2, 2, 0)
+
+        torch.manual_seed(97)
+        private_loss, private_metrics, private_trace = (
+            private.compute_loss_and_trace(*batch, task_id=0)
+        )
+        torch.manual_seed(97)
+        shared_loss, shared_metrics, shared_trace = (
+            shared.compute_loss_and_trace(*batch, task_id=0)
+        )
+
+        torch.testing.assert_close(shared_loss, private_loss, rtol=0, atol=0)
+        self.assertEqual(set(shared_metrics), set(private_metrics))
+        for name in shared_metrics:
+            torch.testing.assert_close(
+                shared_metrics[name],
+                private_metrics[name],
+                rtol=0,
+                atol=0,
+                equal_nan=True,
+            )
+        for name in ("posterior_log_probs", "hiddens", "actor_states"):
+            torch.testing.assert_close(
+                shared_trace[name], private_trace[name], rtol=0, atol=0
+            )
+
+    def test_shared_head_state_is_in_boundary_rollback_snapshot(self) -> None:
+        wm = self._world_model(shared_prediction_heads=True)
+        before = wm.shared_core_state_dict()
+        with torch.no_grad():
+            next(wm.decoder.parameters()).add_(7)
+            next(wm.reward_fc.parameters()).sub_(3)
+            next(wm.continue_fc.parameters()).mul_(0)
+        wm.load_shared_core_state_dict(before)
+
+        for module_name, module in (
+            ("observation_head", wm.decoder),
+            ("reward_head", wm.reward_fc),
+            ("continue_head", wm.continue_fc),
+        ):
+            for name, value in module.state_dict().items():
+                torch.testing.assert_close(value, before[module_name][name])
+
+    def test_prediction_head_distillation_is_zero_for_identical_outputs(self) -> None:
+        student = {
+            "observation": torch.tensor([[[1.0, -2.0]]], requires_grad=True),
+            "reward_symlog": torch.tensor([[[0.5]]], requires_grad=True),
+            "continue_logits": torch.tensor([[[1.25]]], requires_grad=True),
+        }
+        teacher = {name: value.detach().clone() for name, value in student.items()}
+
+        losses = prediction_head_distillation_losses(student, teacher)
+
+        self.assertEqual(
+            set(losses), {"observation", "reward", "continue", "total"}
+        )
+        for value in losses.values():
+            torch.testing.assert_close(value, torch.zeros_like(value), atol=1e-7, rtol=0)
+        losses["total"].backward()
+        self.assertTrue(all(value.grad is not None for value in student.values()))
 
     def test_shared_down_world_model_keeps_basis_out_of_optimizer_ownership(
         self,
@@ -441,6 +613,132 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
         after = int(optimizer.state[parameter]["step"].item())
 
         self.assertEqual(after, before + 1)
+
+    def test_shared_head_optimizer_preserves_dense_task0_head_learning_rate(self) -> None:
+        wm = self._world_model(shared_prediction_heads=True)
+        groups = train._evolving_shared_optimizer_parameter_groups(
+            wm,
+            core_lr=3e-4,
+            prediction_head_lr=2e-4,
+        )
+        optimizer = torch.optim.Adam(groups)
+
+        self.assertEqual(
+            [group["ownership"] for group in optimizer.param_groups],
+            ["core", "prediction_heads"],
+        )
+        self.assertEqual(
+            [group["lr"] for group in optimizer.param_groups],
+            [3e-4, 2e-4],
+        )
+        train._set_evolving_shared_optimizer_learning_rates(
+            optimizer,
+            core_lr=1e-4,
+            prediction_head_lr=2e-4,
+        )
+        self.assertEqual(
+            [group["lr"] for group in optimizer.param_groups],
+            [1e-4, 2e-4],
+        )
+
+    def test_shared_head_online_update_distills_and_projects_each_head(self) -> None:
+        torch.manual_seed(101)
+        wm = self._world_model(shared_prediction_heads=True)
+        wm.activate_task_expert(0)
+        teacher = copy.deepcopy(wm).eval()
+        teacher.requires_grad_(False)
+        self.assertTrue(wm.initialize_task_expert(1, 0))
+        wm.activate_task_expert(1)
+        with torch.no_grad():
+            next(wm.decoder.parameters()).add_(0.01)
+
+        replay = SimpleNamespace(
+            minibatch_for_task=lambda task_id, sequence_length, sequences, **_: (
+                self._replay_batch(sequence_length, sequences, task_id)
+            )
+        )
+
+        shared_optimizer = torch.optim.Adam(
+            train._evolving_shared_optimizer_parameter_groups(
+                wm,
+                core_lr=1e-4,
+                prediction_head_lr=2e-4,
+            )
+        )
+        private_optimizer = torch.optim.Adam(
+            wm.private_parameters(1), lr=2e-4
+        )
+        route_optimizer = torch.optim.Adam(
+            wm.route_parameters(1), lr=1e-3
+        )
+        actor = nn.Sequential(
+            nn.Linear(wm.zh_transform.out_features, 4),
+            nn.LogSoftmax(dim=-1),
+        )
+        actor.requires_grad_(False)
+        config = SimpleNamespace(
+            compute_dtype="float32",
+            mb_n_size=16,
+            current_batch_n=12,
+            memory_batch_n=4,
+            task_atom_output_regularization=1e-4,
+            interface_q_scale=0.1,
+            interface_h_scale=0.05,
+            interface_actor_scale=0.05,
+            shared_prediction_distill_scale=0.1,
+            uses_shared_prediction_heads=True,
+            memory_loss_scale=1.0,
+            component_gradient_projection=True,
+        )
+        old_private = tuple(wm.private_parameters(0))
+
+        metrics, diagnostics, gradient_norm = train._evolving_world_model_update(
+            config=config,
+            wm=wm,
+            boundary_teacher=teacher,
+            actor_critic_bank=SimpleNamespace(
+                get=lambda task_id: SimpleNamespace(
+                    ac=SimpleNamespace(actor=actor)
+                )
+            ),
+            replay_buffer=replay,
+            current_task_id=1,
+            memory_task_id=0,
+            sequence_length=2,
+            shared_optimizer=shared_optimizer,
+            private_optimizer=private_optimizer,
+            route_optimizer=route_optimizer,
+        )
+
+        expected_components = {
+            "encoder",
+            "posterior",
+            "recurrent",
+            "prior",
+            "latent_interface",
+            "observation_head",
+            "reward_head",
+            "continue_head",
+        }
+        self.assertEqual(set(diagnostics), expected_components)
+        self.assertGreater(
+            float(
+                metrics[
+                    "Memory/Loss/evolving_prediction_observation_distill"
+                ]
+            ),
+            0.0,
+        )
+        self.assertTrue(torch.isfinite(gradient_norm))
+        self.assertTrue(
+            all(parameter.grad is None for parameter in old_private)
+        )
+        for optimizer in (
+            shared_optimizer,
+            private_optimizer,
+            route_optimizer,
+        ):
+            self.assertTrue(optimizer.state)
 
     def test_complete_checkpoint_round_trip_restores_training_state(self) -> None:
         class FakeActorBank:

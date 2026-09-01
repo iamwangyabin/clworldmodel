@@ -35,6 +35,7 @@ ContinualMethod = Literal[
     "cnn_mechanism_bank_arrow",
     "rec_rssm_arrow",
     "evolving_atomic_rssm_arrow",
+    "evolving_atomic_rssm_shared_heads_arrow",
     "evolving_atomic_rssm_shared_fastkan_arrow",
     "dino_fullbank_arrow",
     "dino_patchbank_arrow",
@@ -363,6 +364,8 @@ class Config(Serialisable):
     boundary_max_return_drop: float = 0.05
     evolving_shared_behavior_current_task_fraction: float = 1.0
     task_private_heads: bool = False
+    task_shared_prediction_heads: bool = False
+    shared_prediction_distill_scale: float = 0.0
     task_private_actor_critic: bool = False
     task_atomic_routes: bool = False
     full_task_rssm_experts: bool = False
@@ -472,6 +475,7 @@ class Config(Serialisable):
             "cnn_mechanism_bank_arrow",
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
@@ -494,10 +498,22 @@ class Config(Serialisable):
             self.continual_method
             == "evolving_atomic_rssm_shared_fastkan_arrow"
         )
+        is_evolving_shared_heads = (
+            self.continual_method
+            == "evolving_atomic_rssm_shared_heads_arrow"
+        )
         is_evolving_atomic = self.continual_method in {
             "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }
+        if not isinstance(self.task_shared_prediction_heads, bool):
+            raise ValueError("task_shared_prediction_heads must be a boolean")
+        if self.task_shared_prediction_heads and not is_evolving_shared_heads:
+            raise ValueError(
+                "Task-shared prediction heads require the separately named "
+                "shared prediction heads Evolving-Core method"
+            )
         uses_mechanism_bank = (
             is_cnn_mechanism_bank or is_rec_rssm or is_evolving_atomic
         )
@@ -542,6 +558,22 @@ class Config(Serialisable):
             raise ValueError(
                 "The named Evolving-Core method requires mechanism "
                 "parameterization='shared_frozen_down_film'"
+            )
+        if (
+            is_evolving_shared_heads
+            and self.task_mechanism_parameterization != "dense_private"
+        ):
+            raise ValueError(
+                "The shared-prediction-head Evolving-Core method requires "
+                "mechanism parameterization='dense_private'"
+            )
+        if (
+            is_evolving_shared_heads
+            and self.task_mechanism_capacity_profile != "matched_512"
+        ):
+            raise ValueError(
+                "The shared-prediction-head Evolving-Core method requires "
+                "dense matched_512 Q/F/P mechanisms"
             )
         if (
             self.continual_method == "evolving_atomic_rssm_arrow"
@@ -596,6 +628,8 @@ class Config(Serialisable):
             "boundary_max_return_drop": 0.05,
             "evolving_shared_behavior_current_task_fraction": 1.0,
             "task_private_heads": False,
+            "task_shared_prediction_heads": False,
+            "shared_prediction_distill_scale": 0.0,
             "task_private_actor_critic": False,
             "task_atomic_routes": False,
             "full_task_rssm_experts": False,
@@ -640,7 +674,11 @@ class Config(Serialisable):
                 **evolving_defaults,
                 "evolving_task0_profile": self.evolving_task0_profile,
                 "evolving_shared_core": True,
-                "task_private_heads": True,
+                "task_private_heads": not is_evolving_shared_heads,
+                "task_shared_prediction_heads": is_evolving_shared_heads,
+                "shared_prediction_distill_scale": (
+                    0.1 if is_evolving_shared_heads else 0.0
+                ),
                 "task_private_actor_critic": not is_evolving_shared_fastkan,
                 "task_atomic_routes": True,
                 "ac_lr": 4e-5 if is_evolving_shared_fastkan else 1e-4,
@@ -708,6 +746,10 @@ class Config(Serialisable):
                 )
             if self.memory_loss_scale < 0:
                 raise ValueError("memory_loss_scale must be non-negative")
+            if self.shared_prediction_distill_scale < 0:
+                raise ValueError(
+                    "shared_prediction_distill_scale must be non-negative"
+                )
             if not 0 < self.evolving_shared_behavior_current_task_fraction <= 1:
                 raise ValueError(
                     "Evolving-Core shared-behavior current-task fraction must lie "
@@ -1772,6 +1814,7 @@ class Config(Serialisable):
             "cnn_mechanism_bank_arrow",
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
@@ -1802,6 +1845,7 @@ class Config(Serialisable):
             "cnn_mechanism_bank_arrow",
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
             "dino_patchbank_arrow",
@@ -1833,9 +1877,19 @@ class Config(Serialisable):
         return self.task_private_heads or self.uses_full_task_experts
 
     @property
+    def uses_shared_prediction_heads(self) -> bool:
+        """Whether decoder/reward/continue are one replay-protected set."""
+
+        return (
+            self.continual_method
+            == "evolving_atomic_rssm_shared_heads_arrow"
+        )
+
+    @property
     def uses_full_task_rssm_experts(self) -> bool:
         if self.continual_method in {
             "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }:
             return self.full_task_rssm_experts
@@ -1845,6 +1899,7 @@ class Config(Serialisable):
     def uses_evolving_atomic_rssm(self) -> bool:
         return self.continual_method in {
             "evolving_atomic_rssm_arrow",
+            "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }
 

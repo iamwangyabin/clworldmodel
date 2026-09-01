@@ -41,7 +41,11 @@ contains experiment-facing code.
   fixed to its preregistered `fixed_v1` acquisition setting. The separately
   named `--behavior-profile shared_fastkan_stable` three-task composition uses
   Shared-Frozen-Down Q/F/P mechanisms and one replay-rehearsed FastKAN Actor
-  and Critic across all task routes without adding behavior updates.
+  and Critic across all task routes without adding behavior updates. The
+  separately named `--prediction-head-profile shared_distilled` profile instead
+  preserves full-width Dense Q/F/P and independent MLP Actor-Critics while
+  sharing one replay-, distillation-, projection-, and consolidation-protected
+  decoder/reward/continue set.
 - `smoke_evolving_atomic_rssm.py`: target-CUDA, production-shaped synthetic
   update covering the fixed 12-current/4-memory split, component projection,
   frozen old private state, and shared/private/route Adam steps. Its explicit
@@ -49,7 +53,9 @@ contains experiment-facing code.
   It performs no environment interaction and is evidence of execution
   correctness only. With
   `--behavior-profile shared_fastkan_stable` it also exercises the frozen shared
-  down bases and one old/current route update of the single FastKAN pair.
+  down bases and one old/current route update of the single FastKAN pair. With
+  `--prediction-head-profile shared_distilled` it verifies prediction-head
+  teacher losses, separate projection groups, and shared-head optimizer steps.
 - `run_evolving_task0_sweep.py`: fixed-order, seed-0 MsPacman acquisition
   launcher for the preregistered single-LR profiles or the 120/150/180/240
   duration profiles. It omits held-out-final evaluation and stops at the

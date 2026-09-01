@@ -536,6 +536,27 @@ documented here, covered by focused parity tests, and followed by regenerating
     routed update and parameter ledgers, schedule validation, and shared
     behavior checkpoint restoration.
 
+56. Add the separately named, task-aware
+    `Evolving-Core-DenseQFP-SharedDistilledHeads-PrivateMLPAC-ARROW-v1`
+    profile. It retains the full-width learned `512/512/256` Dense Q/F/P
+    mechanism routes, spatial projectors, and independent MLP Actor-Critics
+    from Dense Evolving-Core, but allocates only one plastic decoder/reward/
+    continuation set. Old-task LTDM sequences keep their complete real-target
+    Dreamer loss and additionally match observation prediction, symlog reward,
+    and continuation probability to the existing frozen boundary world-model
+    teacher at scale `0.1`; no extra teacher copy, forward, sequence, or
+    optimizer step is added. The three prediction heads are independent
+    component-gradient-projection groups, retain the Dense head LR `2e-4`
+    during online training, and participate in task-balanced boundary
+    consolidation and whole-state/Adam rollback. Strict config validation
+    rejects Shared-Frozen-Down Q/F/P, shared/FastKAN behavior, and legacy-name
+    relabeling. Runtime and launcher manifests distinguish online parameters,
+    the common training-only teacher, fixed update budgets, and per-task growth.
+    Focused tests cover exact Task-0 forward parity, single-copy ownership,
+    output distillation, head-wise projection, persistent optimizer groups,
+    rollback coverage, strict config isolation, and the exact six-task
+    `52,891,391`-parameter ledger.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

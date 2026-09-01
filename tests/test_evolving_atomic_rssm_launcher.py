@@ -34,6 +34,8 @@ if torch is not None:
         ORIGINAL_SIX_MINIMUM_FREE_BYTES,
         ORIGINAL_SIX_TASK_PROTOCOL,
         PROTOCOL,
+        SHARED_DISTILLED_HEADS_PROFILE,
+        SHARED_DISTILLED_HEADS_ORIGINAL_SIX_PROTOCOL,
         SHARED_FASTKAN_STABLE_BEHAVIOR,
         TASK_ORDERS,
         _behavior_update_budget,
@@ -457,6 +459,97 @@ class EvolvingAtomicRssmLauncherTests(unittest.TestCase):
                 task_order="mspacman-boxing-crazyclimber",
                 task0_profile="fixed_v1",
                 behavior_profile=SHARED_FASTKAN_STABLE_BEHAVIOR,
+            )
+
+    def test_shared_distilled_heads_change_only_prediction_head_ownership(self) -> None:
+        dense = _resolved_config(
+            self._source(), task_order="arrow-original-six"
+        )
+        shared = _resolved_config(
+            self._source(),
+            task_order="arrow-original-six",
+            prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
+        )
+        differing_keys = {
+            key for key in dense if dense[key] != shared[key]
+        }
+
+        self.assertEqual(
+            differing_keys,
+            {
+                "continual_method",
+                "task_private_heads",
+                "task_shared_prediction_heads",
+                "shared_prediction_distill_scale",
+            },
+        )
+        config = Config.from_dict(shared)
+        self.assertTrue(config.uses_shared_prediction_heads)
+        self.assertTrue(config.task_private_actor_critic)
+        self.assertEqual(config.actor_network, "mlp")
+        self.assertEqual(config.task_mechanism_parameterization, "dense_private")
+        self.assertEqual(
+            _protocol_for_task_order(
+                "arrow-original-six",
+                prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
+            ),
+            SHARED_DISTILLED_HEADS_ORIGINAL_SIX_PROTOCOL,
+        )
+
+    def test_shared_distilled_heads_have_exact_six_task_parameter_ledger(self) -> None:
+        data = _resolved_config(
+            self._source(),
+            task_order="arrow-original-six",
+            prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
+        )
+        parameters = _parameter_manifest(data)
+
+        self.assertEqual(parameters["prediction_head_topology"], "single_shared")
+        self.assertEqual(parameters["world_model_parameters"], 42_601_625)
+        self.assertEqual(parameters["behavior_parameters"], 10_289_766)
+        self.assertEqual(parameters["online_parameters"], 52_891_391)
+        self.assertEqual(parameters["fp32_parameter_bytes"], 211_565_564)
+        self.assertEqual(
+            parameters["per_task_world_model_additions"],
+            {
+                "0": 3_850_432,
+                "1": 3_850_444,
+                "2": 3_850_456,
+                "3": 3_850_468,
+                "4": 3_850_480,
+                "5": 3_850_492,
+            },
+        )
+        self.assertEqual(
+            parameters["comparison_to_dense_evolving_v2_private_mlp"]["difference"],
+            -42_813_145,
+        )
+        self.assertAlmostEqual(
+            parameters["comparison_to_dense_evolving_v2_private_mlp"][
+                "relative_difference"
+            ],
+            -0.4473470829010654,
+        )
+        self.assertEqual(
+            parameters["training_only_prediction_head_teacher"]["parameters"],
+            8_562_629,
+        )
+
+    def test_shared_distilled_heads_reject_shared_behavior_or_compressed_qfp(self) -> None:
+        with self.assertRaisesRegex(ValueError, "private MLP Actor-Critic"):
+            _resolved_config(
+                self._source(),
+                task_order="mspacman-boxing-crazyclimber",
+                behavior_profile=SHARED_FASTKAN_STABLE_BEHAVIOR,
+                prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
+            )
+
+        with self.assertRaisesRegex(ValueError, "dense matched_512"):
+            _resolved_config(
+                self._source(),
+                task_order="arrow-original-six",
+                mechanism_profile=COMPACT_MECHANISM_PROFILE,
+                prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
             )
 
     def test_command_is_from_scratch_single_gpu_and_uncompiled(self) -> None:

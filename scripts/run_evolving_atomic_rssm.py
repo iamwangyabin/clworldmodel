@@ -42,6 +42,12 @@ BEHAVIOR_PROFILES = (
     PRIVATE_MLP_BEHAVIOR,
     SHARED_FASTKAN_STABLE_BEHAVIOR,
 )
+PRIVATE_PREDICTION_HEADS_PROFILE = "private"
+SHARED_DISTILLED_HEADS_PROFILE = "shared_distilled"
+PREDICTION_HEAD_PROFILES = (
+    PRIVATE_PREDICTION_HEADS_PROFILE,
+    SHARED_DISTILLED_HEADS_PROFILE,
+)
 FIXED_TASK0_PROFILE_LRS = {
     "fixed_v1": 2e-4,
     "fixed_v2": 3e-4,
@@ -65,6 +71,14 @@ SHARED_DOWN_ORIGINAL_SIX_PROTOCOL = (
 SHARED_FASTKAN_PROTOCOL = (
     "Evolving-Core-SharedFrozenDown-SharedFastKANAC-StableTargets-ARROW-v1-"
     "ThreeTask-Atari-TaskAware-Pilot"
+)
+SHARED_DISTILLED_HEADS_THREE_TASK_PROTOCOL = (
+    "Evolving-Core-DenseQFP-SharedDistilledHeads-PrivateMLPAC-ARROW-v1-"
+    "ThreeTask-Atari-TaskAware-Pilot"
+)
+SHARED_DISTILLED_HEADS_ORIGINAL_SIX_PROTOCOL = (
+    "Evolving-Core-DenseQFP-SharedDistilledHeads-PrivateMLPAC-ARROW-v1-"
+    "OriginalSix-Atari-TaskAware-Pilot"
 )
 TASK_ORDERS = {
     "mspacman-boxing-crazyclimber": (
@@ -171,11 +185,29 @@ def _protocol_for_task_order(
     mechanism_profile: str = DEFAULT_MECHANISM_PROFILE,
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
     task0_profile: str | None = None,
+    prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
 ) -> str:
     _validate_mechanism_profile(
         task_order, mechanism_profile, mechanism_parameterization
     )
     resolved_task0_profile = _task0_profile_for_order(task_order, task0_profile)
+    if prediction_head_profile not in PREDICTION_HEAD_PROFILES:
+        raise ValueError(
+            f"Unknown prediction-head profile: {prediction_head_profile!r}"
+        )
+    if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
+        if (
+            mechanism_profile != DEFAULT_MECHANISM_PROFILE
+            or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
+        ):
+            raise ValueError(
+                "Shared distilled heads require dense matched_512 Q/F/P mechanisms"
+            )
+        return (
+            SHARED_DISTILLED_HEADS_ORIGINAL_SIX_PROTOCOL
+            if task_order == "arrow-original-six"
+            else SHARED_DISTILLED_HEADS_THREE_TASK_PROTOCOL
+        )
     if mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION:
         return SHARED_DOWN_ORIGINAL_SIX_PROTOCOL
     if mechanism_profile == COMPACT_MECHANISM_PROFILE:
@@ -375,6 +407,16 @@ def _parser() -> argparse.ArgumentParser:
         default="mspacman-boxing-crazyclimber",
     )
     parser.add_argument(
+        "--prediction-head-profile",
+        choices=PREDICTION_HEAD_PROFILES,
+        default=PRIVATE_PREDICTION_HEADS_PROFILE,
+        help=(
+            "private reproduces Dense Evolving-Core; shared_distilled keeps one "
+            "replay-protected decoder/reward/continue set while retaining private "
+            "Dense Q/F/P and private MLP Actor-Critics."
+        ),
+    )
+    parser.add_argument(
         "--mechanism-parameterization",
         choices=MECHANISM_PARAMETERIZATIONS,
         default=DENSE_PRIVATE_PARAMETERIZATION,
@@ -424,6 +466,7 @@ def _resolved_config(
     mechanism_profile: str = DEFAULT_MECHANISM_PROFILE,
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
+    prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
 ) -> dict:
     """Compose the fixed named protocol without changing existing baselines."""
 
@@ -434,6 +477,24 @@ def _resolved_config(
     mechanism_widths = MECHANISM_PROFILE_WIDTHS[mechanism_profile]
     if behavior_profile not in BEHAVIOR_PROFILES:
         raise ValueError(f"Unknown behavior profile: {behavior_profile!r}")
+    if prediction_head_profile not in PREDICTION_HEAD_PROFILES:
+        raise ValueError(
+            f"Unknown prediction-head profile: {prediction_head_profile!r}"
+        )
+    if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
+        if behavior_profile != PRIVATE_MLP_BEHAVIOR:
+            raise ValueError(
+                "Shared distilled prediction heads retain the private MLP "
+                "Actor-Critic bank"
+            )
+        if (
+            mechanism_profile != DEFAULT_MECHANISM_PROFILE
+            or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
+        ):
+            raise ValueError(
+                "Shared distilled prediction heads require dense matched_512 "
+                "Q/F/P mechanisms"
+            )
     if behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR:
         if resolved_task0_profile != "fixed_v2":
             raise ValueError(
@@ -533,6 +594,8 @@ def _resolved_config(
             "boundary_max_return_drop": 0.05,
             "evolving_shared_behavior_current_task_fraction": 1.0,
             "task_private_heads": True,
+            "task_shared_prediction_heads": False,
+            "shared_prediction_distill_scale": 0.0,
             "task_private_actor_critic": True,
             "task_atomic_routes": True,
             "full_task_rssm_experts": False,
@@ -553,6 +616,15 @@ def _resolved_config(
                 "shared_actor_distill_n_sync": 1,
                 "shared_actor_distill_burnin_steps": 0,
                 "shared_actor_distill_steps": 1,
+            }
+        )
+    if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
+        config.update(
+            {
+                "continual_method": "evolving_atomic_rssm_shared_heads_arrow",
+                "task_private_heads": False,
+                "task_shared_prediction_heads": True,
+                "shared_prediction_distill_scale": 0.1,
             }
         )
     for replay_config in config["replay_buffers"]:
@@ -638,11 +710,18 @@ def _parameter_manifest(config: dict) -> dict:
         private_mechanism_parameters + 12 * task_id
         for task_id in range(task_count)
     )
+    shared_prediction_heads = bool(
+        config.get("task_shared_prediction_heads", False)
+    )
     world_model_parameters = (
         ARROW_WORLD_MODEL_PARAMETERS
         + task_count * TASK_PROJECTOR_PARAMETERS
         + mechanism_parameters
-        + (task_count - 1) * TASK_PRIVATE_HEAD_ADDITION_PARAMETERS
+        + (
+            0
+            if shared_prediction_heads
+            else (task_count - 1) * TASK_PRIVATE_HEAD_ADDITION_PARAMETERS
+        )
     )
     shared_fastkan = (
         config["continual_method"]
@@ -674,7 +753,9 @@ def _parameter_manifest(config: dict) -> dict:
             + private_mechanism_parameters
             + 12 * task_id
             + (
-                TASK_PRIVATE_HEAD_ADDITION_PARAMETERS if task_id > 0 else 0
+                TASK_PRIVATE_HEAD_ADDITION_PARAMETERS
+                if task_id > 0 and not shared_prediction_heads
+                else 0
             )
         )
         for task_id in range(task_count)
@@ -694,6 +775,14 @@ def _parameter_manifest(config: dict) -> dict:
             "state, gradients, activations, Replay, and boundary world-model teachers"
         ),
         "world_model_parameters": world_model_parameters,
+        "prediction_head_topology": (
+            "single_shared" if shared_prediction_heads else "per_task_private"
+        ),
+        "shared_prediction_head_parameters": (
+            TASK_PRIVATE_HEAD_ADDITION_PARAMETERS
+            if shared_prediction_heads
+            else 0
+        ),
         "mechanism_parameterization": mechanism_parameterization,
         "shared_frozen_down_parameters": shared_mechanism_parameters,
         "behavior_parameters": behavior_parameters,
@@ -735,6 +824,13 @@ def _parameter_manifest(config: dict) -> dict:
                 fastkan_pair + FASTKAN_CRITIC_PARAMETERS + FASTKAN_ACTOR_PARAMETERS
             ),
             "common_evolving_boundary_world_model_teacher_excluded": True,
+        }
+    if shared_prediction_heads:
+        result["training_only_prediction_head_teacher"] = {
+            "parameters": TASK_PRIVATE_HEAD_ADDITION_PARAMETERS,
+            "additional_teacher_copy": False,
+            "contained_in_common_evolving_boundary_world_model_teacher": True,
+            "growth_with_task_count": 0,
         }
     return result
 
@@ -778,6 +874,10 @@ def _budget_manifest(config: dict) -> dict:
         "actor_critic_updates_by_task_route": _behavior_update_budget(config),
         "actor_critic_update_budget_fixed": True,
         "shared_behavior_rehearsal_adds_optimizer_steps": False,
+        "shared_prediction_distillation_adds_optimizer_steps": False,
+        "shared_prediction_distillation_reuses_memory_teacher_forward": bool(
+            config.get("task_shared_prediction_heads", False)
+        ),
         "consolidation_sequences": consolidation_updates
         * int(config["mb_n_size"]),
         "online_sequence_batch_total": int(config["mb_n_size"]),
@@ -818,6 +918,7 @@ def main() -> int:
         mechanism_profile=args.mechanism_profile,
         mechanism_parameterization=args.mechanism_parameterization,
         behavior_profile=args.behavior_profile,
+        prediction_head_profile=args.prediction_head_profile,
     )
     task_count = len(TASK_ORDERS[args.task_order])
     resolved_task0_profile = config["evolving_task0_profile"]
@@ -826,6 +927,7 @@ def main() -> int:
         mechanism_profile=args.mechanism_profile,
         mechanism_parameterization=args.mechanism_parameterization,
         task0_profile=resolved_task0_profile,
+        prediction_head_profile=args.prediction_head_profile,
     )
     if args.task_order == "arrow-original-six" and args.classification != "pilot":
         raise ValueError("The original-six Evolving-Core campaign is pilot-only")
@@ -847,13 +949,19 @@ def main() -> int:
         if args.behavior_profile == PRIVATE_MLP_BEHAVIOR
         else f"_{args.behavior_profile}"
     )
+    prediction_head_output_suffix = (
+        ""
+        if args.prediction_head_profile == PRIVATE_PREDICTION_HEADS_PROFILE
+        else f"_{args.prediction_head_profile}_heads"
+    )
     output_dir = (
         args.output_dir.expanduser().resolve()
         if args.output_dir is not None
         else ROOT
         / "runs"
         / (
-            f"evolving_atomic_rssm{task0_output_suffix}{behavior_output_suffix}_"
+            f"evolving_atomic_rssm{task0_output_suffix}{behavior_output_suffix}"
+            f"{prediction_head_output_suffix}_"
             f"{args.task_order}"
             f"{mechanism_output_suffix}_"
             f"s{args.seed}_{args.classification}"
@@ -882,6 +990,9 @@ def main() -> int:
         "method": (
             "Evolving-Core Shared Frozen Down + Shared FastKAN Actor-Critic"
             if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
+            else "Evolving-Core Dense Q/F/P + Shared Distilled Prediction Heads "
+            "+ Private MLP Actor-Critic"
+            if args.prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE
             else
             "Evolving-Core Atomic RSSM Shared Frozen Down + Private FiLM/Up"
             if args.mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION
@@ -906,17 +1017,24 @@ def main() -> int:
         "task_agnostic_claimed": False,
         "from_scratch": True,
         "behavior_profile": args.behavior_profile,
+        "prediction_head_profile": args.prediction_head_profile,
         "source_task1_snapshot": None,
         "shared_core": (
             "CNN plus posterior/recurrent/prior RSSM stays plastic; each Q/F/P "
             "bank also owns one frozen full-width down basis"
             if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
+            else "CNN, posterior/recurrent/prior RSSM, and one shared "
+            "decoder/reward/continue set; always plastic and replay protected"
+            if args.prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE
             else "CNN plus posterior/recurrent/prior RSSM; always plastic"
         ),
         "private_state": (
             "per-task projector, Q/F/P LayerNorm-FiLM-up modules, and heads; "
             "no task-private behavior"
             if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
+            else "per-task projector, dense Q/F/P atoms, routes, and independent "
+            "MLP actor-critic; decoder/reward/continue are shared"
+            if args.prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE
             else "per-task projector, Q/F/P atoms, heads, actor-critic"
         ),
         "mechanism_capacity": _mechanism_capacity_manifest(
@@ -930,6 +1048,24 @@ def main() -> int:
             != DEFAULT_MECHANISM_PROFILE
             or config["task_mechanism_parameterization"]
             != DENSE_PRIVATE_PARAMETERIZATION
+        ),
+        "prediction_head_topology": (
+            {
+                "ownership": "one shared plastic decoder/reward/continue set",
+                "old_task_supervision": "real LTDM Dreamer loss plus boundary-teacher distillation",
+                "distillation_scale": config[
+                    "shared_prediction_distill_scale"
+                ],
+                "component_gradient_projection": True,
+                "boundary_consolidation_and_rollback": True,
+                "extra_teacher_forward": False,
+                "extra_optimizer_updates": 0,
+            }
+            if args.prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE
+            else {
+                "ownership": "one frozen private decoder/reward/continue set per task",
+                "distillation_scale": 0.0,
+            }
         ),
         "behavior_topology": (
             {
@@ -952,6 +1088,9 @@ def main() -> int:
             "posterior_kl": config["interface_q_scale"],
             "layer_normalized_hidden_mse": config["interface_h_scale"],
             "frozen_old_actor_kl": config["interface_actor_scale"],
+            "shared_prediction_outputs": config[
+                "shared_prediction_distill_scale"
+            ],
         },
         "budgets": _budget_manifest(config),
         "parameter_budget": _parameter_manifest(config),
