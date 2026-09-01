@@ -102,6 +102,9 @@ class TrainingLauncherTests(unittest.TestCase):
         output_dir = Path(launch["output_dir"])
         self.assertEqual(launch["method"], "ARROW-50")
         self.assertEqual(launch["role"], "primary-method")
+        self.assertEqual(
+            launch["project_pythonpath_prepend"], str((ROOT / "src").resolve())
+        )
         self.assertEqual(launch["fifo_slots"], 512)
         self.assertEqual(launch["ltdm_slots"], 512)
         self.assertEqual(launch["replay_buffer_selection"], {"fifo": 0.5, "ltdm": 0.5})

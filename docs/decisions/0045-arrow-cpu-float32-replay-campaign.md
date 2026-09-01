@@ -36,3 +36,7 @@ to CPU, explicit float32 observation storage, unchanged byte/capacity accounting
 and a manifest stating that retention and sampling semantics are unchanged.
 The first target-GPU run remains a monitored runtime validation; any OOM,
 throughput regression, or value mismatch is preserved as experiment evidence.
+The canonical launcher also prepends the project `src/` directory to
+`PYTHONPATH` for every ARROW execution because the vendored trainer imports
+project-owned runtime helpers on the baseline path; it does not rely on an
+ambient editable installation.

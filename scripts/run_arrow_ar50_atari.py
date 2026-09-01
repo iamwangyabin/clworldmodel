@@ -484,13 +484,14 @@ def main() -> int:
     if args.cpu_threads is not None:
         thread_env = {key: str(args.cpu_threads) for key in THREAD_ENV_KEYS}
         env.update(thread_env)
-    project_pythonpath = None
-    if args.observation_objective == "r2" or args.actor_network in KAN_ACTOR_NETWORKS:
-        project_pythonpath = str(ROOT / "src")
-        inherited_pythonpath = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = os.pathsep.join(
-            part for part in (project_pythonpath, inherited_pythonpath) if part
-        )
+    # The vendored Atari trainer imports project-owned runtime helpers even for
+    # the unmodified ARROW-50 path.  Make the package source explicit rather
+    # than relying on an editable install or the caller's working directory.
+    project_pythonpath = str(ROOT / "src")
+    inherited_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (project_pythonpath, inherited_pythonpath) if part
+    )
 
     swap_sched = config["esc"]["kwargs"]["swap_sched"]
     task_duration_epochs = args.task_duration_epochs or swap_sched
