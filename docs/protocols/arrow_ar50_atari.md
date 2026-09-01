@@ -116,6 +116,33 @@ therefore not suitable for the frozen full-capacity run. The paper reports one
 A40 or A100 per experiment and approximately 50 hours for one continual Atari
 ARROW/DV3 setting. Treat that as scheduling guidance, not a runtime guarantee.
 
+### CPU-resident float32 replay execution profile
+
+On 24-GiB accelerators, the launcher exposes an explicit storage-only profile:
+
+```bash
+python scripts/run_arrow_ar50_atari.py \
+  --seed 1 \
+  --replay-device cpu \
+  --cpu-threads 8 \
+  --profile-stages \
+  --output-dir /persistent/path/arrow_ar50_cpu_fp32_original_s1
+```
+
+This profile preserves both 512-trajectory buffers, sequence length, float32
+observation storage, FIFO/LTDM retention, 0.5/0.5 buffer selection, minibatch
+shape, and CUDA training tensors. Only the persistent replay storage device
+changes from CUDA to CPU; sampled minibatches are copied to CUDA. The resolved
+config and launch manifest record this deviation, and results must use the
+runtime label `vendored-optimized-cpu-float32-replay` rather than being
+presented as the published CUDA-storage execution profile.
+
+The two buffers allocate approximately 24.04 GiB of CPU tensors per run. Four
+concurrent runs therefore require approximately 96.2 GiB for replay alone;
+use a host with a verified memory limit of at least 128 GiB, cap each process's
+CPU thread pools, and retain headroom for environments, models, and filesystem
+cache. Low average GPU utilization does not remove this host-memory budget.
+
 ## Execution ladder
 
 1. Run `python scripts/run_arrow_ar50_atari.py --seed 0 --dry-run` and inspect

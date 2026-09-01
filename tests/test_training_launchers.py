@@ -141,6 +141,51 @@ class TrainingLauncherTests(unittest.TestCase):
             str((output_dir / "analysis_snapshots").resolve()),
         )
 
+    def test_arrow_cpu_replay_profile_keeps_float32_capacity_and_sampling(self) -> None:
+        launch = self._arrow_dry_run("--replay-device", "cpu")
+
+        self.assertEqual(
+            launch["runtime"], "vendored-optimized-cpu-float32-replay"
+        )
+        self.assertIn("cpu-resident-float32-replay", launch["optimizations"])
+        self.assertEqual(
+            launch["config_overrides"],
+            {
+                "replay_buffers": [
+                    {"rb_type": "FifoReplay", "rb_device": "cpu"},
+                    {"rb_type": "LongTermReplay", "rb_device": "cpu"},
+                ],
+                "replay_observation_dtype": "float32",
+            },
+        )
+        self.assertTrue(
+            launch["resolved_training_config"].endswith(
+                "resolved_training_config.json"
+            )
+        )
+        replay_profile = launch["replay_execution_profile"]
+        self.assertEqual(replay_profile["storage_device"], "cpu")
+        self.assertEqual(replay_profile["observation_dtype"], "float32")
+        self.assertTrue(replay_profile["capacity_unchanged"])
+        self.assertTrue(replay_profile["fifo_ltdm_retention_unchanged"])
+        self.assertTrue(replay_profile["buffer_selection_probability_unchanged"])
+        self.assertTrue(replay_profile["sampled_tensor_values_and_dtype_unchanged"])
+        self.assertTrue(replay_profile["minibatches_transferred_to_cuda_after_sampling"])
+
+        replay_storage = launch["replay_storage_budget"]
+        self.assertEqual(replay_storage["dtype"], "float32")
+        self.assertEqual(replay_storage["observation_bytes"], 25_769_803_776)
+        self.assertEqual(replay_storage["allocated_tensor_bytes"], 25_813_843_968)
+        self.assertEqual(replay_storage["buffers"]["fifo"]["device"], "cpu")
+        self.assertEqual(replay_storage["buffers"]["ltdm"]["device"], "cpu")
+
+        command = launch["command"]
+        self.assertTrue(
+            command[command.index("--config") + 1].endswith(
+                "resolved_training_config.json"
+            )
+        )
+
     def test_r2_dry_run_is_decoder_free_and_keeps_arrow_50_replay(self) -> None:
         launch = self._arrow_dry_run("--observation-objective", "r2")
 

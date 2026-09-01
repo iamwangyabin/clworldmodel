@@ -250,6 +250,15 @@ def _parser() -> argparse.ArgumentParser:
         help="Limit CPU thread pools and record the setting in the launch manifest",
     )
     parser.add_argument(
+        "--replay-device",
+        choices=["cuda", "cpu"],
+        default="cuda",
+        help=(
+            "Store both full-capacity float32 ARROW replay buffers on CUDA "
+            "(published config) or CPU (explicit storage-only execution profile)"
+        ),
+    )
+    parser.add_argument(
         "--swanlab-project",
         help="Optionally mirror TensorBoard metrics to a configured SwanLab project",
     )
@@ -303,6 +312,13 @@ def _verify_primary_config(config_path: Path, curriculum: str, seed: int) -> dic
     replay_types = [item.get("rb_type") for item in config.get("replay_buffers", [])]
     if replay_types != ["FifoReplay", "LongTermReplay"]:
         errors.append("replay buffers must be FIFO followed by LTDM")
+    replay_devices = [
+        item.get("rb_device") for item in config.get("replay_buffers", [])
+    ]
+    if replay_devices != ["cuda", "cuda"]:
+        errors.append("published ARROW replay buffers must be CUDA-resident")
+    if config.get("replay_observation_dtype", "float32") != "float32":
+        errors.append("published ARROW replay observations must use float32")
     if config.get("seed") != SEEDS[seed]:
         errors.append("numeric seed does not match the published seed ID")
     envs = config.get("esc", {}).get("env_configs", [])
@@ -451,6 +467,8 @@ def main() -> int:
         output_prefix = "arrow_r2rep_ar50"
     else:
         output_prefix = "arrow_ar50"
+    if args.replay_device == "cpu":
+        output_prefix += "_cpu_fp32_replay"
     if args.task_prefix_length is not None:
         output_prefix += f"_t{args.task_prefix_length}_pilot"
     if args.task_duration_epochs is not None:
@@ -503,8 +521,23 @@ def main() -> int:
     resolved_training_config = None
     launch_config_path = config_path
     config_overrides = {}
-    if adaptive_kan or fastkan_ac or args.task_duration_epochs is not None:
+    if (
+        adaptive_kan
+        or fastkan_ac
+        or args.task_duration_epochs is not None
+        or args.replay_device == "cpu"
+    ):
         resolved_training_config = json.loads(json.dumps(config))
+        if args.replay_device == "cpu":
+            for replay_config in resolved_training_config["replay_buffers"]:
+                replay_config["rb_device"] = "cpu"
+            resolved_training_config["replay_observation_dtype"] = "float32"
+            config_overrides.update(
+                {
+                    "replay_buffers": resolved_training_config["replay_buffers"],
+                    "replay_observation_dtype": "float32",
+                }
+            )
         if adaptive_kan:
             resolved_training_config["actor_network"] = args.actor_network
             resolved_training_config["actor_kan_trainable_grid"] = True
@@ -536,6 +569,8 @@ def main() -> int:
                 }
             )
         launch_config_path = output_dir / "resolved_training_config.json"
+
+    effective_config = resolved_training_config or config
 
     command = [
         str(python),
@@ -627,7 +662,11 @@ def main() -> int:
     launch = {
         "method": method,
         "role": role,
-        "runtime": "vendored-optimized",
+        "runtime": (
+            "vendored-optimized-cpu-float32-replay"
+            if args.replay_device == "cpu"
+            else "vendored-optimized"
+        ),
         "started_at_utc": None,
         "project_git": project_git,
         "profile_stages": args.profile_stages,
@@ -637,6 +676,11 @@ def main() -> int:
             "fused-adam",
             "tf32-matmul",
             "set-to-none-gradients",
+            *(
+                ["cpu-resident-float32-replay"]
+                if args.replay_device == "cpu"
+                else []
+            ),
         ],
         "upstream_commit": UPSTREAM_COMMIT,
         "source": str(ARROW_ROOT),
@@ -784,7 +828,22 @@ def main() -> int:
         "ltdm_slots": 512,
         "sequence_length": 512,
         "replay_buffer_selection": {"fifo": 0.5, "ltdm": 0.5},
-        "replay_storage_budget": _arrow_replay_storage_budget(config),
+        "replay_execution_profile": {
+            "storage_device": args.replay_device,
+            "observation_dtype": "float32",
+            "published_storage_device": "cuda",
+            "storage_device_changed_from_published_config": (
+                args.replay_device != "cuda"
+            ),
+            "capacity_unchanged": True,
+            "fifo_ltdm_retention_unchanged": True,
+            "buffer_selection_probability_unchanged": True,
+            "sampled_tensor_values_and_dtype_unchanged": True,
+            "minibatches_transferred_to_cuda_after_sampling": (
+                args.replay_device == "cpu"
+            ),
+        },
+        "replay_storage_budget": _arrow_replay_storage_budget(effective_config),
         "actor": {
             "network": args.actor_network,
             "critic_network": (
