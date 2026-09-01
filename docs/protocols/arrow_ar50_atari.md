@@ -143,6 +143,25 @@ use a host with a verified memory limit of at least 128 GiB, cap each process's
 CPU thread pools, and retain headroom for environments, models, and filesystem
 cache. Low average GPU utilization does not remove this host-memory budget.
 
+To reproduce one published single-task normalization endpoint, select the
+upstream task index explicitly:
+
+```bash
+python scripts/run_arrow_ar50_atari.py \
+  --single-task-index 2 \
+  --seed 0 \
+  --replay-device cpu \
+  --cpu-threads 6 \
+  --profile-stages \
+  --output-dir /persistent/path/arrow_ar50_cpu_fp32_crazyclimber_s0
+```
+
+Task indices `0..5` follow the frozen paper order: MsPacman, Boxing,
+CrazyClimber, Frostbite, Seaquest, and Enduro. Six concurrent runs allocate
+approximately 144.3 GiB of replay tensors; twelve allocate approximately
+288.5 GiB. The latter requires at least 384 GiB of host memory after accounting
+for Python, environments, models, and cache.
+
 ## Execution ladder
 
 1. Run `python scripts/run_arrow_ar50_atari.py --seed 0 --dry-run` and inspect

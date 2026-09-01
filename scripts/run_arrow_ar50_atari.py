@@ -29,6 +29,14 @@ CONFIG_NAME = (
     "ALE_MsPacman,ALE_Boxing,ALE_CrazyClimber,ALE_Frostbite,"
     "ALE_Seaquest,ALE_Enduro-s{seed}-arrow.json"
 )
+SINGLE_TASK_CONFIGS = (
+    ("ALE_MsPacman", "ALE/MsPacman-v5"),
+    ("ALE_Boxing", "ALE/Boxing-v5"),
+    ("ALE_CrazyClimber", "ALE/CrazyClimber-v5"),
+    ("ALE_Frostbite", "ALE/Frostbite-v5"),
+    ("ALE_Seaquest", "ALE/Seaquest-v5"),
+    ("ALE_Enduro", "ALE/Enduro-v5"),
+)
 CURRICULUM_DIRS = {
     "original": "Original Order",
     "reversed": "Reversed Order",
@@ -188,6 +196,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, choices=range(5), default=0)
     parser.add_argument("--curriculum", choices=CURRICULUM_DIRS, default="original")
     parser.add_argument(
+        "--single-task-index",
+        type=int,
+        choices=range(len(SINGLE_TASK_CONFIGS)),
+        help=(
+            "Run the corresponding published Atari single-task ARROW config "
+            "instead of a continual curriculum. Indices follow the paper order: "
+            "MsPacman, Boxing, CrazyClimber, Frostbite, Seaquest, Enduro."
+        ),
+    )
+    parser.add_argument(
         "--observation-objective",
         choices=["reconstruction", "r2"],
         default="reconstruction",
@@ -270,7 +288,20 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _config_path(curriculum: str, seed: int) -> Path:
+def _config_path(
+    curriculum: str,
+    seed: int,
+    single_task_index: int | None = None,
+) -> Path:
+    if single_task_index is not None:
+        config_stem, _ = SINGLE_TASK_CONFIGS[single_task_index]
+        return (
+            ARROW_ROOT
+            / "Configs"
+            / "Atari configs"
+            / "Single-task configs"
+            / f"{config_stem}-e{single_task_index}-s{seed}-arrow.json"
+        )
     return (
         ARROW_ROOT
         / "Configs"
@@ -281,7 +312,12 @@ def _config_path(curriculum: str, seed: int) -> Path:
     )
 
 
-def _verify_primary_config(config_path: Path, curriculum: str, seed: int) -> dict:
+def _verify_primary_config(
+    config_path: Path,
+    curriculum: str,
+    seed: int,
+    single_task_index: int | None = None,
+) -> dict:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     errors = []
     if config.get("algorithm") != "arrow":
@@ -322,12 +358,25 @@ def _verify_primary_config(config_path: Path, curriculum: str, seed: int) -> dic
     if config.get("seed") != SEEDS[seed]:
         errors.append("numeric seed does not match the published seed ID")
     envs = config.get("esc", {}).get("env_configs", [])
-    if len(envs) != 6:
-        errors.append("continual Atari config must contain six tasks")
-    swap_sched = config.get("esc", {}).get("kwargs", {}).get("swap_sched")
-    expected_swap = 45 if curriculum == "two-cycle" else 90
-    if swap_sched != expected_swap:
-        errors.append(f"swap_sched must be {expected_swap} for {curriculum}")
+    if single_task_index is None:
+        if len(envs) != 6:
+            errors.append("continual Atari config must contain six tasks")
+        swap_sched = config.get("esc", {}).get("kwargs", {}).get("swap_sched")
+        expected_swap = 45 if curriculum == "two-cycle" else 90
+        if swap_sched != expected_swap:
+            errors.append(f"swap_sched must be {expected_swap} for {curriculum}")
+    else:
+        _, expected_environment = SINGLE_TASK_CONFIGS[single_task_index]
+        if len(envs) != 1 or envs[0].get("name") != expected_environment:
+            errors.append(
+                "single-task config must contain only " f"{expected_environment}"
+            )
+        if config.get("esc", {}).get("env_schedule_type") != "AllEnvironments":
+            errors.append("single-task config must use AllEnvironments")
+        if config.get("epochs") != 91:
+            errors.append("published Atari single-task config must use epochs=91")
+        if config.get("esc", {}).get("kwargs") not in ({}, None):
+            errors.append("single-task config must not define a task-swap schedule")
     if errors:
         raise RuntimeError("Invalid primary ARROW config: " + "; ".join(errors))
     return config
@@ -399,6 +448,21 @@ def _arrow_replay_storage_budget(config: dict) -> dict:
 def main() -> int:
     parser = _parser()
     args = parser.parse_args()
+    single_task = args.single_task_index is not None
+    if single_task and (
+        args.task_prefix_length is not None or args.task_duration_epochs is not None
+    ):
+        parser.error(
+            "--single-task-index cannot be combined with task-prefix or task-duration "
+            "overrides"
+        )
+    if single_task and (
+        args.actor_network != "mlp" or args.observation_objective != "reconstruction"
+    ):
+        parser.error(
+            "--single-task-index is reserved for the published ARROW-50 MLP "
+            "reconstruction baseline"
+        )
     if (
         args.actor_network in KAN_ACTOR_NETWORKS
         and args.observation_objective != "reconstruction"
@@ -459,8 +523,17 @@ def main() -> int:
         git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
     )
     python = args.python.resolve()
-    config_path = _config_path(args.curriculum, args.seed)
-    config = _verify_primary_config(config_path, args.curriculum, args.seed)
+    config_path = _config_path(
+        args.curriculum,
+        args.seed,
+        args.single_task_index,
+    )
+    config = _verify_primary_config(
+        config_path,
+        args.curriculum,
+        args.seed,
+        args.single_task_index,
+    )
     if args.actor_network in KAN_ACTOR_NETWORKS:
         output_prefix = KAN_ACTOR_METADATA[args.actor_network]["output_prefix"]
     elif args.observation_objective == "r2":
@@ -469,14 +542,21 @@ def main() -> int:
         output_prefix = "arrow_ar50"
     if args.replay_device == "cpu":
         output_prefix += "_cpu_fp32_replay"
+    if single_task:
+        config_stem, _ = SINGLE_TASK_CONFIGS[args.single_task_index]
+        output_prefix += (
+            f"_single_task_e{args.single_task_index}_"
+            f"{config_stem.removeprefix('ALE_').lower()}"
+        )
     if args.task_prefix_length is not None:
         output_prefix += f"_t{args.task_prefix_length}_pilot"
     if args.task_duration_epochs is not None:
         output_prefix += f"_e{args.task_duration_epochs}"
+    run_schedule_label = "single_task" if single_task else args.curriculum
     output_dir = (
         args.output_dir.resolve()
         if args.output_dir is not None
-        else ROOT / "runs" / f"{output_prefix}_{args.curriculum}_s{args.seed}_analysis"
+        else ROOT / "runs" / f"{output_prefix}_{run_schedule_label}_s{args.seed}_analysis"
     )
     snapshot_dir = output_dir / "analysis_snapshots"
     env = os.environ.copy()
@@ -493,7 +573,11 @@ def main() -> int:
         part for part in (project_pythonpath, inherited_pythonpath) if part
     )
 
-    swap_sched = config["esc"]["kwargs"]["swap_sched"]
+    swap_sched = (
+        config["epochs"] - 1
+        if single_task
+        else config["esc"]["kwargs"]["swap_sched"]
+    )
     task_duration_epochs = args.task_duration_epochs or swap_sched
     if (
         args.task_duration_epochs is not None
@@ -616,8 +700,12 @@ def main() -> int:
     if args.profile_stages:
         command.append("--profile-stages")
     command.extend(("--compile-world-model", "--fused-adam", "--tf32"))
-    boundary_epochs = list(
-        range(task_duration_epochs - 1, training_epochs, task_duration_epochs)
+    boundary_epochs = (
+        [training_epochs - 1]
+        if single_task
+        else list(
+            range(task_duration_epochs - 1, training_epochs, task_duration_epochs)
+        )
     )
     is_r2 = args.observation_objective == "r2"
     is_kan_actor = args.actor_network in KAN_ACTOR_NETWORKS
@@ -630,7 +718,10 @@ def main() -> int:
     else:
         method = "ARROW-50"
         role = "primary-method"
-    if args.task_prefix_length is not None:
+    if single_task:
+        method += "-SingleTask"
+        role = "single-task-normalization-reproduction"
+    elif args.task_prefix_length is not None:
         if args.task_prefix_length == 1 and is_kan_actor:
             if args.task_duration_epochs is None:
                 method += "-T1TrainabilityPilot"
@@ -719,12 +810,13 @@ def main() -> int:
             ],
         },
         "training_scope": {
+            "single_task_index": args.single_task_index,
             "task_prefix_length": args.task_prefix_length,
             "epochs": training_epochs,
             "task_duration_epochs": task_duration_epochs,
             "baseline_task_duration_epochs": swap_sched,
             "task_duration_epoch_override": args.task_duration_epochs,
-            "full_curriculum": args.task_prefix_length is None,
+            "full_curriculum": args.task_prefix_length is None and not single_task,
             "tasks": [
                 task["name"]
                 for task in config["esc"]["env_configs"][
@@ -801,7 +893,7 @@ def main() -> int:
             if full_stable_fastkan_ac
             else None
         ),
-        "curriculum": args.curriculum,
+        "curriculum": "single-task" if single_task else args.curriculum,
         "seed_id": args.seed,
         "seed": config["seed"],
         "determinism": {

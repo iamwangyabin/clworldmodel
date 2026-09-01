@@ -189,6 +189,70 @@ class TrainingLauncherTests(unittest.TestCase):
             )
         )
 
+    def test_arrow_single_task_cpu_replay_uses_published_task_config(self) -> None:
+        launch = self._arrow_dry_run(
+            "--single-task-index",
+            "2",
+            "--replay-device",
+            "cpu",
+        )
+
+        self.assertEqual(launch["method"], "ARROW-50-SingleTask")
+        self.assertEqual(
+            launch["role"], "single-task-normalization-reproduction"
+        )
+        self.assertEqual(launch["curriculum"], "single-task")
+        self.assertTrue(
+            launch["source_config"].endswith(
+                "ALE_CrazyClimber-e2-s0-arrow.json"
+            )
+        )
+        training_scope = launch["training_scope"]
+        self.assertEqual(training_scope["single_task_index"], 2)
+        self.assertFalse(training_scope["full_curriculum"])
+        self.assertEqual(training_scope["epochs"], 91)
+        self.assertEqual(training_scope["task_duration_epochs"], 90)
+        self.assertEqual(training_scope["tasks"], ["ALE/CrazyClimber-v5"])
+        self.assertEqual(
+            launch["analysis_snapshot_semantics"]["task_boundary_epochs"],
+            [90],
+        )
+        self.assertEqual(
+            launch["analysis_snapshot_semantics"]["final_epoch"], 90
+        )
+        self.assertTrue(
+            launch["analysis_snapshot_semantics"][
+                "final_coincides_with_task_boundary"
+            ]
+        )
+        self.assertEqual(
+            launch["replay_execution_profile"]["storage_device"], "cpu"
+        )
+        self.assertEqual(
+            launch["replay_storage_budget"]["allocated_tensor_bytes"],
+            25_813_843_968,
+        )
+        self.assertNotIn("--evaluate-final", launch["command"])
+
+    def test_arrow_single_task_rejects_method_ablation_overrides(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/run_arrow_ar50_atari.py",
+                "--single-task-index",
+                "0",
+                "--actor-network",
+                "relu_kan",
+                "--dry-run",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("published ARROW-50", result.stderr)
+
     def test_r2_dry_run_is_decoder_free_and_keeps_arrow_50_replay(self) -> None:
         launch = self._arrow_dry_run("--observation-objective", "r2")
 
