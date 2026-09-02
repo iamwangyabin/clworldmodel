@@ -224,6 +224,7 @@ def _policy(config: dict[str, Any], final_path: Path) -> str:
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
+        "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
         "dino_fullbank_arrow",

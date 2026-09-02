@@ -36,6 +36,7 @@ ContinualMethod = Literal[
     "rec_rssm_arrow",
     "evolving_atomic_rssm_arrow",
     "evolving_atomic_rssm_shared_heads_arrow",
+    "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
     "evolving_atomic_rssm_learned_base_adapters_arrow",
     "evolving_atomic_rssm_shared_fastkan_arrow",
     "dino_fullbank_arrow",
@@ -76,6 +77,7 @@ TaskMechanismParameterization = Literal[
     "dense_private",
     "shared_frozen_down_film",
     "learned_task0_low_rank",
+    "dense_task0_low_rank_atoms",
 ]
 EvaluationSeedProtocol = Literal[
     "advancing",
@@ -483,6 +485,7 @@ class Config(Serialisable):
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
@@ -510,16 +513,23 @@ class Config(Serialisable):
             self.continual_method
             == "evolving_atomic_rssm_shared_heads_arrow"
         )
+        is_evolving_atomic_lora_shared_heads = (
+            self.continual_method
+            == "evolving_atomic_rssm_atomic_lora_shared_heads_arrow"
+        )
         is_evolving_learned_base_adapters = (
             self.continual_method
             == "evolving_atomic_rssm_learned_base_adapters_arrow"
         )
         uses_evolving_shared_heads = (
-            is_evolving_shared_heads or is_evolving_learned_base_adapters
+            is_evolving_shared_heads
+            or is_evolving_atomic_lora_shared_heads
+            or is_evolving_learned_base_adapters
         )
         is_evolving_atomic = self.continual_method in {
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }
@@ -569,6 +579,7 @@ class Config(Serialisable):
             "dense_private",
             "shared_frozen_down_film",
             "learned_task0_low_rank",
+            "dense_task0_low_rank_atoms",
         }:
             raise ValueError(
                 "Unknown mechanism parameterization: "
@@ -589,19 +600,40 @@ class Config(Serialisable):
             self.task_mechanism_num_atoms < 1
         ):
             raise ValueError("task_mechanism_num_atoms must be a positive integer")
-        if self.task_mechanism_parameterization == "learned_task0_low_rank":
-            if not is_evolving_learned_base_adapters:
+        if self.task_mechanism_parameterization in {
+            "learned_task0_low_rank",
+            "dense_task0_low_rank_atoms",
+        }:
+            expected_method = (
+                is_evolving_learned_base_adapters
+                if self.task_mechanism_parameterization
+                == "learned_task0_low_rank"
+                else is_evolving_atomic_lora_shared_heads
+            )
+            if not expected_method:
                 raise ValueError(
-                    "learned_task0_low_rank is validated only for the named "
-                    "learned-base adapter method"
+                    "The selected low-rank mechanism parameterization is "
+                    "validated only for its separately named method"
                 )
             if self.task_mechanism_low_rank < 1:
                 raise ValueError(
-                    "learned_task0_low_rank requires a positive low-rank size"
+                    "Low-rank mechanisms require a positive rank"
                 )
-            if self.task_mechanism_reuse:
+            if (
+                self.task_mechanism_parameterization
+                == "learned_task0_low_rank"
+                and self.task_mechanism_reuse
+            ):
                 raise ValueError(
                     "learned_task0_low_rank disables old-atom reuse"
+                )
+            if (
+                self.task_mechanism_parameterization
+                == "dense_task0_low_rank_atoms"
+                and not self.task_mechanism_reuse
+            ):
+                raise ValueError(
+                    "dense_task0_low_rank_atoms requires old-atom reuse"
                 )
             if self.task_mechanism_low_rank % self.task_mechanism_num_atoms:
                 raise ValueError(
@@ -609,7 +641,7 @@ class Config(Serialisable):
                 )
         elif self.task_mechanism_low_rank:
             raise ValueError(
-                "task_mechanism_low_rank requires learned_task0_low_rank"
+                "task_mechanism_low_rank requires a named low-rank parameterization"
             )
         if (
             is_evolving_shared_fastkan
@@ -649,6 +681,23 @@ class Config(Serialisable):
             if self.task_mechanism_low_rank != 32:
                 raise ValueError(
                     "The learned-base adapter pilot fixes Q/F/P low-rank size to 32"
+                )
+        if is_evolving_atomic_lora_shared_heads:
+            if self.task_mechanism_capacity_profile != "matched_512":
+                raise ValueError(
+                    "The atomic-LoRA shared-head method preserves matched_512 widths"
+                )
+            if (
+                self.task_mechanism_parameterization
+                != "dense_task0_low_rank_atoms"
+            ):
+                raise ValueError(
+                    "The atomic-LoRA shared-head method requires "
+                    "parameterization='dense_task0_low_rank_atoms'"
+                )
+            if self.task_mechanism_low_rank != 128:
+                raise ValueError(
+                    "The atomic-LoRA shared-head pilot fixes Q/F/P rank to 128"
                 )
         if (
             self.continual_method == "evolving_atomic_rssm_arrow"
@@ -1903,6 +1952,7 @@ class Config(Serialisable):
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
@@ -1935,6 +1985,7 @@ class Config(Serialisable):
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
             "dino_fullbank_arrow",
@@ -1974,6 +2025,7 @@ class Config(Serialisable):
             self.continual_method
             in {
                 "evolving_atomic_rssm_shared_heads_arrow",
+                "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
                 "evolving_atomic_rssm_learned_base_adapters_arrow",
             }
         )
@@ -1983,6 +2035,7 @@ class Config(Serialisable):
         if self.continual_method in {
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }:
@@ -1994,6 +2047,7 @@ class Config(Serialisable):
         return self.continual_method in {
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }

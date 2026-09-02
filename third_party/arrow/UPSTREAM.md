@@ -577,6 +577,26 @@ documented here, covered by focused parity tests, and followed by regenerating
     optimizer isolation, Task-0 head freezing, exact routing, strict protocol
     validation, and analytic/runtime parameter parity.
 
+58. Add the separately named, task-aware
+    `Evolving-Core-Task0BoundaryBootstrap-AtomicRank128QFP-SharedDistilledHeads-PrivateMLPAC-ARROW-v1`
+    pilot after the Rank-32/private-prediction-adapter experiment failed to
+    acquire Boxing. Task 0 keeps one full Dense Q/F/P set. Tasks 1-5 own
+    independent exact-zero Rank-128 nonlinear Q/F/P residuals, partitioned into
+    four lossless Rank-32 atoms, and reuse older atoms only through the existing
+    learned routes; no later residual implicitly calls or duplicates the Task-0
+    mechanism. The topology retains one plastic shared decoder/reward/continue
+    set, output distillation at `0.1`, independent MLP Actor-Critics, ARROW-50,
+    component conflict projection, boundary consolidation, and rollback. A
+    strictly validated transition path accepts only the immutable post-Task-0
+    resumable checkpoint from the named learned-base pilot, copies exact Task-0
+    Replay into independent working mmaps, transfers only shared/Task-0 state,
+    restores Task-0 behavior/counters/RNG, and resets world-model Adam because
+    ownership changes. Manifests label this as a cross-topology bootstrap rather
+    than an equivalent resume or from-scratch run. Focused tests cover exact
+    zero effect, atom sums/reuse without base duplication, rank/config
+    isolation, transition config/counter validation, and the exact six-task
+    `40,773,375`-parameter online ledger.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

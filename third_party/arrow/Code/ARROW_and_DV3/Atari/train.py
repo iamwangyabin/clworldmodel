@@ -892,6 +892,303 @@ def _restore_evolving_resumable_checkpoint(
     return restored
 
 
+_ATOMIC_LORA_SHARED_HEADS_METHOD = (
+    "evolving_atomic_rssm_atomic_lora_shared_heads_arrow"
+)
+_TASK0_TRANSITION_SOURCE_METHOD = (
+    "evolving_atomic_rssm_learned_base_adapters_arrow"
+)
+_TASK0_TRANSITION_ALLOWED_CONFIG_CHANGES = frozenset(
+    {
+        "continual_method",
+        "task_mechanism_reuse",
+        "task_mechanism_parameterization",
+        "task_mechanism_low_rank",
+        "task_private_prediction_adapters",
+        "prediction_adapter_rank",
+        "freeze_shared_prediction_heads_after_task0",
+    }
+)
+
+
+def _load_evolving_task0_transition_checkpoint(
+    path: Path,
+    *,
+    config: Config,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate the one named Task-0 boundary transition used by method C.
+
+    This is deliberately not the normal equivalent-resume path.  It preserves
+    Task-0 data, weights, behavior state, counters, and RNG while changing the
+    *future-task* Q/F/P and prediction-head ownership topology.  Optimizers for
+    the changed world-model ownership are therefore rebuilt explicitly.
+    """
+
+    path = path.expanduser().resolve()
+    checksum_path = path.with_suffix(path.suffix + ".sha256")
+    if not path.is_file() or not checksum_path.is_file():
+        raise FileNotFoundError(
+            "Task-0 transition requires a checkpoint and checksum sidecar: "
+            f"{path}"
+        )
+    fields = checksum_path.read_text(encoding="ascii").split()
+    actual_sha256 = _sha256(path)
+    if not fields or fields[0] != actual_sha256:
+        raise ValueError("Task-0 transition checkpoint checksum does not match")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(payload, dict):
+        raise ValueError("Task-0 transition checkpoint must contain a dictionary")
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("artifact_kind")
+        != "evolving_core_atomic_rssm_resumable_checkpoint"
+        or payload.get("resumable") is not True
+    ):
+        raise ValueError(
+            "Task-0 transition source must be private-behavior Evolving-Core "
+            "resumable schema v1"
+        )
+    if config.continual_method != _ATOMIC_LORA_SHARED_HEADS_METHOD:
+        raise ValueError(
+            "Task-0 boundary transition is restricted to the named atomic-LoRA "
+            "shared-head method"
+        )
+    source_config = payload.get("config")
+    if not isinstance(source_config, Mapping):
+        raise ValueError("Task-0 transition source is missing its resolved config")
+    if source_config.get("continual_method") != _TASK0_TRANSITION_SOURCE_METHOD:
+        raise ValueError(
+            "Task-0 transition must come from the named learned-base adapter pilot"
+        )
+    target_config = config.to_dict()
+    changed = {
+        key
+        for key in set(source_config) | set(target_config)
+        if source_config.get(key) != target_config.get(key)
+    }
+    if changed != _TASK0_TRANSITION_ALLOWED_CONFIG_CHANGES:
+        raise ValueError(
+            "Task-0 transition changed fields outside the declared topology "
+            f"boundary: {sorted(changed)}"
+        )
+    expected_values = {
+        "source": {
+            "task_mechanism_reuse": False,
+            "task_mechanism_parameterization": "learned_task0_low_rank",
+            "task_mechanism_low_rank": 32,
+            "task_private_prediction_adapters": True,
+            "prediction_adapter_rank": 32,
+            "freeze_shared_prediction_heads_after_task0": True,
+        },
+        "target": {
+            "task_mechanism_reuse": True,
+            "task_mechanism_parameterization": "dense_task0_low_rank_atoms",
+            "task_mechanism_low_rank": 128,
+            "task_private_prediction_adapters": False,
+            "prediction_adapter_rank": 0,
+            "freeze_shared_prediction_heads_after_task0": False,
+        },
+    }
+    for label, values in expected_values.items():
+        actual = source_config if label == "source" else target_config
+        mismatches = {
+            name: (actual.get(name), expected)
+            for name, expected in values.items()
+            if actual.get(name) != expected
+        }
+        if mismatches:
+            raise ValueError(
+                f"Task-0 transition {label} topology is not the declared v1: "
+                f"{mismatches}"
+            )
+
+    durations = _sequential_task_durations(config)
+    first_task_epochs = int(durations[0])
+    schedule = payload.get("schedule")
+    counters = payload.get("counters")
+    if not isinstance(schedule, Mapping) or not isinstance(counters, Mapping):
+        raise ValueError("Task-0 transition source is missing schedule/counters")
+    expected_schedule = {
+        "environment_step": first_task_epochs,
+        "epoch": first_task_epochs - 1,
+        "completed_epochs": first_task_epochs,
+        "current_task_id": 0,
+    }
+    schedule_mismatches = {
+        name: (int(schedule.get(name, -1)), expected)
+        for name, expected in expected_schedule.items()
+        if int(schedule.get(name, -1)) != expected
+    }
+    if schedule_mismatches:
+        raise ValueError(
+            "Task-0 transition source is not exactly the post-Task-0 boundary: "
+            f"{schedule_mismatches}"
+        )
+    expected_counters = {
+        "raw_environment_frames": (
+            first_task_epochs
+            * config.n_sync
+            * config.gen_seq_len
+            * config.env_repeat
+        ),
+        "world_model_updates": (
+            first_task_epochs * config.steps_per_batch
+            + config.boundary_consolidation_steps
+        ),
+        "actor_critic_updates": first_task_epochs * config.ac_train_steps,
+    }
+    counter_mismatches = {
+        name: (int(counters.get(name, -1)), expected)
+        for name, expected in expected_counters.items()
+        if int(counters.get(name, -1)) != expected
+    }
+    if counter_mismatches:
+        raise ValueError(
+            "Task-0 transition source counters do not match the fixed budget: "
+            f"{counter_mismatches}"
+        )
+    for name in ("world_model", "boundary_teacher", "optimizers", "replay", "rng"):
+        if name not in payload:
+            raise ValueError(f"Task-0 transition source is missing {name!r}")
+
+    metadata = {
+        "schema_version": 1,
+        "artifact_kind": "evolving_task0_cross_topology_transition",
+        "source_checkpoint": str(path),
+        "source_checkpoint_sha256": actual_sha256,
+        "source_method": _TASK0_TRANSITION_SOURCE_METHOD,
+        "target_method": _ATOMIC_LORA_SHARED_HEADS_METHOD,
+        "completed_epochs": first_task_epochs,
+        "source_counters": expected_counters,
+        "allowed_config_changes": sorted(changed),
+        "replay_state": "exact_task0_checkpoint_state_copied_to_new_working_mmaps",
+        "world_model_optimizer_state": "reset_due_to_ownership_transition",
+        "actor_critic_task0_optimizer_state": "restored_exactly_but_frozen",
+        "rng_state": "restored_after_target_topology_construction",
+        "environment_schedule_restart_task": 1,
+        "scientific_scope": (
+            "post-Task-0 boundary bootstrap across a declared topology change; "
+            "not an equivalent resume and not a from-scratch C run"
+        ),
+    }
+    return payload, metadata
+
+
+def _seed_atomic_lora_task0_world_model(
+    wm: WorldModel,
+    source_state: Mapping[str, torch.Tensor],
+) -> dict[str, Any]:
+    """Copy only shared and Task-0-compatible state into method C."""
+
+    exact_names = {"task_expert_initialized"}
+    prefixes = (
+        "rssm.image_embedder.",
+        "rssm.observation_adapter.",
+        "rssm.recurrent.",
+        "rssm.representation.",
+        "rssm.transition.",
+        "rssm.image_projectors.0.",
+        "rssm.recurrent_mechanism_bank.mechanisms.0.",
+        "rssm.representation_mechanism_bank.mechanisms.0.",
+        "rssm.transition_mechanism_bank.mechanisms.0.",
+        "zh_transform.",
+        "decoder.",
+        "reward_fc.",
+        "continue_fc.",
+    )
+    # The published Atari shape uses identity observation and latent-feature
+    # adapters, which have no state-dict entries. Transfer shaped adapters when
+    # present, but do not require empty identity modules to manufacture state.
+    optional_stateless_prefixes = {
+        "rssm.observation_adapter.",
+        "zh_transform.",
+    }
+    required_prefixes = tuple(
+        prefix
+        for prefix in prefixes
+        if prefix not in optional_stateless_prefixes
+    )
+    target_state = wm.state_dict()
+    selected = {
+        name: value
+        for name, value in source_state.items()
+        if name in exact_names or name.startswith(prefixes)
+    }
+    missing_required_prefixes = [
+        prefix
+        for prefix in required_prefixes
+        if not any(name.startswith(prefix) for name in selected)
+    ]
+    if missing_required_prefixes:
+        raise ValueError(
+            "Task-0 transition source lacks required world-model modules: "
+            f"{missing_required_prefixes}"
+        )
+    if exact_names - selected.keys():
+        raise ValueError("Task-0 transition source lacks task initialization state")
+    unknown = sorted(set(selected) - set(target_state))
+    if unknown:
+        raise ValueError(
+            f"Task-0 transition selected unknown target state: {unknown[:5]}"
+        )
+    mismatched = {
+        name: (tuple(value.shape), tuple(target_state[name].shape))
+        for name, value in selected.items()
+        if value.shape != target_state[name].shape or value.dtype != target_state[name].dtype
+    }
+    if mismatched:
+        raise ValueError(
+            "Task-0 transition shared/Task-0 tensors changed shape or dtype: "
+            f"{mismatched}"
+        )
+    merged = dict(target_state)
+    merged.update(selected)
+    wm.load_state_dict(merged, strict=True)
+    parameter_names = {name for name, _parameter in wm.named_parameters()}
+    transferred_parameters = sum(
+        value.numel()
+        for name, value in selected.items()
+        if name in parameter_names
+    )
+    return {
+        "selected_tensor_count": len(selected),
+        "selected_parameter_count": transferred_parameters,
+        "selected_prefixes": list(prefixes),
+        "future_task_modules": "target initialization preserved",
+        "future_task_routes": "target zero-gate initialization preserved",
+        "prediction_adapters": "source-only modules omitted",
+    }
+
+
+def _restore_task0_transition_rng(
+    rng: Mapping[str, Any],
+    *,
+    task_update_rng: np.random.Generator,
+    collection_environment_seed_rng: np.random.Generator,
+    validation_environment_seed_rng: np.random.Generator,
+    final_environment_seed_rng: np.random.Generator,
+) -> None:
+    """Restore the source boundary RNG after all method-C modules exist."""
+
+    random.setstate(rng["python"])
+    np.random.set_state(rng["numpy_legacy"])
+    torch.random.set_rng_state(rng["torch_cpu"].cpu())
+    cuda_state = rng.get("torch_cuda")
+    if cuda_state is not None:
+        if not torch.cuda.is_available():
+            raise RuntimeError("Task-0 transition contains CUDA RNG but CUDA is absent")
+        if len(cuda_state) != torch.cuda.device_count():
+            raise ValueError("Task-0 transition CUDA device count changed")
+        torch.cuda.set_rng_state_all(cuda_state)
+    for generator, name in (
+        (task_update_rng, "task_update"),
+        (collection_environment_seed_rng, "collection_environment"),
+        (validation_environment_seed_rng, "validation_environment"),
+        (final_environment_seed_rng, "final_environment"),
+    ):
+        generator.bit_generator.state = copy.deepcopy(rng[name])
+
+
 def _parameter_accounting(module: torch.nn.Module) -> dict[str, int]:
     parameters = list(module.parameters())
     return {
@@ -3207,6 +3504,16 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--init-evolving-task0-transition-checkpoint",
+        type=Path,
+        help=(
+            "Initialize the named atomic-LoRA shared-head method at Task 1 from "
+            "the exact post-Task-0 learned-base Evolving-Core checkpoint. This "
+            "preserves Task-0 weights/replay/behavior/counters/RNG but resets "
+            "world-model optimizers because future-task ownership changes."
+        ),
+    )
+    parser.add_argument(
         "--resume-adaptation-mode",
         choices=sorted(RESUME_ADAPTATION_MODES),
         default=None,
@@ -3325,6 +3632,7 @@ if __name__ == "__main__":
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
+        "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
     }:
@@ -3355,12 +3663,19 @@ if __name__ == "__main__":
 
     resume_payload = None
     task1_seed_payload = None
+    task0_transition_payload = None
+    task0_transition_metadata: dict[str, Any] = {}
     training_start_epoch = 0
     resume_mode = args.resume_adaptation_mode
-    if (
-        args.init_analysis_snapshot is not None
-        and args.init_task1_boundary_snapshot is not None
-    ):
+    initialization_modes = sum(
+        value is not None
+        for value in (
+            args.init_analysis_snapshot,
+            args.init_task1_boundary_snapshot,
+            args.init_evolving_task0_transition_checkpoint,
+        )
+    )
+    if initialization_modes > 1:
         raise ValueError("Only one snapshot initialization mode may be selected")
     if args.init_analysis_snapshot is not None:
         if resume_mode is None:
@@ -3430,6 +3745,25 @@ if __name__ == "__main__":
         )
     elif config.continual_method == "cnn_projector_lora_arrow":
         training_start_epoch = 0
+    if args.init_evolving_task0_transition_checkpoint is not None:
+        task0_transition_payload, task0_transition_metadata = (
+            _load_evolving_task0_transition_checkpoint(
+                args.init_evolving_task0_transition_checkpoint,
+                config=config,
+            )
+        )
+        training_start_epoch = int(
+            task0_transition_payload["schedule"]["completed_epochs"]
+        )
+        if config.epochs <= training_start_epoch:
+            raise ValueError(
+                "Task-0 transition training must include at least one later-task epoch"
+            )
+    elif config.continual_method == _ATOMIC_LORA_SHARED_HEADS_METHOD:
+        raise ValueError(
+            "The v1 atomic-LoRA shared-head pilot requires "
+            "--init-evolving-task0-transition-checkpoint"
+        )
 
     if config.algorithm == "arrow":
         print(f"ARROW FIFO/LTDM capacity ratio: {config.arrow_replay_capacity_ratio}")
@@ -3487,6 +3821,7 @@ if __name__ == "__main__":
     elif config.continual_method in {
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
+        "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
     }:
         prediction_topology = (
@@ -3719,6 +4054,7 @@ if __name__ == "__main__":
     resume_world_model_opened: list[str] = []
     resume_state_report: dict[str, dict[str, list[str]]] = {}
     task1_seed_world_model_report: dict[str, int] = {}
+    task0_transition_world_model_report: dict[str, Any] = {}
     if resume_payload is not None:
         resume_state_report["world_model"] = _load_snapshot_state(
             wm,
@@ -3740,6 +4076,16 @@ if __name__ == "__main__":
         print(
             "Loaded the completed Task-1 CNN/RSSM/heads; later routes remain "
             "zero-effect projector/RSSM adaptations"
+        )
+    elif task0_transition_payload is not None:
+        task0_transition_world_model_report = (
+            _seed_atomic_lora_task0_world_model(
+                wm, task0_transition_payload["world_model"]
+            )
+        )
+        print(
+            "Loaded the exact Task-0 shared/core/dense-QFP/head state; future "
+            "Rank-128 atomic Q/F/P residuals and routes keep target initialization"
         )
     evolving_shared_optimizer: Optional[torch.optim.Optimizer] = None
     evolving_private_optimizers: dict[int, torch.optim.Optimizer] = {}
@@ -3801,6 +4147,7 @@ if __name__ == "__main__":
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
+        "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
         "dino_patchbank_arrow",
@@ -3817,6 +4164,21 @@ if __name__ == "__main__":
         if not distributed_context.enabled or distributed_context.is_primary
         else None
     )
+    if task0_transition_payload is not None:
+        if distributed_context.enabled or authoritative_replay is None:
+            raise ValueError(
+                "Task-0 cross-topology transition is validated only on one GPU"
+            )
+        authoritative_replay.load_state_dict(task0_transition_payload["replay"])
+        if authoritative_replay.available_task_ids() != (0,):
+            raise ValueError(
+                "Task-0 transition replay contains tasks beyond Task 0: "
+                f"{authoritative_replay.available_task_ids()}"
+            )
+        print(
+            "Restored exact Task-0 FIFO/LTDM replay into independent working mmaps: "
+            f"n_valid={authoritative_replay.n_valid}"
+        )
     replay = (
         DistributedReplaySampler(
             distributed_context,
@@ -3990,6 +4352,58 @@ if __name__ == "__main__":
             aco = seeded_actor
             print("Loaded and froze the completed Task-1 Actor-Critic bank entry")
 
+        if task0_transition_payload is not None:
+            if config.uses_shared_actor or actor_critic_bank is None:
+                raise RuntimeError(
+                    "Task-0 transition requires the private MLP Actor-Critic bank"
+                )
+            actor_critic_bank.load_resumable_state_dict(
+                task0_transition_payload["optimizers"]["actor_critic_bank"],
+                build_task_actor_critic,
+            )
+            if actor_critic_bank.task_ids() != (0,):
+                raise ValueError(
+                    "Task-0 transition Actor-Critic bank must contain only Task 0"
+                )
+            aco = actor_critic_bank.get(0)
+            print("Restored exact Task-0 MLP Actor-Critic and optimizer state")
+
+    task0_transition_state: dict[str, int] = {}
+    task0_transition_boundary_teacher: Optional[WorldModel] = None
+    if task0_transition_payload is not None:
+        if not config.uses_task_experts:
+            raise RuntimeError("Task-0 transition requires task experts")
+        task0_transition_boundary_teacher = copy.deepcopy(wm).eval()
+        _seed_atomic_lora_task0_world_model(
+            task0_transition_boundary_teacher,
+            task0_transition_payload["boundary_teacher"],
+        )
+        task0_transition_boundary_teacher.requires_grad_(False)
+        _restore_task0_transition_rng(
+            task0_transition_payload["rng"],
+            task_update_rng=task_update_rng,
+            collection_environment_seed_rng=collection_environment_seed_rng,
+            validation_environment_seed_rng=validation_environment_seed_rng,
+            final_environment_seed_rng=final_environment_seed_rng,
+        )
+        source_counters = task0_transition_payload["counters"]
+        task0_transition_state = {
+            "completed_epochs": training_start_epoch,
+            "raw_environment_frames": int(
+                source_counters["raw_environment_frames"]
+            ),
+            "world_model_updates": int(source_counters["world_model_updates"]),
+            "actor_critic_updates": int(
+                source_counters["actor_critic_updates"]
+            ),
+        }
+        task0_transition_metadata["world_model_state_transfer"] = (
+            task0_transition_world_model_report
+        )
+        # Release the source optimizer/model tensors before training while the
+        # copied working replay and compact provenance record remain live.
+        task0_transition_payload = None
+
     if log_dir is None:
         current_time = datetime.now().strftime("%b%d_%H-%M-%S")
         job_id = os.getenv("SLURM_JOB_ID")
@@ -4131,6 +4545,14 @@ if __name__ == "__main__":
                 json.dumps(seed_metadata, indent=2) + "\n",
                 encoding="utf-8",
             )
+        if task0_transition_metadata:
+            transition_path = log_dir / "task0_transition_initialization.json"
+            temporary_transition_path = transition_path.with_suffix(".json.tmp")
+            temporary_transition_path.write_text(
+                json.dumps(task0_transition_metadata, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary_transition_path, transition_path)
         if feature_cache is not None:
             feature_accounting_path = log_dir / "feature_cache_storage_accounting.json"
             temporary_feature_accounting_path = feature_accounting_path.with_suffix(
@@ -4173,7 +4595,9 @@ if __name__ == "__main__":
 
     
     total_env_steps = (
-        int(task1_seed_payload.get("total_raw_environment_frames", 0))
+        task0_transition_state["raw_environment_frames"]
+        if task0_transition_state
+        else int(task1_seed_payload.get("total_raw_environment_frames", 0))
         if task1_seed_payload is not None
         else 0
     )  # number of *real* environment interactions so far
@@ -4181,12 +4605,14 @@ if __name__ == "__main__":
     best_rews_mean = float("-inf")
     best_validation_seen_task_raw_mean = float("-inf")
     global_step = (
-        int(task1_seed_payload.get("world_model_updates", 0))
+        task0_transition_state["world_model_updates"]
+        if task0_transition_state
+        else int(task1_seed_payload.get("world_model_updates", 0))
         if task1_seed_payload is not None
         else 0
     )  # gradient updates so far
     shared_core_frozen = resume_payload is not None
-    boundary_teacher: Optional[WorldModel] = None
+    boundary_teacher: Optional[WorldModel] = task0_transition_boundary_teacher
     capture_kan_parameter_values = None
     protect_kan_parameter_updates = None
     if config.residual_consolidation == "replay_functional":

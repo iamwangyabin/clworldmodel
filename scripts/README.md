@@ -56,6 +56,9 @@ contains experiment-facing code.
   down bases and one old/current route update of the single FastKAN pair. With
   `--prediction-head-profile shared_distilled` it verifies prediction-head
   teacher losses, separate projection groups, and shared-head optimizer steps.
+  With `--method-profile atomic_lora_shared_heads` it allocates method C's
+  production six-task Rank-128 atomic topology and exercises one Task-1 update
+  through the shared heads, private residuals, and active reuse routes.
 - `run_evolving_task0_sweep.py`: fixed-order, seed-0 MsPacman acquisition
   launcher for the preregistered single-LR profiles or the 120/150/180/240
   duration profiles. It omits held-out-final evaluation and stops at the
@@ -64,6 +67,14 @@ contains experiment-facing code.
   full-width shared-frozen-down plus private LayerNorm/FiLM/up mechanism. It
   allocates all six original-order routes, trains only MsPacman for 90 epochs,
   and omits held-out-final evaluation.
+- `run_evolving_learned_base_adapters.py`: the recorded original-six seed-0
+  Rank-32 learned-base/private-prediction-adapter pilot. Its stopped negative
+  run remains evidence; do not relabel it as the newer method.
+- `run_evolving_atomic_lora_shared_heads.py`: method C, a strictly validated
+  post-Task-0 boundary bootstrap that keeps A-style plastic shared prediction
+  heads and private MLP behavior while replacing Tasks 1-5 Dense Q/F/P with
+  independent Rank-128 four-atom residuals. It restores only the immutable
+  Task-0 checkpoint/replay and labels the run non-equivalent/non-from-scratch.
 - `select_evolving_task0_profile.py`: require and rank the unchanged control
   plus a complete LR or duration family using only the fixed-cohort
   pre-consolidation raw return. Duration selection chooses the shortest run

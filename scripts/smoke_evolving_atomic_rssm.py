@@ -48,12 +48,25 @@ from run_evolving_atomic_rssm import (  # noqa: E402
     SHARED_FASTKAN_STABLE_BEHAVIOR,
     _resolved_config,
 )
+from run_evolving_atomic_lora_shared_heads import (  # noqa: E402
+    _resolved_config as _atomic_lora_shared_heads_config,
+)
+
+
+LEGACY_METHOD_PROFILE = "legacy"
+ATOMIC_LORA_SHARED_HEADS_PROFILE = "atomic_lora_shared_heads"
+METHOD_PROFILES = (LEGACY_METHOD_PROFILE, ATOMIC_LORA_SHARED_HEADS_PROFILE)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=20260829)
+    parser.add_argument(
+        "--method-profile",
+        choices=METHOD_PROFILES,
+        default=LEGACY_METHOD_PROFILE,
+    )
     parser.add_argument(
         "--mechanism-profile",
         choices=tuple(MECHANISM_PROFILE_WIDTHS),
@@ -98,8 +111,22 @@ def _config(
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
     prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
+    method_profile: str = LEGACY_METHOD_PROFILE,
 ) -> Config:
     source = Config.from_file(_source_config()).to_dict()
+    if method_profile == ATOMIC_LORA_SHARED_HEADS_PROFILE:
+        if (
+            mechanism_profile != DEFAULT_MECHANISM_PROFILE
+            or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
+            or behavior_profile != PRIVATE_MLP_BEHAVIOR
+            or prediction_head_profile != PRIVATE_PREDICTION_HEADS_PROFILE
+        ):
+            raise ValueError(
+                "The atomic-LoRA shared-head smoke fixes all legacy profile selectors"
+            )
+        return Config.from_dict(_atomic_lora_shared_heads_config(source))
+    if method_profile != LEGACY_METHOD_PROFILE:
+        raise ValueError(f"Unknown smoke method profile: {method_profile!r}")
     task_order = (
         "arrow-original-six"
         if behavior_profile == PRIVATE_MLP_BEHAVIOR
@@ -256,6 +283,7 @@ def main() -> int:
         args.mechanism_parameterization,
         args.behavior_profile,
         args.prediction_head_profile,
+        args.method_profile,
     )
     world_model = _world_model(config, device)
     world_model.activate_task_expert(0)
@@ -404,6 +432,7 @@ def main() -> int:
         "gpu": torch.cuda.get_device_name(device),
         "compute_dtype": config.compute_dtype,
         "behavior_profile": args.behavior_profile,
+        "method_profile": args.method_profile,
         "prediction_head_profile": args.prediction_head_profile,
         "mechanism_profile": config.task_mechanism_capacity_profile,
         "mechanism_parameterization": config.task_mechanism_parameterization,

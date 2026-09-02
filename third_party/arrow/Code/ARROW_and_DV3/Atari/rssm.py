@@ -209,6 +209,7 @@ class Rssm(nn.Module):
             "dense_private",
             "shared_frozen_down_film",
             "learned_task0_low_rank",
+            "dense_task0_low_rank_atoms",
         }:
             raise ValueError(
                 "Unknown RSSM mechanism parameterization: "
@@ -223,18 +224,32 @@ class Rssm(nn.Module):
             )
         if task_mechanism_low_rank < 0:
             raise ValueError("RSSM mechanism low-rank size must be non-negative")
-        if task_mechanism_parameterization == "learned_task0_low_rank":
+        if task_mechanism_parameterization in {
+            "learned_task0_low_rank",
+            "dense_task0_low_rank_atoms",
+        }:
             if not task_symmetric_mechanisms:
                 raise ValueError(
-                    "Learned Task-0 low-rank mechanisms require symmetric mechanisms"
+                    "Dense Task-0 low-rank mechanisms require symmetric mechanisms"
                 )
-            if task_mechanism_reuse:
+            if (
+                task_mechanism_parameterization == "learned_task0_low_rank"
+                and task_mechanism_reuse
+            ):
                 raise ValueError(
                     "Learned Task-0 low-rank mechanisms disable old-atom reuse"
                 )
+            if (
+                task_mechanism_parameterization
+                == "dense_task0_low_rank_atoms"
+                and not task_mechanism_reuse
+            ):
+                raise ValueError(
+                    "Atomic low-rank mechanisms require old-atom reuse"
+                )
             if task_mechanism_low_rank < 1:
                 raise ValueError(
-                    "Learned Task-0 low-rank mechanisms require a positive rank"
+                    "Dense Task-0 low-rank mechanisms require a positive rank"
                 )
             if task_mechanism_low_rank % task_mechanism_num_atoms:
                 raise ValueError(
@@ -242,7 +257,7 @@ class Rssm(nn.Module):
                 )
         elif task_mechanism_low_rank:
             raise ValueError(
-                "RSSM mechanism low-rank size requires learned_task0_low_rank"
+                "RSSM mechanism low-rank size requires a low-rank parameterization"
             )
         if task_mechanism_bank and not task_projected_image_encoder:
             raise ValueError("RSSM mechanism banks require task image projectors")
