@@ -536,6 +536,14 @@ documented here, covered by focused parity tests, and followed by regenerating
     routed update and parameter ledgers, schedule validation, and shared
     behavior checkpoint restoration.
 
+56. Restore the missing CoinRun DreamerV3 FIFO-capacity field. The released
+    DV3 JSON files omit `sac_dv3_data_n_max` even though the shared replay
+    constructor reads it, so they otherwise fail before training. The typed
+    default is 1,024 trajectory slots, matching both the value recorded by the
+    released CoinRun SAC configs and ARROW's total `2 * data_n_max` capacity.
+    The value is serialized into every resolved config, and a focused test
+    parses a released DV3 config and checks matched capacity.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from
@@ -548,6 +556,8 @@ documented here, covered by focused parity tests, and followed by regenerating
    the published replay configuration stores approximately 24 GiB of float32
    observations on the accelerator.
 4. The upstream commit has no automated test suite or CI definition.
+5. Every CoinRun DreamerV3 JSON config omits `sac_dv3_data_n_max`, although the
+   shared replay constructor reads that field, so DV3 fails before training.
 
-Items 1 through 3 are corrected by the documented local compatibility and
-runtime profiles; item 4 remains a constraint of the upstream implementation.
+Items 1 through 3 and 5 are corrected by the documented local compatibility
+and runtime profiles; item 4 remains a constraint of the upstream implementation.

@@ -211,6 +211,10 @@ class Config(Serialisable):
     env_repeat: int = 1
     data_n: int = 16
     data_n_max: int = 512
+    # The released CoinRun DV3 JSON files omit this field even though the
+    # shared ARROW/DV3 replay constructor reads it.  The released SAC configs
+    # record 1,024 slots, matching ARROW's total 2 * data_n_max capacity.
+    sac_dv3_data_n_max: int = 1024
     data_t: int = 512
 
     mb_t_size: int = 32
@@ -249,6 +253,8 @@ class Config(Serialisable):
         assert self.random_policy in {"first", "new"}
         assert self.replay_buffers != []
         assert self.env_repeat == 1, "Env repeat disabled for procgen"
+        if self.sac_dv3_data_n_max <= 0:
+            raise ValueError("sac_dv3_data_n_max must be positive")
         if self.replay_observation_dtype not in {"float32", "uint8"}:
             raise ValueError(
                 "replay_observation_dtype must be 'float32' or 'uint8', got "

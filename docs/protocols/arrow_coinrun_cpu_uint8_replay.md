@@ -34,6 +34,7 @@ settings:
 - `data_t=512`, `data_n_max=512`, and 1,024 total trajectory slots;
 - 512 FIFO slots and 512 LTDM slots for ARROW-50;
 - 0.5/0.5 whole-minibatch FIFO/LTDM selection;
+- 1,024 FIFO slots for the matched DreamerV3/FIFO control;
 - the published collection, world-model update, Actor-Critic update, evaluation,
   action, reward, and preprocessing settings.
 
@@ -50,6 +51,12 @@ The storage-only overrides are:
 ```
 
 The published default remains float32 and existing JSON files remain unchanged.
+For DreamerV3/FIFO, the same storage override contains only the single
+`FifoReplay` entry. The released CoinRun DV3 JSON files omit the
+`sac_dv3_data_n_max` field that their shared replay constructor reads. Project
+formal runs use the released SAC value of 1,024 slots, which also exactly
+matches ARROW's total `2 * data_n_max` capacity; this compatibility correction
+is typed, serialized in the resolved config, and covered by a focused test.
 
 ## Formal-run reproducibility
 

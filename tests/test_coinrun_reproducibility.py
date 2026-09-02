@@ -26,6 +26,9 @@ PUBLISHED_CONFIG = (
         "CoinRun+NB+RT+GA+MA,CoinRun+NB+RT+GA+MA+CA-s0-arrow.json"
     )
 )
+PUBLISHED_DV3_CONFIG = PUBLISHED_CONFIG.with_name(
+    PUBLISHED_CONFIG.name.replace("-arrow.json", "-dv3.json")
+)
 
 try:
     import cv2  # noqa: F401
@@ -70,6 +73,13 @@ class CoinRunReproducibilityTests(unittest.TestCase):
         config = COINRUN_CONFIG.Config.from_file(PUBLISHED_CONFIG)
         self.assertFalse(config.deterministic_runtime_seeding)
         self.assertFalse(config.to_dict()["deterministic_runtime_seeding"])
+
+    def test_published_dv3_config_has_matched_fifo_capacity(self) -> None:
+        config = COINRUN_CONFIG.Config.from_file(PUBLISHED_DV3_CONFIG)
+
+        self.assertEqual(config.algorithm, "dv3")
+        self.assertEqual(config.sac_dv3_data_n_max, 2 * config.data_n_max)
+        self.assertEqual(config.to_dict()["sac_dv3_data_n_max"], 1024)
 
     def test_seeded_environment_factory_uses_distinct_repeatable_seeds(self) -> None:
         config = COINRUN_CONFIG.EnvConfig(name="CoinRun+NB+RT")
