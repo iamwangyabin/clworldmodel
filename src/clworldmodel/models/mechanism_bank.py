@@ -116,6 +116,85 @@ class ResidualMechanism(nn.Module):
         outputs = outputs + self.up.bias / self.num_atoms
         return self.residual_scale * outputs
 
+    @classmethod
+    @torch.no_grad()
+    def structured_pruned_copy(
+        cls,
+        source: "ResidualMechanism",
+        *,
+        hidden_features: int,
+    ) -> tuple["ResidualMechanism", list[int]]:
+        """Materialize a smaller dense mechanism by pruning hidden channels.
+
+        Channels are ranked independently inside every atom by the product of
+        their incoming and outgoing weight norms.  Keeping the same number of
+        channels per atom preserves the route interface while physically
+        removing parameters; no random projection or masked full-width tensor
+        remains in the returned module.
+        """
+
+        if not isinstance(source, cls):
+            raise TypeError("Structured pruning requires a dense residual mechanism")
+        if source.uses_shared_down or source.hidden_film:
+            raise ValueError(
+                "Structured pruning is defined only for fully private dense mechanisms"
+            )
+        if hidden_features < source.num_atoms:
+            raise ValueError("Pruned width must retain at least one channel per atom")
+        if hidden_features > source.hidden_features:
+            raise ValueError("Structured pruning cannot expand a mechanism")
+        if hidden_features % source.num_atoms:
+            raise ValueError("Pruned width must be divisible by the atom count")
+
+        channels_per_atom = hidden_features // source.num_atoms
+        down_weight = source.down.weight.detach().float()
+        down_bias = source.down.bias.detach().float()
+        incoming_norm = torch.cat(
+            (down_weight, down_bias.unsqueeze(-1)), dim=-1
+        ).norm(dim=-1)
+        outgoing_norm = source.up.weight.detach().float().norm(dim=0)
+        importance = incoming_norm * outgoing_norm
+        selected: list[int] = []
+        for atom_index in range(source.num_atoms):
+            start = atom_index * source.atom_width
+            stop = start + source.atom_width
+            local_order = torch.argsort(
+                importance[start:stop], descending=True, stable=True
+            )[:channels_per_atom]
+            # Restore the source order after selecting the largest channels so
+            # the compact function and its atom partition are deterministic.
+            selected.extend(
+                sorted(start + int(index) for index in local_order.cpu().tolist())
+            )
+
+        source_parameter = next(source.parameters())
+        # Construction initializes temporary tensors; fork the CPU RNG because
+        # all retained parameters are overwritten and pruning must not perturb
+        # the subsequent training stream.
+        with torch.random.fork_rng(devices=[]):
+            compact = cls(
+                in_features=source.in_features,
+                out_features=source.out_features,
+                hidden_features=hidden_features,
+                residual_scale=source.residual_scale,
+                num_atoms=source.num_atoms,
+            )
+        compact = compact.to(
+            device=source_parameter.device,
+            dtype=source_parameter.dtype,
+        )
+        index = torch.tensor(selected, device=source.down.weight.device)
+        compact.norm.load_state_dict(source.norm.state_dict(), strict=True)
+        compact.down.weight.copy_(source.down.weight.index_select(0, index))
+        compact.down.bias.copy_(source.down.bias.index_select(0, index))
+        compact.up.weight.copy_(source.up.weight.index_select(1, index))
+        compact.up.bias.copy_(source.up.bias)
+        compact.train(source.training)
+        compact.requires_grad_(
+            any(parameter.requires_grad for parameter in source.parameters())
+        )
+        return compact, selected
+
     def parameter_report(self) -> dict[str, int | float | str]:
         return {
             "kind": "zero_effect_nonlinear_residual",
@@ -465,6 +544,7 @@ class MechanismBank(nn.Module):
         self.include_task0 = bool(include_task0)
         if parameterization not in {
             "dense_private",
+            "adaptive_dense_width",
             "shared_frozen_down_film",
             "learned_task0_low_rank",
             "dense_task0_low_rank_atoms",
@@ -473,6 +553,10 @@ class MechanismBank(nn.Module):
                 f"Unknown mechanism parameterization: {parameterization!r}"
             )
         self.parameterization = parameterization
+        if self.parameterization == "adaptive_dense_width" and not self.include_task0:
+            raise ValueError(
+                "Adaptive dense-width mechanisms require symmetric task allocation"
+            )
         self.low_rank_rank = int(low_rank_rank)
         if self.low_rank_rank < 0:
             raise ValueError("Mechanism low-rank size must be non-negative")
@@ -579,6 +663,17 @@ class MechanismBank(nn.Module):
                     self.num_tasks if self.include_task0 else self.num_tasks - 1
                 )
             )
+        if self.parameterization == "adaptive_dense_width":
+            self.register_buffer(
+                "mechanism_hidden_features",
+                torch.full(
+                    (len(self.mechanisms),),
+                    self.hidden_features,
+                    dtype=torch.int64,
+                ),
+            )
+        else:
+            self.register_buffer("mechanism_hidden_features", None)
         self.routes = nn.ModuleList(
             ReuseRoute(
                 num_old_mechanisms=(
@@ -615,6 +710,140 @@ class MechanismBank(nn.Module):
 
         index = self._mechanism_index(task_id)
         return None if index is None else self.mechanisms[index]
+
+    def compression_layout(self) -> list[int]:
+        """Return the physically materialized hidden width for each owner task."""
+
+        if self.parameterization != "adaptive_dense_width":
+            raise ValueError("Compression layouts require adaptive dense-width banks")
+        if self.mechanism_hidden_features is None:
+            raise RuntimeError("Adaptive mechanism bank lost its width metadata")
+        return [int(value) for value in self.mechanism_hidden_features.tolist()]
+
+    def _new_dense_mechanism(self, hidden_features: int) -> ResidualMechanism:
+        current = self.mechanisms[0]
+        if not isinstance(current, ResidualMechanism):
+            raise RuntimeError("Adaptive banks must contain dense residual mechanisms")
+        reference = next(current.parameters())
+        with torch.random.fork_rng(devices=[]):
+            mechanism = ResidualMechanism(
+                in_features=self.in_features,
+                out_features=self.out_features,
+                hidden_features=hidden_features,
+                residual_scale=self.residual_scale,
+                num_atoms=self.num_atoms,
+            )
+        return mechanism.to(device=reference.device, dtype=reference.dtype)
+
+    def install_task_mechanism(
+        self, task_id: int, mechanism: ResidualMechanism
+    ) -> dict[str, Any]:
+        """Replace one adaptive task module after validating its route contract."""
+
+        if self.parameterization != "adaptive_dense_width":
+            raise ValueError("Only adaptive dense-width banks can replace mechanisms")
+        index = self._mechanism_index(task_id)
+        if index is None:
+            raise ValueError("Adaptive banks require a mechanism for every task")
+        if not isinstance(mechanism, ResidualMechanism):
+            raise TypeError("Adaptive compression installs dense residual mechanisms")
+        expected = (
+            self.in_features,
+            self.out_features,
+            self.residual_scale,
+            self.num_atoms,
+        )
+        observed = (
+            mechanism.in_features,
+            mechanism.out_features,
+            mechanism.residual_scale,
+            mechanism.num_atoms,
+        )
+        if observed != expected:
+            raise ValueError(
+                "Replacement mechanism changed the bank interface: "
+                f"{observed} != {expected}"
+            )
+        if not 0 < mechanism.hidden_features <= self.hidden_features:
+            raise ValueError("Replacement width is outside the dense acquisition width")
+        if mechanism.hidden_features % self.num_atoms:
+            raise ValueError("Replacement width must be divisible by atom count")
+        old = self.mechanisms[index]
+        old_width = int(getattr(old, "hidden_features"))
+        self.mechanisms[index] = mechanism
+        if self.mechanism_hidden_features is None:
+            raise RuntimeError("Adaptive mechanism bank lost its width metadata")
+        self.mechanism_hidden_features[index] = mechanism.hidden_features
+        return {
+            "task_id": int(task_id),
+            "old_hidden_features": old_width,
+            "new_hidden_features": mechanism.hidden_features,
+            "old_parameters": sum(parameter.numel() for parameter in old.parameters()),
+            "new_parameters": sum(
+                parameter.numel() for parameter in mechanism.parameters()
+            ),
+        }
+
+    def compress_task(self, task_id: int, *, hidden_features: int) -> dict[str, Any]:
+        """Structured-prune and physically replace one task's dense mechanism."""
+
+        source = self.mechanism_for(task_id)
+        if not isinstance(source, ResidualMechanism):
+            raise TypeError("Adaptive compression requires a dense source mechanism")
+        compact, selected = ResidualMechanism.structured_pruned_copy(
+            source, hidden_features=hidden_features
+        )
+        report = self.install_task_mechanism(task_id, compact)
+        report["selected_hidden_channels"] = selected
+        return report
+
+    def _load_from_state_dict(
+        self,
+        state_dict: dict[str, torch.Tensor],
+        prefix: str,
+        local_metadata: dict[str, Any],
+        strict: bool,
+        missing_keys: list[str],
+        unexpected_keys: list[str],
+        error_msgs: list[str],
+    ) -> None:
+        """Rebuild heterogeneous compact modules before recursive tensor load."""
+
+        if self.parameterization == "adaptive_dense_width":
+            layout_key = prefix + "mechanism_hidden_features"
+            loaded_layout = state_dict.get(layout_key)
+            if not isinstance(loaded_layout, torch.Tensor):
+                error_msgs.append(
+                    f"Adaptive mechanism checkpoint is missing {layout_key!r}"
+                )
+            elif tuple(loaded_layout.shape) != (len(self.mechanisms),):
+                error_msgs.append(
+                    "Adaptive mechanism layout shape changed: "
+                    f"{tuple(loaded_layout.shape)} != {(len(self.mechanisms),)}"
+                )
+            else:
+                for index, value in enumerate(loaded_layout.tolist()):
+                    width = int(value)
+                    current = self.mechanisms[index]
+                    if width != int(getattr(current, "hidden_features")):
+                        replacement = self._new_dense_mechanism(width)
+                        replacement.train(current.training)
+                        replacement.requires_grad_(
+                            any(
+                                parameter.requires_grad
+                                for parameter in current.parameters()
+                            )
+                        )
+                        self.mechanisms[index] = replacement
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     def route_for(self, task_id: int) -> ReuseRoute | None:
         """Return the reuse route owned by ``task_id``, if one exists."""
@@ -902,6 +1131,14 @@ class MechanismBank(nn.Module):
                 }
                 else self.hidden_features // self.num_atoms
             ),
+            "mechanism_hidden_features_per_task": [
+                int(getattr(mechanism, "hidden_features"))
+                for mechanism in self.mechanisms
+            ],
+            "mechanism_atom_widths_per_task": [
+                int(getattr(mechanism, "atom_width"))
+                for mechanism in self.mechanisms
+            ],
             "residual_scale": self.residual_scale,
             "reuse_enabled": self.reuse_enabled,
             "include_task0": self.include_task0,

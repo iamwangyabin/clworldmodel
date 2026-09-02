@@ -563,11 +563,36 @@ python scripts/run_evolving_atomic_rssm.py \
   --dry-run
 ```
 
-The six-task online topology is prospectively `52,891,391` parameters
-(`211,565,564` FP32 bytes), `42,813,145` or `44.7347%` below the Dense
+The six-task online topology is prospectively `52,897,535` parameters
+(`211,590,140` FP32 bytes), `42,813,145` or `44.7347%` below the Dense
 private-head reference. Q/F/P and private behavior still grow per task. This
 configuration has no performance result yet; see
 `docs/protocols/evolving_core_dense_qfp_shared_distilled_heads_v1_atari.md`.
+
+The Dense-acquire adaptive-compression profile keeps that same acquisition
+topology, then evaluates four physical structured-pruning candidates after
+each task. Every candidate receives the same 250-update LTDM recovery budget;
+the smallest width within a five-percent **raw-return** drop on a dedicated
+16-rollout pruning cohort is retained, with full Dense fallback. The shared
+heads and private MLP Actor-Critics are unchanged, and final held-out seeds are
+never used for width selection:
+
+```bash
+python scripts/run_evolving_atomic_rssm.py \
+  --task-order arrow-original-six \
+  --prediction-head-profile shared_distilled \
+  --adaptive-qfp-compression \
+  --seed 0 \
+  --classification pilot \
+  --dry-run
+```
+
+The fixed candidate lattice is `384/384/192`, `256/256/128`, `128/128/64`,
+and `64/64/32`. The outcome-dependent final model ranges from the
+`52,897,535`-parameter Dense fallback to `32,935,103` parameters if every task
+accepts the smallest width. Compression adds 6,000 explicitly budgeted
+world-model updates; it is not a compute-matched A result. See
+`docs/protocols/evolving_core_dense_acquire_adaptive_qfp_compression_v1_atari.md`.
 
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control

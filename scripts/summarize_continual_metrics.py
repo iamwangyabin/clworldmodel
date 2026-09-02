@@ -224,6 +224,7 @@ def _policy(config: dict[str, Any], final_path: Path) -> str:
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -241,6 +242,9 @@ def _budget_signature(
     durations: list[int],
     launch: dict[str, Any],
 ) -> dict[str, Any]:
+    declared_budgets = launch.get("budgets", {})
+    if not isinstance(declared_budgets, dict):
+        declared_budgets = {}
     fifo_slots = launch.get("fifo_slots")
     ltdm_slots = launch.get("ltdm_slots")
     if fifo_slots is not None and ltdm_slots is not None:
@@ -250,12 +254,38 @@ def _budget_signature(
             config.get("replay_buffers", [])
         )
     sequence_length = int(launch.get("sequence_length", config["data_t"]))
+    online_world_model_updates = int(
+        declared_budgets.get(
+            "online_world_model_updates",
+            sum(durations) * int(config["steps_per_batch"]),
+        )
+    )
+    consolidation_updates = int(
+        declared_budgets.get("boundary_consolidation_world_model_updates", 0)
+    )
+    adaptive_compression_updates = int(
+        declared_budgets.get("adaptive_compression_world_model_updates", 0)
+    )
     return {
         "task_duration_epochs": durations,
         "n_sync": int(config["n_sync"]),
         "collection_sequence_length": int(config["gen_seq_len"]),
         "frame_repeat": int(config["env_repeat"]),
         "world_model_updates_per_epoch": int(config["steps_per_batch"]),
+        "online_world_model_updates": online_world_model_updates,
+        "boundary_consolidation_world_model_updates": consolidation_updates,
+        "adaptive_compression_world_model_updates": adaptive_compression_updates,
+        "total_world_model_optimizer_steps": int(
+            declared_budgets.get(
+                "total_world_model_optimizer_steps",
+                online_world_model_updates
+                + consolidation_updates
+                + adaptive_compression_updates,
+            )
+        ),
+        "adaptive_compression_validation_rollouts": int(
+            declared_budgets.get("adaptive_compression_validation_rollouts", 0)
+        ),
         "actor_critic_updates_per_epoch": int(config["ac_train_steps"]),
         "world_model_batch_time": int(config["mb_t_size"]),
         "world_model_batch_sequences": int(config["mb_n_size"]),
@@ -278,6 +308,44 @@ def _resource_accounting(run_dir: Path) -> dict[str, Any]:
                 "sha256": _sha256(path),
                 "data": _json(path),
             }
+    compression_dir = run_dir / "adaptive_qfp_compression"
+    compression_artifacts = []
+    for path in sorted(compression_dir.glob("task_*_boundary.json")):
+        data = _json(path)
+        if data.get("artifact_kind") != "evolving_core_return_gated_qfp_compression":
+            raise ValueError(f"Unexpected adaptive-compression artifact: {path}")
+        compression_artifacts.append(
+            {
+                "path": _portable_path(path),
+                "sha256": _sha256(path),
+                "data": data,
+            }
+        )
+    if compression_artifacts:
+        result["adaptive_qfp_compression"] = {
+            "task_count": len(compression_artifacts),
+            "optimizer_updates": sum(
+                int(item["data"]["optimizer_updates"])
+                for item in compression_artifacts
+            ),
+            "selected_width_fractions": [
+                float(item["data"]["selected_width_fraction"])
+                for item in compression_artifacts
+            ],
+            "dense_fallback_tasks": [
+                int(item["data"]["completed_task_id"])
+                for item in compression_artifacts
+                if bool(item["data"]["selected_dense_fallback"])
+            ],
+            "world_model_parameters_removed": sum(
+                int(item["data"]["world_model_parameters_removed"])
+                for item in compression_artifacts
+            ),
+            "final_selected_layout": compression_artifacts[-1]["data"][
+                "selected_layout"
+            ],
+            "artifacts": compression_artifacts,
+        }
     return result
 
 

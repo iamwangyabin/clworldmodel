@@ -91,6 +91,27 @@ def _next_environment_seed(seed_rng: np.random.Generator) -> int:
     return int(seed_rng.integers(0, 2**32, dtype=np.uint64))
 
 
+def _adaptive_compression_task_seeds(
+    seed: int, task_count: int
+) -> tuple[int, ...]:
+    """Derive the fixed pruning cohort without advancing training RNGs.
+
+    Spawn indices 0--2 are already assigned to collection, periodic
+    validation, and final held-out evaluation.  Constructing spawn index 3
+    directly preserves those existing streams byte-for-byte for every older
+    protocol while giving compression a separately declared seed domain.
+    """
+
+    if task_count < 1:
+        raise ValueError("Adaptive compression requires at least one task seed")
+    compression_rng = np.random.default_rng(
+        np.random.SeedSequence(int(seed), spawn_key=(3,))
+    )
+    return tuple(
+        _next_environment_seed(compression_rng) for _ in range(task_count)
+    )
+
+
 @contextmanager
 def _preserve_training_rng_state():
     """Keep stochastic evaluation from changing subsequent training draws."""
@@ -660,6 +681,28 @@ def _save_evolving_resumable_checkpoint(
             "all other replay tensors and retention indices are embedded"
         ),
     }
+    if config.uses_adaptive_qfp_compression:
+        world_model_layout = wm.rssm.adaptive_compression_layout()
+        teacher_layout = boundary_teacher.rssm.adaptive_compression_layout()
+        if world_model_layout != teacher_layout:
+            raise ValueError(
+                "Adaptive checkpoint teacher and student compression layouts differ"
+            )
+        payload["adaptive_compression"] = {
+            "schema_version": 1,
+            "world_model_hidden_widths": world_model_layout,
+            "boundary_teacher_hidden_widths": teacher_layout,
+            "private_optimizer_task_ids": sorted(
+                int(task_id) for task_id in private_optimizers
+            ),
+            "route_optimizer_task_ids": sorted(
+                int(task_id) for task_id in route_optimizers
+            ),
+            "topology_rebuild_source": (
+                "persistent mechanism_hidden_features buffers in each Q/F/P bank"
+            ),
+            "full_dense_teacher_persistent": False,
+        }
     if uses_shared_behavior:
         payload["shared_behavior"] = {
             "topology": "single_shared_fastkan_actor_critic",
@@ -789,7 +832,35 @@ def _restore_evolving_resumable_checkpoint(
 
     wm.load_state_dict(payload["world_model"], strict=True)
     boundary_teacher.load_state_dict(payload["boundary_teacher"], strict=True)
+    if config.uses_adaptive_qfp_compression:
+        adaptive_state = payload.get("adaptive_compression")
+        if not isinstance(adaptive_state, Mapping):
+            raise ValueError(
+                "Adaptive checkpoint is missing compression topology metadata"
+            )
+        expected_layout = adaptive_state.get("world_model_hidden_widths")
+        if (
+            wm.rssm.adaptive_compression_layout() != expected_layout
+            or boundary_teacher.rssm.adaptive_compression_layout()
+            != adaptive_state.get("boundary_teacher_hidden_widths")
+        ):
+            raise ValueError(
+                "Adaptive checkpoint topology did not rebuild to recorded widths"
+            )
     optimizers = payload["optimizers"]
+    if config.uses_adaptive_qfp_compression:
+        for metadata_name, optimizer_name in (
+            ("private_optimizer_task_ids", "private_by_task"),
+            ("route_optimizer_task_ids", "route_by_task"),
+        ):
+            recorded_ids = adaptive_state.get(metadata_name)
+            payload_ids = sorted(
+                int(task_id) for task_id in optimizers[optimizer_name]
+            )
+            if recorded_ids != payload_ids:
+                raise ValueError(
+                    "Adaptive checkpoint optimizer ownership metadata is inconsistent"
+                )
     shared_optimizer.load_state_dict(optimizers["shared"])
     for name, targets in (
         ("private_by_task", private_optimizers),
@@ -2251,13 +2322,18 @@ def _evolving_memory_loss(
     frozen_actor: torch.nn.Module,
     batch: tuple[torch.Tensor, ...],
     task_id: int,
+    mechanism_output_scale: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute old-task Dreamer and Q/H/policy interface protection losses."""
 
     from clworldmodel.continual import (
         interface_distillation_losses,
+        mechanism_output_distillation_losses,
         prediction_head_distillation_losses,
     )
+
+    if mechanism_output_scale < 0:
+        raise ValueError("Mechanism-output distillation scale must be non-negative")
 
     actions, observations, rewards, continues, resets = batch
     cpu_state = torch.random.get_rng_state()
@@ -2289,6 +2365,11 @@ def _evolving_memory_loss(
             frozen_actor=frozen_actor,
         )
         prediction_distillation = None
+        mechanism_distillation = (
+            mechanism_output_distillation_losses(student_trace, teacher_trace)
+            if mechanism_output_scale
+            else None
+        )
         if config.uses_shared_prediction_heads:
             student_outputs = student_trace.get("prediction_head_outputs")
             teacher_outputs = teacher_trace.get("prediction_head_outputs")
@@ -2311,6 +2392,11 @@ def _evolving_memory_loss(
                 config.shared_prediction_distill_scale
                 * prediction_distillation["total"]
                 if prediction_distillation is not None
+                else 0.0
+            )
+            + (
+                mechanism_output_scale * mechanism_distillation["total"]
+                if mechanism_distillation is not None
                 else 0.0
             )
         )
@@ -2336,6 +2422,24 @@ def _evolving_memory_loss(
                 "Loss/evolving_prediction_distill_scaled": (
                     config.shared_prediction_distill_scale
                     * prediction_distillation["total"].detach()
+                ),
+            }
+        )
+    if mechanism_distillation is not None:
+        metrics.update(
+            {
+                "Loss/evolving_qfp_recurrent_distill": (
+                    mechanism_distillation["recurrent"].detach()
+                ),
+                "Loss/evolving_qfp_posterior_distill": (
+                    mechanism_distillation["posterior"].detach()
+                ),
+                "Loss/evolving_qfp_prior_distill": (
+                    mechanism_distillation["prior"].detach()
+                ),
+                "Loss/evolving_qfp_distill_scaled": (
+                    mechanism_output_scale
+                    * mechanism_distillation["total"].detach()
                 ),
             }
         )
@@ -3027,6 +3131,455 @@ def _consolidate_evolving_shared_core(
     return artifact
 
 
+_ADAPTIVE_QFP_COMPRESSION_METHOD = (
+    "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
+)
+
+
+def _adaptive_compression_candidate_passes(
+    *,
+    teacher_return: float,
+    candidate_return: float,
+    maximum_relative_drop: float,
+) -> bool:
+    """Apply the fixed raw-return gate, including negative-return games."""
+
+    if not all(
+        math.isfinite(value)
+        for value in (teacher_return, candidate_return, maximum_relative_drop)
+    ):
+        raise ValueError("Adaptive compression return gates require finite values")
+    if not 0 <= maximum_relative_drop < 1:
+        raise ValueError("Maximum adaptive-compression return drop must lie in [0, 1)")
+    relative_drop = (teacher_return - candidate_return) / max(
+        abs(teacher_return), 1.0
+    )
+    return relative_drop <= maximum_relative_drop + 1e-12
+
+
+def _adaptive_compression_target_width(
+    full_width: int, fraction: float, num_atoms: int
+) -> int:
+    if full_width < 1 or num_atoms < 1 or full_width % num_atoms:
+        raise ValueError("Dense acquisition width must be positive and atom-divisible")
+    if not 0 < fraction < 1:
+        raise ValueError("Adaptive compression fraction must lie in (0, 1)")
+    target = int(round(full_width * fraction))
+    if target < num_atoms or target % num_atoms:
+        raise ValueError(
+            "Adaptive compression fraction produced a non atom-divisible width"
+        )
+    return target
+
+
+def _adaptive_qfp_modules(
+    wm: WorldModel, task_id: int
+) -> dict[str, torch.nn.Module]:
+    modules: dict[str, torch.nn.Module] = {}
+    for name, bank in wm.rssm.mechanism_banks().items():
+        mechanism = bank.mechanism_for(task_id)
+        if mechanism is None:
+            raise RuntimeError(f"Task {task_id} is missing its {name} mechanism")
+        modules[name] = mechanism
+    return modules
+
+
+def _install_adaptive_qfp_modules(
+    wm: WorldModel,
+    task_id: int,
+    modules: Mapping[str, torch.nn.Module],
+) -> list[dict[str, Any]]:
+    banks = wm.rssm.mechanism_banks()
+    if set(modules) != set(banks):
+        raise ValueError("Adaptive Q/F/P replacement must contain all three banks")
+    reference = next(wm.parameters())
+    reports = []
+    for name, bank in banks.items():
+        module = modules[name].to(device=reference.device, dtype=reference.dtype)
+        report = bank.install_task_mechanism(task_id, module)
+        report["component"] = name
+        reports.append(report)
+    return reports
+
+
+def _structured_adaptive_qfp_candidate(
+    *,
+    wm: WorldModel,
+    dense_teacher: WorldModel,
+    task_id: int,
+    fraction: float,
+) -> tuple[list[dict[str, Any]], dict[str, torch.nn.Module]]:
+    from clworldmodel.models.mechanism_bank import ResidualMechanism
+
+    student_banks = wm.rssm.mechanism_banks()
+    teacher_banks = dense_teacher.rssm.mechanism_banks()
+    candidates: dict[str, torch.nn.Module] = {}
+    selection_reports: list[dict[str, Any]] = []
+    for name, student_bank in student_banks.items():
+        source = teacher_banks[name].mechanism_for(task_id)
+        if not isinstance(source, ResidualMechanism):
+            raise TypeError("Adaptive compression teacher must own Dense Q/F/P")
+        if source.hidden_features != student_bank.hidden_features:
+            raise ValueError(
+                "Adaptive compression must begin from the declared full Dense width"
+            )
+        target_width = _adaptive_compression_target_width(
+            student_bank.hidden_features,
+            fraction,
+            student_bank.num_atoms,
+        )
+        candidate, selected = ResidualMechanism.structured_pruned_copy(
+            source, hidden_features=target_width
+        )
+        candidates[name] = candidate
+        selection_bytes = ",".join(str(index) for index in selected).encode("ascii")
+        selection_reports.append(
+            {
+                "component": name,
+                "dense_hidden_features": source.hidden_features,
+                "candidate_hidden_features": target_width,
+                "selected_channel_count": len(selected),
+                "selected_channel_sha256": hashlib.sha256(
+                    selection_bytes
+                ).hexdigest(),
+            }
+        )
+    install_reports = _install_adaptive_qfp_modules(wm, task_id, candidates)
+    installed_by_name = {report["component"]: report for report in install_reports}
+    for report in selection_reports:
+        report.update(installed_by_name[report["component"]])
+    return selection_reports, _adaptive_qfp_modules(wm, task_id)
+
+
+def _evaluate_adaptive_compression_task(
+    *,
+    config: Config,
+    wm: WorldModel,
+    actor_critic_bank,
+    task_id: int,
+    eval_env_fns,
+    validation_seed: int,
+) -> dict[str, float]:
+    task_aco = actor_critic_bank.get(task_id)
+    with _preserve_training_rng_state():
+        scaled_mean, scaled_std = evaluate(
+            config.n_sync,
+            wm=wm,
+            ac=task_aco.ac,
+            env_fns=eval_env_fns,
+            env_repeat=config.env_repeat,
+            n_rollouts=config.adaptive_compression_rollouts,
+            seed=validation_seed,
+            task_id=task_id,
+            deterministic_policy=True,
+        )
+    raw_mean, raw_std = _raw_return_statistics(
+        [config.esc.env_configs[task_id]],
+        [scaled_mean],
+        [scaled_std],
+    )
+    return {
+        "scaled_mean": float(scaled_mean),
+        "scaled_std": float(scaled_std),
+        "raw_mean": raw_mean[0],
+        "raw_std": raw_std[0],
+    }
+
+
+def _compress_evolving_task_qfp(
+    *,
+    config: Config,
+    wm: WorldModel,
+    replay_buffer,
+    actor_critic_bank,
+    completed_task_id: int,
+    eval_env_fns,
+    validation_seed: int,
+    epoch: int,
+    global_step: int,
+    log_dir: Path,
+    writer,
+    fused_adam: bool,
+) -> dict[str, Any]:
+    """Train/evaluate fixed compact candidates and install the smallest pass.
+
+    Every candidate starts from the same post-consolidation Dense teacher, gets
+    the same LTDM recovery budget, and is evaluated on a dedicated pruning
+    cohort.  All candidates are attempted even after a failure so optimizer
+    compute is fixed rather than performance-dependent.  Held-out final seeds
+    never enter this selection procedure.
+    """
+
+    from clworldmodel.continual import recursive_python_scalars
+
+    if config.continual_method != _ADAPTIVE_QFP_COMPRESSION_METHOD:
+        raise ValueError("Adaptive Q/F/P compression requires its named method")
+    if actor_critic_bank is None:
+        raise ValueError("Adaptive Q/F/P compression requires private Actor-Critics")
+    if not 0 <= completed_task_id < len(config.esc.env_configs):
+        raise ValueError("Completed task is outside the adaptive curriculum")
+    if wm.rssm.task_mechanism_parameterization != "adaptive_dense_width":
+        raise ValueError("World model is not an adaptive dense-width topology")
+
+    was_training = wm.training
+    dense_teacher = copy.deepcopy(wm).eval()
+    dense_teacher.requires_grad_(False)
+    dense_modules = {
+        name: copy.deepcopy(module)
+        for name, module in _adaptive_qfp_modules(
+            dense_teacher, completed_task_id
+        ).items()
+    }
+    dense_layout = dense_teacher.rssm.adaptive_compression_layout()
+    expected_dense_widths = {
+        "recurrent": config.task_mechanism_recurrent_width,
+        "posterior": config.task_mechanism_representation_width,
+        "prior": config.task_mechanism_transition_width,
+    }
+    observed_dense_widths = {
+        name: values[completed_task_id]
+        for name, values in dense_layout.items()
+    }
+    if observed_dense_widths != expected_dense_widths:
+        raise ValueError(
+            "The just-completed task was not acquired at full Dense width: "
+            f"{observed_dense_widths} != {expected_dense_widths}"
+        )
+
+    world_model_parameters_before = sum(
+        parameter.numel() for parameter in wm.parameters()
+    )
+    candidates: list[dict[str, Any]] = []
+    best_modules: dict[str, torch.nn.Module] | None = None
+    best_fraction = 1.0
+    best_evaluation: dict[str, float] | None = None
+    optimizer_updates = 0
+    try:
+        # The adaptive phase must not change the online trainer's Python,
+        # NumPy/replay, or torch sampling streams. Its own fixed computation is
+        # fully reflected in counters and artifacts instead.
+        with _preserve_training_rng_state():
+            wm.eval()
+            dense_evaluation = _evaluate_adaptive_compression_task(
+                config=config,
+                wm=dense_teacher,
+                actor_critic_bank=actor_critic_bank,
+                task_id=completed_task_id,
+                eval_env_fns=eval_env_fns,
+                validation_seed=validation_seed,
+            )
+            candidate_python_state = random.getstate()
+            candidate_numpy_state = np.random.get_state()
+            candidate_torch_state = torch.random.get_rng_state()
+            candidate_cuda_states = (
+                torch.cuda.get_rng_state_all()
+                if torch.cuda.is_available()
+                else None
+            )
+            frozen_actor = copy.deepcopy(
+                actor_critic_bank.get(completed_task_id).ac.actor
+            ).eval()
+            frozen_actor.requires_grad_(False)
+            for fraction in config.adaptive_compression_width_fractions:
+                # Equal update counts are not sufficient for a controlled width
+                # comparison: give each candidate the exact same LTDM indices
+                # and stochastic-latent draws as well.
+                random.setstate(candidate_python_state)
+                np.random.set_state(candidate_numpy_state)
+                _restore_sampling_rng(
+                    candidate_torch_state,
+                    candidate_cuda_states,
+                )
+                selection, installed = _structured_adaptive_qfp_candidate(
+                    wm=wm,
+                    dense_teacher=dense_teacher,
+                    task_id=completed_task_id,
+                    fraction=float(fraction),
+                )
+                wm.requires_grad_(False)
+                trainable = [
+                    parameter
+                    for module in installed.values()
+                    for parameter in module.parameters()
+                ]
+                for parameter in trainable:
+                    parameter.requires_grad_(True)
+                optimizer = Adam(
+                    trainable,
+                    lr=config.adaptive_compression_lr,
+                    fused=fused_adam,
+                )
+                losses: list[float] = []
+                for _ in range(config.adaptive_compression_steps_per_candidate):
+                    batch = replay_buffer.minibatch_for_task(
+                        completed_task_id,
+                        config.mb_t_size,
+                        config.mb_n_size,
+                        source="ltdm",
+                    )
+                    optimizer.zero_grad(set_to_none=True)
+                    loss, _metrics = _evolving_memory_loss(
+                        config=config,
+                        wm=wm,
+                        teacher=dense_teacher,
+                        frozen_actor=frozen_actor,
+                        batch=batch,
+                        task_id=completed_task_id,
+                        mechanism_output_scale=(
+                            config.adaptive_compression_qfp_distill_scale
+                        ),
+                    )
+                    if not bool(torch.isfinite(loss).item()):
+                        raise FloatingPointError(
+                            "Adaptive Q/F/P compression produced a non-finite loss"
+                        )
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(trainable, 1000)
+                    optimizer.step()
+                    optimizer_updates += 1
+                    losses.append(float(loss.detach().float().cpu()))
+                wm.eval()
+                evaluation = _evaluate_adaptive_compression_task(
+                    config=config,
+                    wm=wm,
+                    actor_critic_bank=actor_critic_bank,
+                    task_id=completed_task_id,
+                    eval_env_fns=eval_env_fns,
+                    validation_seed=validation_seed,
+                )
+                relative_drop = (
+                    dense_evaluation["raw_mean"] - evaluation["raw_mean"]
+                ) / max(abs(dense_evaluation["raw_mean"]), 1.0)
+                passed = _adaptive_compression_candidate_passes(
+                    teacher_return=dense_evaluation["raw_mean"],
+                    candidate_return=evaluation["raw_mean"],
+                    maximum_relative_drop=(
+                        config.adaptive_compression_max_return_drop
+                    ),
+                )
+                candidate_record = {
+                    "width_fraction": float(fraction),
+                    "components": selection,
+                    "optimizer_updates": len(losses),
+                    "distillation_loss_mean": float(np.mean(losses)),
+                    "distillation_loss_first": losses[0],
+                    "distillation_loss_last": losses[-1],
+                    "validation": evaluation,
+                    "relative_raw_return_drop": relative_drop,
+                    "passed": passed,
+                    "world_model_parameters": sum(
+                        parameter.numel() for parameter in wm.parameters()
+                    ),
+                }
+                candidates.append(candidate_record)
+                if passed:
+                    best_modules = {
+                        name: copy.deepcopy(module)
+                        for name, module in _adaptive_qfp_modules(
+                            wm, completed_task_id
+                        ).items()
+                    }
+                    best_fraction = float(fraction)
+                    best_evaluation = evaluation
+
+            expected_optimizer_updates = (
+                len(config.adaptive_compression_width_fractions)
+                * config.adaptive_compression_steps_per_candidate
+            )
+            if optimizer_updates != expected_optimizer_updates:
+                raise RuntimeError(
+                    "Adaptive Q/F/P compression did not execute its fixed "
+                    f"candidate budget: {optimizer_updates} != "
+                    f"{expected_optimizer_updates}"
+                )
+            selected_modules = dense_modules if best_modules is None else best_modules
+            _install_adaptive_qfp_modules(
+                wm, completed_task_id, selected_modules
+            )
+        selected_evaluation = (
+            dense_evaluation if best_evaluation is None else best_evaluation
+        )
+        selected_layout = wm.rssm.adaptive_compression_layout()
+        world_model_parameters_after = sum(
+            parameter.numel() for parameter in wm.parameters()
+        )
+    except Exception:
+        _install_adaptive_qfp_modules(wm, completed_task_id, dense_modules)
+        raise
+    finally:
+        wm.train(was_training)
+        wm.activate_task_expert(completed_task_id)
+
+    artifact = recursive_python_scalars(
+        {
+            "schema_version": 1,
+            "artifact_kind": "evolving_core_return_gated_qfp_compression",
+            "method": config.continual_method,
+            "epoch": epoch,
+            "completed_epochs": epoch + 1,
+            "completed_task_id": completed_task_id,
+            "world_model_update_start": global_step,
+            "world_model_update_stop": global_step + optimizer_updates,
+            "optimizer_updates": optimizer_updates,
+            "expected_optimizer_updates": (
+                len(config.adaptive_compression_width_fractions)
+                * config.adaptive_compression_steps_per_candidate
+            ),
+            "candidate_compute_is_fixed": True,
+            "candidate_sampling_stream": (
+                "identical restored Python/NumPy/torch state for every width"
+            ),
+            "candidate_initialization": (
+                "independent structured channel pruning from one frozen full-width "
+                "post-consolidation Dense teacher"
+            ),
+            "recovery_replay": "completed-task LTDM only",
+            "recovery_sequences_per_update": config.mb_n_size,
+            "learning_rate": config.adaptive_compression_lr,
+            "qfp_output_distillation_scale": (
+                config.adaptive_compression_qfp_distill_scale
+            ),
+            "seed_cohort": "fixed_pruning_validation",
+            "validation_seed": validation_seed,
+            "rollouts_per_evaluation": config.adaptive_compression_rollouts,
+            "dense_teacher_validation": dense_evaluation,
+            "maximum_relative_raw_return_drop": (
+                config.adaptive_compression_max_return_drop
+            ),
+            "candidates": candidates,
+            "selected_width_fraction": best_fraction,
+            "selected_dense_fallback": best_modules is None,
+            "selected_validation": selected_evaluation,
+            "dense_layout": dense_layout,
+            "selected_layout": selected_layout,
+            "world_model_parameters_before": world_model_parameters_before,
+            "world_model_parameters_after": world_model_parameters_after,
+            "world_model_parameters_removed": (
+                world_model_parameters_before - world_model_parameters_after
+            ),
+            "training_only_dense_teacher_discarded": True,
+            "completed_task_private_optimizer_retirable": True,
+            "evaluation_transitions_enter_replay": False,
+            "heldout_final_data_used": False,
+        }
+    )
+    output_dir = log_dir / "adaptive_qfp_compression"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"task_{completed_task_id:02d}_boundary.json"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    writer.add_scalar(
+        "AdaptiveQFP/selected_width_fraction", best_fraction, global_step
+    )
+    writer.add_scalar(
+        "AdaptiveQFP/world_model_parameters_removed",
+        artifact["world_model_parameters_removed"],
+        global_step,
+    )
+    return artifact
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -3632,6 +4185,7 @@ if __name__ == "__main__":
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -3821,6 +4375,7 @@ if __name__ == "__main__":
     elif config.continual_method in {
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
     }:
@@ -3834,6 +4389,8 @@ if __name__ == "__main__":
         private_topology = (
             "projector_qfp_low_rank_prediction_adapters_actor_critic"
             if config.task_private_prediction_adapters
+            else "projector_dense_acquire_return_gated_compact_qfp_actor_critic"
+            if config.uses_adaptive_qfp_compression
             else "projector_qfp_atoms_actor_critic"
         )
         print(
@@ -3966,6 +4523,13 @@ if __name__ == "__main__":
             for _ in config.esc.env_configs
         )
         if fixed_evaluation_cohorts
+        else ()
+    )
+    compression_validation_task_seeds = (
+        _adaptive_compression_task_seeds(
+            config.seed, len(config.esc.env_configs)
+        )
+        if config.uses_adaptive_qfp_compression
         else ()
     )
     print("Training with seed: ", config.seed)
@@ -4147,6 +4711,7 @@ if __name__ == "__main__":
         "rec_rssm_arrow",
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -4480,6 +5045,22 @@ if __name__ == "__main__":
             "cohorts_disjoint_by_seed_sequence": fixed_evaluation_cohorts,
             "evaluation_transitions_enter_replay": False,
         }
+        if config.uses_adaptive_qfp_compression:
+            evaluation_seed_manifest["adaptive_compression_validation"] = {
+                "task_base_seeds": list(compression_validation_task_seeds),
+                "seed_sequence_spawn_index": 3,
+                "reused_for_dense_teacher_and_every_candidate": True,
+                "rollouts_per_condition": (
+                    config.adaptive_compression_rollouts
+                ),
+                "used_for_width_selection": True,
+                "disjoint_from_periodic_and_final_seed_domains": True,
+                "training_rng_state_restored": True,
+                "evaluation_transitions_enter_replay": False,
+            }
+            evaluation_seed_manifest["final_evaluation"][
+                "used_for_adaptive_width_selection"
+            ] = False
         evaluation_seed_path = log_dir / "evaluation_seed_manifest.json"
         temporary_evaluation_seed_path = evaluation_seed_path.with_suffix(
             ".json.tmp"
@@ -5751,6 +6332,77 @@ if __name__ == "__main__":
                 print(
                     "Evolving-Core consolidation failed after safe rollback; "
                     f"continuing from completed task state: {type(exc).__name__}: {exc}"
+                )
+            if config.uses_adaptive_qfp_compression:
+                compression_dense_state = _cpu_state_dict(wm)
+                try:
+                    compression = _compress_evolving_task_qfp(
+                        config=config,
+                        wm=wm,
+                        replay_buffer=replay,
+                        actor_critic_bank=actor_critic_bank,
+                        completed_task_id=completed_task_id,
+                        eval_env_fns=envs.eval_funcs()[completed_task_id],
+                        validation_seed=(
+                            compression_validation_task_seeds[completed_task_id]
+                        ),
+                        epoch=epoch,
+                        global_step=global_step,
+                        log_dir=log_dir,
+                        writer=writer,
+                        fused_adam=args.fused_adam,
+                    )
+                except Exception as exc:
+                    wm.load_state_dict(compression_dense_state, strict=True)
+                    wm.activate_task_expert(completed_task_id)
+                    failure = {
+                        "schema_version": 1,
+                        "artifact_kind": "adaptive_qfp_compression_failure",
+                        "task_id": completed_task_id,
+                        "exception_type": type(exc).__name__,
+                        "message": str(exc),
+                        "pre_consolidation_checkpoint": str(pre_checkpoint),
+                        "dense_topology_restored_before_failure": True,
+                        "training_stopped": True,
+                        "final_heldout_data_used": False,
+                    }
+                    failure_dir = log_dir / "adaptive_qfp_compression"
+                    failure_dir.mkdir(parents=True, exist_ok=True)
+                    failure_path = failure_dir / (
+                        f"task_{completed_task_id:02d}_failure.json"
+                    )
+                    temporary_failure = failure_path.with_suffix(".json.tmp")
+                    temporary_failure.write_text(
+                        json.dumps(failure, indent=2) + "\n", encoding="utf-8"
+                    )
+                    os.replace(temporary_failure, failure_path)
+                    raise
+                global_step += int(compression["optimizer_updates"])
+                compression_dense_state = None
+                retired_private_optimizer = evolving_private_optimizers.pop(
+                    completed_task_id, None
+                )
+                if retired_private_optimizer is None:
+                    raise RuntimeError(
+                        "Adaptive compression could not retire the completed "
+                        "task's stale Dense private optimizer"
+                    )
+                evolving_route_optimizers.pop(completed_task_id, None)
+                # Drop loop-local references as well: the installed compact
+                # module owns new Parameter objects and no completed-task Adam
+                # state is ever used again in this single-pass curriculum.
+                private_optimizer = None
+                route_optimizer = None
+                retired_private_optimizer = None
+                writer.add_scalar(
+                    "Counters/world_model_updates", global_step, global_step
+                )
+                print(
+                    "Compressed completed task Q/F/P after Dense acquisition: "
+                    f"task={completed_task_id} "
+                    f"selected_fraction={compression['selected_width_fraction']} "
+                    f"dense_fallback={compression['selected_dense_fallback']} "
+                    f"layout={compression['selected_layout']}"
                 )
             boundary_teacher = copy.deepcopy(wm).eval()
             boundary_teacher.requires_grad_(False)

@@ -45,7 +45,11 @@ contains experiment-facing code.
   separately named `--prediction-head-profile shared_distilled` profile instead
   preserves full-width Dense Q/F/P and independent MLP Actor-Critics while
   sharing one replay-, distillation-, projection-, and consolidation-protected
-  decoder/reward/continue set.
+  decoder/reward/continue set. Adding `--adaptive-qfp-compression` to that
+  original-six profile creates the separately named Dense-acquire protocol:
+  every task is learned at full width, all fixed structured-pruning candidates
+  receive equal LTDM recovery compute, and a dedicated raw-return cohort selects
+  the smallest acceptable physical Q/F/P width with Dense fallback.
 - `smoke_evolving_atomic_rssm.py`: target-CUDA, production-shaped synthetic
   update covering the fixed 12-current/4-memory split, component projection,
   frozen old private state, and shared/private/route Adam steps. Its explicit
@@ -58,7 +62,10 @@ contains experiment-facing code.
   teacher losses, separate projection groups, and shared-head optimizer steps.
   With `--method-profile atomic_lora_shared_heads` it allocates method C's
   production six-task Rank-128 atomic topology and exercises one Task-1 update
-  through the shared heads, private residuals, and active reuse routes.
+  through the shared heads, private residuals, and active reuse routes. With
+  `--method-profile adaptive_qfp_compression` it physically compacts Task 1,
+  takes a Q/F/P-only recovery step, and strictly reloads the heterogeneous
+  checkpoint topology.
 - `run_evolving_task0_sweep.py`: fixed-order, seed-0 MsPacman acquisition
   launcher for the preregistered single-LR profiles or the 120/150/180/240
   duration profiles. It omits held-out-final evaluation and stops at the

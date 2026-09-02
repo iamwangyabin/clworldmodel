@@ -36,6 +36,7 @@ ContinualMethod = Literal[
     "rec_rssm_arrow",
     "evolving_atomic_rssm_arrow",
     "evolving_atomic_rssm_shared_heads_arrow",
+    "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
     "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
     "evolving_atomic_rssm_learned_base_adapters_arrow",
     "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -75,6 +76,7 @@ TaskMechanismCapacityProfile = Literal[
 ]
 TaskMechanismParameterization = Literal[
     "dense_private",
+    "adaptive_dense_width",
     "shared_frozen_down_film",
     "learned_task0_low_rank",
     "dense_task0_low_rank_atoms",
@@ -367,6 +369,12 @@ class Config(Serialisable):
     boundary_consolidation_steps: int = 1000
     boundary_consolidation_lr: float = 2e-5
     boundary_max_return_drop: float = 0.05
+    adaptive_compression_width_fractions: list[float] = field(default_factory=list)
+    adaptive_compression_steps_per_candidate: int = 0
+    adaptive_compression_lr: float = 0.0
+    adaptive_compression_rollouts: int = 0
+    adaptive_compression_max_return_drop: float = 0.0
+    adaptive_compression_qfp_distill_scale: float = 0.0
     evolving_shared_behavior_current_task_fraction: float = 1.0
     task_private_heads: bool = False
     task_shared_prediction_heads: bool = False
@@ -485,6 +493,7 @@ class Config(Serialisable):
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -513,6 +522,10 @@ class Config(Serialisable):
             self.continual_method
             == "evolving_atomic_rssm_shared_heads_arrow"
         )
+        is_evolving_adaptive_compression_shared_heads = (
+            self.continual_method
+            == "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
+        )
         is_evolving_atomic_lora_shared_heads = (
             self.continual_method
             == "evolving_atomic_rssm_atomic_lora_shared_heads_arrow"
@@ -523,12 +536,14 @@ class Config(Serialisable):
         )
         uses_evolving_shared_heads = (
             is_evolving_shared_heads
+            or is_evolving_adaptive_compression_shared_heads
             or is_evolving_atomic_lora_shared_heads
             or is_evolving_learned_base_adapters
         )
         is_evolving_atomic = self.continual_method in {
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -577,6 +592,7 @@ class Config(Serialisable):
             )
         if self.task_mechanism_parameterization not in {
             "dense_private",
+            "adaptive_dense_width",
             "shared_frozen_down_film",
             "learned_task0_low_rank",
             "dense_task0_low_rank_atoms",
@@ -594,6 +610,14 @@ class Config(Serialisable):
                 raise ValueError(
                     "shared_frozen_down_film preserves the matched_512 hidden widths"
                 )
+        if (
+            self.task_mechanism_parameterization == "adaptive_dense_width"
+            and not is_evolving_adaptive_compression_shared_heads
+        ):
+            raise ValueError(
+                "adaptive_dense_width is validated only for the separately named "
+                "adaptive-compression shared-head method"
+            )
         if self.task_mechanism_low_rank < 0:
             raise ValueError("task_mechanism_low_rank must be non-negative")
         if not isinstance(self.task_mechanism_num_atoms, int) or (
@@ -661,7 +685,18 @@ class Config(Serialisable):
                 "mechanism parameterization='dense_private'"
             )
         if (
-            is_evolving_shared_heads
+            is_evolving_adaptive_compression_shared_heads
+            and self.task_mechanism_parameterization != "adaptive_dense_width"
+        ):
+            raise ValueError(
+                "The adaptive-compression shared-head method requires "
+                "mechanism parameterization='adaptive_dense_width'"
+            )
+        if (
+            (
+                is_evolving_shared_heads
+                or is_evolving_adaptive_compression_shared_heads
+            )
             and self.task_mechanism_capacity_profile != "matched_512"
         ):
             raise ValueError(
@@ -746,6 +781,12 @@ class Config(Serialisable):
             "boundary_consolidation_steps": 1000,
             "boundary_consolidation_lr": 2e-5,
             "boundary_max_return_drop": 0.05,
+            "adaptive_compression_width_fractions": [],
+            "adaptive_compression_steps_per_candidate": 0,
+            "adaptive_compression_lr": 0.0,
+            "adaptive_compression_rollouts": 0,
+            "adaptive_compression_max_return_drop": 0.0,
+            "adaptive_compression_qfp_distill_scale": 0.0,
             "evolving_shared_behavior_current_task_fraction": 1.0,
             "task_private_heads": False,
             "task_shared_prediction_heads": False,
@@ -818,6 +859,22 @@ class Config(Serialisable):
                         "prediction_adapter_rank": 32,
                         "prediction_adapter_residual_scale": 0.1,
                         "freeze_shared_prediction_heads_after_task0": True,
+                    }
+                )
+            if is_evolving_adaptive_compression_shared_heads:
+                expected_evolving.update(
+                    {
+                        "adaptive_compression_width_fractions": [
+                            0.75,
+                            0.5,
+                            0.25,
+                            0.125,
+                        ],
+                        "adaptive_compression_steps_per_candidate": 250,
+                        "adaptive_compression_lr": 2e-4,
+                        "adaptive_compression_rollouts": 16,
+                        "adaptive_compression_max_return_drop": 0.05,
+                        "adaptive_compression_qfp_distill_scale": 1.0,
                     }
                 )
             expected_evolving.update(
@@ -903,6 +960,103 @@ class Config(Serialisable):
                     "Evolving-Core interface and atom regularization scales "
                     "must be non-negative"
                 )
+            if is_evolving_adaptive_compression_shared_heads:
+                fractions = self.adaptive_compression_width_fractions
+                if (
+                    not isinstance(fractions, list)
+                    or not fractions
+                    or any(
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not 0 < float(value) < 1
+                        for value in fractions
+                    )
+                    or any(
+                        float(left) <= float(right)
+                        for left, right in zip(fractions, fractions[1:])
+                    )
+                ):
+                    raise ValueError(
+                        "Adaptive compression width fractions must be strictly "
+                        "decreasing values in (0, 1)"
+                    )
+                if self.adaptive_compression_steps_per_candidate < 1:
+                    raise ValueError(
+                        "Adaptive compression steps per candidate must be positive"
+                    )
+                if self.adaptive_compression_lr <= 0:
+                    raise ValueError("Adaptive compression LR must be positive")
+                if self.adaptive_compression_rollouts < 1:
+                    raise ValueError("Adaptive compression rollouts must be positive")
+                if not 0 <= self.adaptive_compression_max_return_drop < 1:
+                    raise ValueError(
+                        "Adaptive compression maximum return drop must lie in [0, 1)"
+                    )
+                if self.adaptive_compression_qfp_distill_scale <= 0:
+                    raise ValueError(
+                        "Adaptive compression Q/F/P distillation scale must be positive"
+                    )
+                expected_tasks = (
+                    "ALE/MsPacman-v5",
+                    "ALE/Boxing-v5",
+                    "ALE/CrazyClimber-v5",
+                    "ALE/Frostbite-v5",
+                    "ALE/Seaquest-v5",
+                    "ALE/Enduro-v5",
+                )
+                observed_tasks = tuple(task.name for task in self.esc.env_configs)
+                if observed_tasks != expected_tasks:
+                    raise ValueError(
+                        "Adaptive compression v1 is fixed to the ARROW original-six "
+                        f"order, got {observed_tasks}"
+                    )
+                if sequential_task_durations != (90,) * len(expected_tasks):
+                    raise ValueError(
+                        "Adaptive compression v1 fixes every original-six task to "
+                        "90 epochs"
+                    )
+                topology = {
+                    "task_mechanism_reuse": self.task_mechanism_reuse,
+                    "task_mechanism_num_atoms": self.task_mechanism_num_atoms,
+                    "task_mechanism_recurrent_width": (
+                        self.task_mechanism_recurrent_width
+                    ),
+                    "task_mechanism_representation_width": (
+                        self.task_mechanism_representation_width
+                    ),
+                    "task_mechanism_transition_width": (
+                        self.task_mechanism_transition_width
+                    ),
+                }
+                expected_topology = {
+                    "task_mechanism_reuse": True,
+                    "task_mechanism_num_atoms": 4,
+                    "task_mechanism_recurrent_width": 512,
+                    "task_mechanism_representation_width": 512,
+                    "task_mechanism_transition_width": 256,
+                }
+                if topology != expected_topology:
+                    raise ValueError(
+                        "Adaptive compression v1 requires full-width Dense "
+                        f"acquisition and four-atom reuse: {topology}"
+                    )
+                for full_width in (512, 512, 256):
+                    candidate_widths = [
+                        int(round(full_width * float(fraction)))
+                        for fraction in fractions
+                    ]
+                    if (
+                        len(set(candidate_widths)) != len(candidate_widths)
+                        or any(
+                            width < self.task_mechanism_num_atoms
+                            or width % self.task_mechanism_num_atoms
+                            for width in candidate_widths
+                        )
+                    ):
+                        raise ValueError(
+                            "Adaptive compression candidates must map to unique "
+                            "atom-divisible Q/F/P widths"
+                        )
         else:
             if self.evolving_checkpoint_retention != "all_boundaries":
                 raise ValueError(
@@ -1952,6 +2106,7 @@ class Config(Serialisable):
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -1985,6 +2140,7 @@ class Config(Serialisable):
             "rec_rssm_arrow",
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2025,6 +2181,7 @@ class Config(Serialisable):
             self.continual_method
             in {
                 "evolving_atomic_rssm_shared_heads_arrow",
+                "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
                 "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
                 "evolving_atomic_rssm_learned_base_adapters_arrow",
             }
@@ -2035,6 +2192,7 @@ class Config(Serialisable):
         if self.continual_method in {
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2047,10 +2205,20 @@ class Config(Serialisable):
         return self.continual_method in {
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }
+
+    @property
+    def uses_adaptive_qfp_compression(self) -> bool:
+        """Whether completed Dense Q/F/P modules are return-gated and compacted."""
+
+        return (
+            self.continual_method
+            == "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
+        )
 
     def get_env_schedule(self) -> EnvironmentSchedule:
         return self.esc.env_schedule_type(

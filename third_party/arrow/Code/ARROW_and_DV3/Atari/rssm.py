@@ -207,6 +207,7 @@ class Rssm(nn.Module):
             )
         if task_mechanism_parameterization not in {
             "dense_private",
+            "adaptive_dense_width",
             "shared_frozen_down_film",
             "learned_task0_low_rank",
             "dense_task0_low_rank_atoms",
@@ -999,6 +1000,27 @@ class Rssm(nn.Module):
                 if mechanism is not None:
                     modules.append(mechanism)
         return self._unique_parameters(modules)
+
+    def mechanism_banks(self) -> dict[str, nn.Module]:
+        """Return the three task-private Q/F/P banks by stable component name."""
+
+        if not self.task_mechanism_bank_enabled:
+            raise ValueError("RSSM mechanism banks are not enabled")
+        return {
+            "recurrent": self.recurrent_mechanism_bank,
+            "posterior": self.representation_mechanism_bank,
+            "prior": self.transition_mechanism_bank,
+        }
+
+    def adaptive_compression_layout(self) -> dict[str, list[int]]:
+        """Return materialized hidden widths for adaptive Q/F/P mechanisms."""
+
+        if self.task_mechanism_parameterization != "adaptive_dense_width":
+            raise ValueError("RSSM does not use adaptive dense-width mechanisms")
+        return {
+            name: bank.compression_layout()
+            for name, bank in self.mechanism_banks().items()
+        }
 
     def route_parameters(self, task_id: int) -> list[nn.Parameter]:
         """Return only the selected task's old-atom gate parameters."""

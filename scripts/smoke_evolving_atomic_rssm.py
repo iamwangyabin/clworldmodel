@@ -5,7 +5,9 @@ This is a synthetic execution smoke: it performs no environment interaction and
 does not produce a performance claim. It exercises the exact 12-current / 4-LTDM
 memory update, interface losses, component gradient projection, and all three
 world-model optimizer classes. The shared-FastKAN profile additionally performs
-one old-route and one current-route update on the single Actor-Critic.
+one old-route and one current-route update on the single Actor-Critic. The
+adaptive-Q/F/P profile physically compacts one task, takes a recovery step, and
+strictly reloads the heterogeneous state dict.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ from run_evolving_atomic_rssm import (  # noqa: E402
     PREDICTION_HEAD_PROFILES,
     PRIVATE_MLP_BEHAVIOR,
     PRIVATE_PREDICTION_HEADS_PROFILE,
+    SHARED_DISTILLED_HEADS_PROFILE,
     SHARED_DOWN_PARAMETERIZATION,
     SHARED_FASTKAN_STABLE_BEHAVIOR,
     _resolved_config,
@@ -55,7 +58,12 @@ from run_evolving_atomic_lora_shared_heads import (  # noqa: E402
 
 LEGACY_METHOD_PROFILE = "legacy"
 ATOMIC_LORA_SHARED_HEADS_PROFILE = "atomic_lora_shared_heads"
-METHOD_PROFILES = (LEGACY_METHOD_PROFILE, ATOMIC_LORA_SHARED_HEADS_PROFILE)
+ADAPTIVE_QFP_COMPRESSION_PROFILE = "adaptive_qfp_compression"
+METHOD_PROFILES = (
+    LEGACY_METHOD_PROFILE,
+    ATOMIC_LORA_SHARED_HEADS_PROFILE,
+    ADAPTIVE_QFP_COMPRESSION_PROFILE,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -125,6 +133,25 @@ def _config(
                 "The atomic-LoRA shared-head smoke fixes all legacy profile selectors"
             )
         return Config.from_dict(_atomic_lora_shared_heads_config(source))
+    if method_profile == ADAPTIVE_QFP_COMPRESSION_PROFILE:
+        if (
+            mechanism_profile != DEFAULT_MECHANISM_PROFILE
+            or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
+            or behavior_profile != PRIVATE_MLP_BEHAVIOR
+            or prediction_head_profile != PRIVATE_PREDICTION_HEADS_PROFILE
+        ):
+            raise ValueError(
+                "The adaptive-Q/F/P smoke fixes all legacy profile selectors"
+            )
+        return Config.from_dict(
+            _resolved_config(
+                source,
+                task_order="arrow-original-six",
+                behavior_profile=PRIVATE_MLP_BEHAVIOR,
+                prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
+                adaptive_qfp_compression=True,
+            )
+        )
     if method_profile != LEGACY_METHOD_PROFILE:
         raise ValueError(f"Unknown smoke method profile: {method_profile!r}")
     task_order = (
@@ -423,6 +450,81 @@ def main() -> int:
                 f"Non-finite shared FastKAN smoke metrics: {behavior_metrics}"
             )
 
+    adaptive_compression_smoke = None
+    if config.uses_adaptive_qfp_compression:
+        dense_teacher = copy.deepcopy(world_model).eval()
+        dense_teacher.requires_grad_(False)
+        dense_parameter_count = sum(
+            parameter.numel() for parameter in world_model.parameters()
+        )
+        selection, installed = train._structured_adaptive_qfp_candidate(
+            wm=world_model,
+            dense_teacher=dense_teacher,
+            task_id=1,
+            fraction=config.adaptive_compression_width_fractions[0],
+        )
+        world_model.requires_grad_(False)
+        compact_parameters = [
+            parameter
+            for module in installed.values()
+            for parameter in module.parameters()
+        ]
+        for parameter in compact_parameters:
+            parameter.requires_grad_(True)
+        compression_optimizer = torch.optim.Adam(
+            compact_parameters,
+            lr=config.adaptive_compression_lr,
+            fused=True,
+        )
+        compression_batch = replay.minibatch_for_task(
+            1,
+            2,
+            config.mb_n_size,
+            source="ltdm",
+            mb_device=str(device),
+        )
+        compression_optimizer.zero_grad(set_to_none=True)
+        compression_loss, compression_metrics = train._evolving_memory_loss(
+            config=config,
+            wm=world_model,
+            teacher=dense_teacher,
+            frozen_actor=actor,
+            batch=compression_batch,
+            task_id=1,
+            mechanism_output_scale=(
+                config.adaptive_compression_qfp_distill_scale
+            ),
+        )
+        if not bool(torch.isfinite(compression_loss).item()):
+            raise FloatingPointError("Adaptive Q/F/P smoke loss is non-finite")
+        compression_loss.backward()
+        compression_optimizer.step()
+        compact_parameter_count = sum(
+            parameter.numel() for parameter in world_model.parameters()
+        )
+        compact_state = copy.deepcopy(world_model.state_dict())
+        restored_world_model = _world_model(config, device)
+        restored_world_model.load_state_dict(compact_state, strict=True)
+        expected_layout = world_model.rssm.adaptive_compression_layout()
+        if restored_world_model.rssm.adaptive_compression_layout() != expected_layout:
+            raise RuntimeError("Adaptive Q/F/P state-dict topology did not rebuild")
+        adaptive_compression_smoke = {
+            "task_id": 1,
+            "width_fraction": config.adaptive_compression_width_fractions[0],
+            "selection": selection,
+            "layout": expected_layout,
+            "loss": float(compression_loss.detach().cpu()),
+            "qfp_distillation_loss": float(
+                compression_metrics[
+                    "Loss/evolving_qfp_distill_scaled"
+                ].detach().cpu()
+            ),
+            "optimizer_step": _optimizer_step(compression_optimizer),
+            "world_model_parameters_before": dense_parameter_count,
+            "world_model_parameters_after": compact_parameter_count,
+            "state_dict_dynamic_topology_round_trip": True,
+        }
+
     result = {
         "schema_version": 1,
         "classification": "smoke",
@@ -460,6 +562,7 @@ def main() -> int:
             [0, 1] if behavior_metrics is not None else None
         ),
         "shared_behavior_metrics": behavior_metrics,
+        "adaptive_compression_smoke": adaptive_compression_smoke,
         "peak_cuda_memory_bytes": torch.cuda.max_memory_allocated(device),
     }
     print(json.dumps(result, indent=2))

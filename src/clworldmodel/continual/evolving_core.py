@@ -337,6 +337,42 @@ def prediction_head_distillation_losses(
     }
 
 
+def mechanism_output_distillation_losses(
+    student_trace: Mapping[str, Any],
+    teacher_trace: Mapping[str, Any],
+) -> dict[str, torch.Tensor]:
+    """Match the task-private recurrent/posterior/prior residual functions.
+
+    The trace key predates adaptive compression: ``current_atom_outputs`` stores
+    each current mechanism's *summed* output at its real call sites.  Matching
+    those three tensors therefore distills Q/F/P without constraining their
+    internal width or channel ordering.
+    """
+
+    student_outputs = student_trace.get("current_atom_outputs")
+    teacher_outputs = teacher_trace.get("current_atom_outputs")
+    if not isinstance(student_outputs, Mapping) or not isinstance(
+        teacher_outputs, Mapping
+    ):
+        raise ValueError("Q/F/P distillation requires current mechanism outputs")
+    required = ("recurrent", "posterior", "prior")
+    losses: dict[str, torch.Tensor] = {}
+    for name in required:
+        student = student_outputs.get(name)
+        teacher = teacher_outputs.get(name)
+        if not isinstance(student, torch.Tensor) or not isinstance(
+            teacher, torch.Tensor
+        ):
+            raise ValueError(f"Q/F/P trace is missing {name!r} outputs")
+        if student.shape != teacher.shape:
+            raise ValueError(f"Q/F/P student/teacher shape mismatch for {name}")
+        losses[name] = F.mse_loss(
+            student.float(), teacher.detach().float(), reduction="mean"
+        )
+    losses["total"] = torch.stack(tuple(losses.values())).sum()
+    return losses
+
+
 def assign_unprojected_current_gradients(
     loss: torch.Tensor,
     parameters: Sequence[torch.nn.Parameter],

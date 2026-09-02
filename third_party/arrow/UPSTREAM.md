@@ -9,6 +9,7 @@
 
 `MANIFEST.sha256` fingerprints the current vendored tree. This `UPSTREAM.md`
 file and the manifest itself are project metadata and are not part of upstream.
+Generated Python caches (`__pycache__/` and `*.pyc`) are also excluded.
 The pristine source remains recoverable from the commit above.
 
 Reference launchers execute this directory directly. Local changes must be
@@ -596,6 +597,30 @@ documented here, covered by focused parity tests, and followed by regenerating
     zero effect, atom sums/reuse without base duplication, rank/config
     isolation, transition config/counter validation, and the exact six-task
     `40,773,375`-parameter online ledger.
+
+59. Add the separately named, task-aware
+    `Evolving-Core-DenseAcquire-ReturnGatedAdaptiveQFP-SharedDistilledHeads-PrivateMLPAC-ARROW-v1`
+    original-six pilot. It preserves the Dense `512/512/256` Q/F/P acquisition,
+    shared plastic decoder/reward/continue heads, output distillation, private
+    MLP Actor-Critics, four-atom reuse, ARROW-50 Replay, and 90-epoch task
+    schedule of the shared-head method. After shared boundary consolidation it
+    independently constructs physical structured-pruned Q/F/P candidates at
+    fractions `0.75/0.5/0.25/0.125`. Every candidate receives 250 completed-
+    task LTDM updates at `2e-4` with an identical restored sampling stream and
+    Q/F/P output distillation scale `1.0`. A dedicated fixed 16-rollout cohort
+    selects the smallest candidate within a five-percent relative raw-return
+    drop; the final held-out cohort is excluded and Dense is retained when no
+    candidate passes. All candidates run regardless of intermediate outcomes,
+    adding exactly 6,000 optimizer updates and 96,000 replay sequences over six
+    tasks. Adaptive mechanism banks persist actual hidden-width buffers and
+    rebuild heterogeneous modules before strict checkpoint loading; completed
+    stale Dense optimizer state is retired. Boundary artifacts distinguish
+    pruning validation from final results and report actual parameter removal.
+    The final online topology is outcome dependent from `52,897,535` down to
+    `32,935,103` parameters. Focused tests cover per-atom channel selection,
+    physical parameter removal, dynamic state-dict reconstruction, Q/F/P output
+    matching, signed return gating, strict protocol isolation, and exact
+    compute/parameter bounds.
 
 ## Known issues at import
 

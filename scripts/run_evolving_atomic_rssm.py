@@ -80,6 +80,19 @@ SHARED_DISTILLED_HEADS_ORIGINAL_SIX_PROTOCOL = (
     "Evolving-Core-DenseQFP-SharedDistilledHeads-PrivateMLPAC-ARROW-v1-"
     "OriginalSix-Atari-TaskAware-Pilot"
 )
+ADAPTIVE_QFP_COMPRESSION_PROTOCOL = (
+    "Evolving-Core-DenseAcquire-ReturnGatedAdaptiveQFP-SharedDistilledHeads-"
+    "PrivateMLPAC-ARROW-v1-OriginalSix-Atari-TaskAware-Pilot"
+)
+ADAPTIVE_QFP_COMPRESSION_METHOD = (
+    "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
+)
+ADAPTIVE_QFP_WIDTH_FRACTIONS = (0.75, 0.5, 0.25, 0.125)
+ADAPTIVE_QFP_STEPS_PER_CANDIDATE = 250
+ADAPTIVE_QFP_LEARNING_RATE = 2e-4
+ADAPTIVE_QFP_VALIDATION_ROLLOUTS = 16
+ADAPTIVE_QFP_MAXIMUM_RETURN_DROP = 0.05
+ADAPTIVE_QFP_DISTILL_SCALE = 1.0
 TASK_ORDERS = {
     "mspacman-boxing-crazyclimber": (
         "ALE/MsPacman-v5",
@@ -109,6 +122,7 @@ TASK_DURATION_EPOCHS = 90
 DEFAULT_MECHANISM_PROFILE = "matched_512"
 COMPACT_MECHANISM_PROFILE = "compact_128_128_64"
 DENSE_PRIVATE_PARAMETERIZATION = "dense_private"
+ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION = "adaptive_dense_width"
 SHARED_DOWN_PARAMETERIZATION = "shared_frozen_down_film"
 MECHANISM_PARAMETERIZATIONS = (
     DENSE_PRIVATE_PARAMETERIZATION,
@@ -186,6 +200,7 @@ def _protocol_for_task_order(
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
     task0_profile: str | None = None,
     prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
+    adaptive_qfp_compression: bool = False,
 ) -> str:
     _validate_mechanism_profile(
         task_order, mechanism_profile, mechanism_parameterization
@@ -195,6 +210,25 @@ def _protocol_for_task_order(
         raise ValueError(
             f"Unknown prediction-head profile: {prediction_head_profile!r}"
         )
+    if adaptive_qfp_compression:
+        if task_order != "arrow-original-six":
+            raise ValueError(
+                "Adaptive Q/F/P compression v1 is fixed to the ARROW "
+                "original-six order"
+            )
+        if prediction_head_profile != SHARED_DISTILLED_HEADS_PROFILE:
+            raise ValueError(
+                "Adaptive Q/F/P compression requires shared distilled "
+                "prediction heads"
+            )
+        if (
+            mechanism_profile != DEFAULT_MECHANISM_PROFILE
+            or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
+        ):
+            raise ValueError(
+                "Adaptive Q/F/P compression acquires dense matched_512 mechanisms"
+            )
+        return ADAPTIVE_QFP_COMPRESSION_PROTOCOL
     if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
         if (
             mechanism_profile != DEFAULT_MECHANISM_PROFILE
@@ -262,7 +296,10 @@ def _mechanism_capacity_manifest(
         raise ValueError(
             f"Unknown Evolving-Core mechanism profile: {mechanism_profile!r}"
         )
-    if mechanism_parameterization not in MECHANISM_PARAMETERIZATIONS:
+    if mechanism_parameterization not in {
+        *MECHANISM_PARAMETERIZATIONS,
+        ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION,
+    }:
         raise ValueError(
             f"Unknown mechanism parameterization: {mechanism_parameterization!r}"
         )
@@ -318,7 +355,7 @@ def _mechanism_capacity_manifest(
         }
     shared_total = sum(shared.values())
     route_parameters = 3 * 4 * sum(range(task_count))
-    return {
+    result = {
         "profile": mechanism_profile,
         "parameterization": mechanism_parameterization,
         "widths": {
@@ -340,6 +377,26 @@ def _mechanism_capacity_manifest(
             shared_total + task_count * per_task_total + route_parameters
         ),
     }
+    if mechanism_parameterization == ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION:
+        result["adaptive_compression"] = {
+            "acquisition_widths": [
+                recurrent_width,
+                representation_width,
+                transition_width,
+            ],
+            "candidate_width_fractions": list(ADAPTIVE_QFP_WIDTH_FRACTIONS),
+            "candidate_widths": [
+                [
+                    int(round(recurrent_width * fraction)),
+                    int(round(representation_width * fraction)),
+                    int(round(transition_width * fraction)),
+                ]
+                for fraction in ADAPTIVE_QFP_WIDTH_FRACTIONS
+            ],
+            "physical_structured_pruning": True,
+            "masked_full_width_storage": False,
+        }
+    return result
 
 
 def _existing_ancestor(path: Path) -> Path:
@@ -417,6 +474,16 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--adaptive-qfp-compression",
+        action="store_true",
+        help=(
+            "Use the separately named original-six protocol that acquires each "
+            "task at Dense 512/512/256 width, evaluates all fixed structured-"
+            "pruning candidates on a dedicated validation cohort, and retains "
+            "the smallest candidate within the raw-return gate."
+        ),
+    )
+    parser.add_argument(
         "--mechanism-parameterization",
         choices=MECHANISM_PARAMETERIZATIONS,
         default=DENSE_PRIVATE_PARAMETERIZATION,
@@ -467,6 +534,7 @@ def _resolved_config(
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
     prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
+    adaptive_qfp_compression: bool = False,
 ) -> dict:
     """Compose the fixed named protocol without changing existing baselines."""
 
@@ -481,6 +549,28 @@ def _resolved_config(
         raise ValueError(
             f"Unknown prediction-head profile: {prediction_head_profile!r}"
         )
+    if adaptive_qfp_compression:
+        if task_order != "arrow-original-six":
+            raise ValueError(
+                "Adaptive Q/F/P compression v1 is fixed to the ARROW "
+                "original-six order"
+            )
+        if behavior_profile != PRIVATE_MLP_BEHAVIOR:
+            raise ValueError(
+                "Adaptive Q/F/P compression retains private MLP Actor-Critics"
+            )
+        if prediction_head_profile != SHARED_DISTILLED_HEADS_PROFILE:
+            raise ValueError(
+                "Adaptive Q/F/P compression requires shared distilled "
+                "prediction heads"
+            )
+        if (
+            mechanism_profile != DEFAULT_MECHANISM_PROFILE
+            or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
+        ):
+            raise ValueError(
+                "Adaptive Q/F/P compression acquires dense matched_512 mechanisms"
+            )
     if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
         if behavior_profile != PRIVATE_MLP_BEHAVIOR:
             raise ValueError(
@@ -627,6 +717,31 @@ def _resolved_config(
                 "shared_prediction_distill_scale": 0.1,
             }
         )
+    if adaptive_qfp_compression:
+        config.update(
+            {
+                "continual_method": ADAPTIVE_QFP_COMPRESSION_METHOD,
+                "task_mechanism_parameterization": (
+                    ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION
+                ),
+                "adaptive_compression_width_fractions": list(
+                    ADAPTIVE_QFP_WIDTH_FRACTIONS
+                ),
+                "adaptive_compression_steps_per_candidate": (
+                    ADAPTIVE_QFP_STEPS_PER_CANDIDATE
+                ),
+                "adaptive_compression_lr": ADAPTIVE_QFP_LEARNING_RATE,
+                "adaptive_compression_rollouts": (
+                    ADAPTIVE_QFP_VALIDATION_ROLLOUTS
+                ),
+                "adaptive_compression_max_return_drop": (
+                    ADAPTIVE_QFP_MAXIMUM_RETURN_DROP
+                ),
+                "adaptive_compression_qfp_distill_scale": (
+                    ADAPTIVE_QFP_DISTILL_SCALE
+                ),
+            }
+        )
     for replay_config in config["replay_buffers"]:
         replay_config["rb_device"] = "cpu"
     return config
@@ -698,7 +813,10 @@ def _parameter_manifest(config: dict) -> dict:
         private_mechanism_parameters = (
             TASK_SHARED_DOWN_PRIVATE_MECHANISM_PARAMETERS
         )
-    elif mechanism_parameterization == "dense_private":
+    elif mechanism_parameterization in {
+        "dense_private",
+        ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION,
+    }:
         shared_mechanism_parameters = 0
         private_mechanism_parameters = TASK_MECHANISM_PARAMETERS
     else:
@@ -832,6 +950,71 @@ def _parameter_manifest(config: dict) -> dict:
             "contained_in_common_evolving_boundary_world_model_teacher": True,
             "growth_with_task_count": 0,
         }
+    if mechanism_parameterization == ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION:
+        dense_widths = [
+            int(config["task_mechanism_recurrent_width"]),
+            int(config["task_mechanism_representation_width"]),
+            int(config["task_mechanism_transition_width"]),
+        ]
+        fractions = [
+            float(value)
+            for value in config["adaptive_compression_width_fractions"]
+        ]
+        minimum_widths = [
+            int(round(width * fractions[-1])) for width in dense_widths
+        ]
+        minimum_per_task_mechanism_parameters = sum(
+            (
+                _residual_mechanism_parameters(
+                    in_features=512,
+                    out_features=512,
+                    hidden_features=minimum_widths[0],
+                ),
+                _residual_mechanism_parameters(
+                    in_features=4096 + 512,
+                    out_features=32 * 32,
+                    hidden_features=minimum_widths[1],
+                ),
+                _residual_mechanism_parameters(
+                    in_features=512,
+                    out_features=32 * 32,
+                    hidden_features=minimum_widths[2],
+                ),
+            )
+        )
+        minimum_mechanism_parameters = sum(
+            minimum_per_task_mechanism_parameters + 12 * task_id
+            for task_id in range(task_count)
+        )
+        non_mechanism_world_model_parameters = (
+            world_model_parameters - mechanism_parameters
+        )
+        minimum_final_world_model_parameters = (
+            non_mechanism_world_model_parameters + minimum_mechanism_parameters
+        )
+        minimum_final_online_parameters = (
+            minimum_final_world_model_parameters + behavior_parameters
+        )
+        result["adaptive_compression"] = {
+            "outcome_dependent": True,
+            "dense_acquisition_widths": dense_widths,
+            "candidate_width_fractions": fractions,
+            "candidate_widths": [
+                [int(round(width * fraction)) for width in dense_widths]
+                for fraction in fractions
+            ],
+            "minimum_candidate_widths": minimum_widths,
+            "minimum_final_world_model_parameters": (
+                minimum_final_world_model_parameters
+            ),
+            "minimum_final_online_parameters": minimum_final_online_parameters,
+            "maximum_final_online_parameters": online_parameters,
+            "maximum_acquisition_online_parameters": online_parameters,
+            "dense_fallback_retained_when_no_candidate_passes": True,
+            "selection_metric": "current-task raw episodic return",
+            "final_heldout_cohort_used_for_selection": False,
+            "full_dense_teacher_persistent": False,
+        }
     return result
 
 
@@ -842,6 +1025,19 @@ def _budget_manifest(config: dict) -> dict:
     online_updates = int(config["epochs"]) * int(config["steps_per_batch"])
     consolidation_updates = task_count * int(
         config["boundary_consolidation_steps"]
+    )
+    adaptive_compression = (
+        config.get("continual_method") == ADAPTIVE_QFP_COMPRESSION_METHOD
+    )
+    adaptive_compression_updates = (
+        task_count
+        * len(config.get("adaptive_compression_width_fractions", ()))
+        * int(config.get("adaptive_compression_steps_per_candidate", 0))
+        if adaptive_compression
+        else 0
+    )
+    adaptive_compression_sequences = adaptive_compression_updates * int(
+        config["mb_n_size"]
     )
     task_updates = TASK_DURATION_EPOCHS * int(config["steps_per_batch"])
     replay_budget = _arrow_replay_storage_budget(config)
@@ -862,8 +1058,18 @@ def _budget_manifest(config: dict) -> dict:
         "raw_environment_frames": raw_frames_per_epoch * int(config["epochs"]),
         "online_world_model_updates": online_updates,
         "boundary_consolidation_world_model_updates": consolidation_updates,
+        "adaptive_compression_world_model_updates": adaptive_compression_updates,
+        "adaptive_compression_sequences": adaptive_compression_sequences,
+        "adaptive_compression_validation_rollouts": (
+            task_count
+            * (1 + len(config.get("adaptive_compression_width_fractions", ())))
+            * int(config.get("adaptive_compression_rollouts", 0))
+            if adaptive_compression
+            else 0
+        ),
         "total_world_model_optimizer_steps": online_updates
-        + consolidation_updates,
+        + consolidation_updates
+        + adaptive_compression_updates,
         "actor_critic_updates": int(config["epochs"])
         * int(config["ac_train_steps"]),
         "online_current_sequences": task_updates * int(config["mb_n_size"])
@@ -899,6 +1105,11 @@ def _budget_manifest(config: dict) -> dict:
         * int(replay_budget["observation_bytes"]),
         "evaluation_transitions_enter_replay": False,
         "consolidation_is_extra_compute": True,
+        "adaptive_compression_is_extra_compute": adaptive_compression,
+        "adaptive_compression_candidate_compute_is_fixed": adaptive_compression,
+        "adaptive_compression_replay_source": (
+            "completed-task LTDM" if adaptive_compression else None
+        ),
     }
 
 
@@ -919,6 +1130,7 @@ def main() -> int:
         mechanism_parameterization=args.mechanism_parameterization,
         behavior_profile=args.behavior_profile,
         prediction_head_profile=args.prediction_head_profile,
+        adaptive_qfp_compression=args.adaptive_qfp_compression,
     )
     task_count = len(TASK_ORDERS[args.task_order])
     resolved_task0_profile = config["evolving_task0_profile"]
@@ -928,6 +1140,7 @@ def main() -> int:
         mechanism_parameterization=args.mechanism_parameterization,
         task0_profile=resolved_task0_profile,
         prediction_head_profile=args.prediction_head_profile,
+        adaptive_qfp_compression=args.adaptive_qfp_compression,
     )
     if args.task_order == "arrow-original-six" and args.classification != "pilot":
         raise ValueError("The original-six Evolving-Core campaign is pilot-only")
@@ -954,6 +1167,9 @@ def main() -> int:
         if args.prediction_head_profile == PRIVATE_PREDICTION_HEADS_PROFILE
         else f"_{args.prediction_head_profile}_heads"
     )
+    adaptive_compression_output_suffix = (
+        "_adaptive_qfp_compression" if args.adaptive_qfp_compression else ""
+    )
     output_dir = (
         args.output_dir.expanduser().resolve()
         if args.output_dir is not None
@@ -961,7 +1177,7 @@ def main() -> int:
         / "runs"
         / (
             f"evolving_atomic_rssm{task0_output_suffix}{behavior_output_suffix}"
-            f"{prediction_head_output_suffix}_"
+            f"{prediction_head_output_suffix}{adaptive_compression_output_suffix}_"
             f"{args.task_order}"
             f"{mechanism_output_suffix}_"
             f"s{args.seed}_{args.classification}"
@@ -988,7 +1204,11 @@ def main() -> int:
     launch = {
         "schema_version": 1,
         "method": (
-            "Evolving-Core Shared Frozen Down + Shared FastKAN Actor-Critic"
+            "Evolving-Core Dense Acquire + Return-Gated Adaptive Q/F/P "
+            "Compression + Shared Distilled Prediction Heads + Private MLP "
+            "Actor-Critic"
+            if args.adaptive_qfp_compression
+            else "Evolving-Core Shared Frozen Down + Shared FastKAN Actor-Critic"
             if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
             else "Evolving-Core Dense Q/F/P + Shared Distilled Prediction Heads "
             "+ Private MLP Actor-Critic"
@@ -1018,6 +1238,7 @@ def main() -> int:
         "from_scratch": True,
         "behavior_profile": args.behavior_profile,
         "prediction_head_profile": args.prediction_head_profile,
+        "adaptive_qfp_compression": args.adaptive_qfp_compression,
         "source_task1_snapshot": None,
         "shared_core": (
             "CNN plus posterior/recurrent/prior RSSM stays plastic; each Q/F/P "
@@ -1029,7 +1250,11 @@ def main() -> int:
             else "CNN plus posterior/recurrent/prior RSSM; always plastic"
         ),
         "private_state": (
-            "per-task projector, Q/F/P LayerNorm-FiLM-up modules, and heads; "
+            "per-task projector, physically width-adaptive Dense Q/F/P atoms, "
+            "routes, and independent MLP actor-critic; decoder/reward/continue "
+            "are shared"
+            if args.adaptive_qfp_compression
+            else "per-task projector, Q/F/P LayerNorm-FiLM-up modules, and heads; "
             "no task-private behavior"
             if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
             else "per-task projector, dense Q/F/P atoms, routes, and independent "
@@ -1044,10 +1269,13 @@ def main() -> int:
         ),
         "capacity_control_profile": DEFAULT_MECHANISM_PROFILE,
         "capacity_ablation_only": (
-            config["task_mechanism_capacity_profile"]
-            != DEFAULT_MECHANISM_PROFILE
-            or config["task_mechanism_parameterization"]
-            != DENSE_PRIVATE_PARAMETERIZATION
+            not args.adaptive_qfp_compression
+            and (
+                config["task_mechanism_capacity_profile"]
+                != DEFAULT_MECHANISM_PROFILE
+                or config["task_mechanism_parameterization"]
+                != DENSE_PRIVATE_PARAMETERIZATION
+            )
         ),
         "prediction_head_topology": (
             {
@@ -1091,7 +1319,37 @@ def main() -> int:
             "shared_prediction_outputs": config[
                 "shared_prediction_distill_scale"
             ],
+            "adaptive_qfp_outputs": config.get(
+                "adaptive_compression_qfp_distill_scale", 0.0
+            ),
         },
+        "adaptive_compression_protocol": (
+            {
+                "acquisition": "full Dense Q/F/P 512/512/256 per task",
+                "structured_pruning": "per-atom channel removal with physical compact modules",
+                "candidate_width_fractions": config[
+                    "adaptive_compression_width_fractions"
+                ],
+                "optimizer_steps_per_candidate": config[
+                    "adaptive_compression_steps_per_candidate"
+                ],
+                "learning_rate": config["adaptive_compression_lr"],
+                "validation_rollouts": config[
+                    "adaptive_compression_rollouts"
+                ],
+                "maximum_relative_raw_return_drop": config[
+                    "adaptive_compression_max_return_drop"
+                ],
+                "selection": "smallest passing candidate after evaluating all candidates",
+                "fallback": "retain full Dense Q/F/P when no candidate passes",
+                "candidate_replay": "completed-task LTDM only",
+                "selection_cohort": "dedicated fixed pruning validation",
+                "final_heldout_cohort_used_for_selection": False,
+                "actor_critic_compression": False,
+            }
+            if args.adaptive_qfp_compression
+            else None
+        ),
         "budgets": _budget_manifest(config),
         "parameter_budget": _parameter_manifest(config),
         "resolved_training_config": str(config_path),
@@ -1156,6 +1414,11 @@ def main() -> int:
         required.append("shared_behavior_replay_accounting.json")
     else:
         required.append("save_ac_bank.pt")
+    if args.adaptive_qfp_compression:
+        required.extend(
+            f"adaptive_qfp_compression/task_{task_id:02d}_boundary.json"
+            for task_id in range(task_count)
+        )
     required_checkpoint_task_ids = (
         [task_count - 1]
         if config["evolving_checkpoint_retention"] == "latest_boundary"
