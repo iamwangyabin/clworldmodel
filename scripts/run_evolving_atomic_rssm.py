@@ -87,6 +87,16 @@ ADAPTIVE_QFP_COMPRESSION_PROTOCOL = (
 ADAPTIVE_QFP_COMPRESSION_METHOD = (
     "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
 )
+ADAPTIVE_QFP_NO_ATOM_REG_PROTOCOL = (
+    "Evolving-Core-DenseAcquire-ReturnGatedAdaptiveQFP-SharedDistilledHeads-"
+    "PrivateMLPAC-NoAtomOutputReg-ARROW-v1-OriginalSix-Atari-TaskAware-Pilot"
+)
+ADAPTIVE_QFP_NO_ATOM_REG_METHOD = (
+    "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow"
+)
+ADAPTIVE_QFP_COMPRESSION_METHODS = frozenset(
+    {ADAPTIVE_QFP_COMPRESSION_METHOD, ADAPTIVE_QFP_NO_ATOM_REG_METHOD}
+)
 ADAPTIVE_QFP_WIDTH_FRACTIONS = (0.75, 0.5, 0.25, 0.125)
 ADAPTIVE_QFP_STEPS_PER_CANDIDATE = 250
 ADAPTIVE_QFP_LEARNING_RATE = 2e-4
@@ -201,6 +211,7 @@ def _protocol_for_task_order(
     task0_profile: str | None = None,
     prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
     adaptive_qfp_compression: bool = False,
+    disable_atom_output_regularization: bool = False,
 ) -> str:
     _validate_mechanism_profile(
         task_order, mechanism_profile, mechanism_parameterization
@@ -228,7 +239,16 @@ def _protocol_for_task_order(
             raise ValueError(
                 "Adaptive Q/F/P compression acquires dense matched_512 mechanisms"
             )
-        return ADAPTIVE_QFP_COMPRESSION_PROTOCOL
+        return (
+            ADAPTIVE_QFP_NO_ATOM_REG_PROTOCOL
+            if disable_atom_output_regularization
+            else ADAPTIVE_QFP_COMPRESSION_PROTOCOL
+        )
+    if disable_atom_output_regularization:
+        raise ValueError(
+            "Disabling atom-output regularization is defined only for the "
+            "adaptive Q/F/P compression ablation"
+        )
     if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
         if (
             mechanism_profile != DEFAULT_MECHANISM_PROFILE
@@ -484,6 +504,15 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--disable-atom-output-regularization",
+        action="store_true",
+        help=(
+            "Select the separately named adaptive-compression ablation whose "
+            "online current-task objective sets the inherited Q/F/P output "
+            "regularization scale to zero."
+        ),
+    )
+    parser.add_argument(
         "--mechanism-parameterization",
         choices=MECHANISM_PARAMETERIZATIONS,
         default=DENSE_PRIVATE_PARAMETERIZATION,
@@ -535,6 +564,7 @@ def _resolved_config(
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
     prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
     adaptive_qfp_compression: bool = False,
+    disable_atom_output_regularization: bool = False,
 ) -> dict:
     """Compose the fixed named protocol without changing existing baselines."""
 
@@ -571,6 +601,10 @@ def _resolved_config(
             raise ValueError(
                 "Adaptive Q/F/P compression acquires dense matched_512 mechanisms"
             )
+    elif disable_atom_output_regularization:
+        raise ValueError(
+            "Disabling atom-output regularization requires adaptive Q/F/P compression"
+        )
     if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
         if behavior_profile != PRIVATE_MLP_BEHAVIOR:
             raise ValueError(
@@ -720,7 +754,11 @@ def _resolved_config(
     if adaptive_qfp_compression:
         config.update(
             {
-                "continual_method": ADAPTIVE_QFP_COMPRESSION_METHOD,
+                "continual_method": (
+                    ADAPTIVE_QFP_NO_ATOM_REG_METHOD
+                    if disable_atom_output_regularization
+                    else ADAPTIVE_QFP_COMPRESSION_METHOD
+                ),
                 "task_mechanism_parameterization": (
                     ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION
                 ),
@@ -739,6 +777,9 @@ def _resolved_config(
                 ),
                 "adaptive_compression_qfp_distill_scale": (
                     ADAPTIVE_QFP_DISTILL_SCALE
+                ),
+                "task_atom_output_regularization": (
+                    0.0 if disable_atom_output_regularization else 1e-4
                 ),
             }
         )
@@ -1027,7 +1068,7 @@ def _budget_manifest(config: dict) -> dict:
         config["boundary_consolidation_steps"]
     )
     adaptive_compression = (
-        config.get("continual_method") == ADAPTIVE_QFP_COMPRESSION_METHOD
+        config.get("continual_method") in ADAPTIVE_QFP_COMPRESSION_METHODS
     )
     adaptive_compression_updates = (
         task_count
@@ -1131,6 +1172,9 @@ def main() -> int:
         behavior_profile=args.behavior_profile,
         prediction_head_profile=args.prediction_head_profile,
         adaptive_qfp_compression=args.adaptive_qfp_compression,
+        disable_atom_output_regularization=(
+            args.disable_atom_output_regularization
+        ),
     )
     task_count = len(TASK_ORDERS[args.task_order])
     resolved_task0_profile = config["evolving_task0_profile"]
@@ -1141,6 +1185,9 @@ def main() -> int:
         task0_profile=resolved_task0_profile,
         prediction_head_profile=args.prediction_head_profile,
         adaptive_qfp_compression=args.adaptive_qfp_compression,
+        disable_atom_output_regularization=(
+            args.disable_atom_output_regularization
+        ),
     )
     if args.task_order == "arrow-original-six" and args.classification != "pilot":
         raise ValueError("The original-six Evolving-Core campaign is pilot-only")
@@ -1170,6 +1217,8 @@ def main() -> int:
     adaptive_compression_output_suffix = (
         "_adaptive_qfp_compression" if args.adaptive_qfp_compression else ""
     )
+    if args.disable_atom_output_regularization:
+        adaptive_compression_output_suffix += "_no_atom_output_reg"
     output_dir = (
         args.output_dir.expanduser().resolve()
         if args.output_dir is not None
@@ -1207,6 +1256,11 @@ def main() -> int:
             "Evolving-Core Dense Acquire + Return-Gated Adaptive Q/F/P "
             "Compression + Shared Distilled Prediction Heads + Private MLP "
             "Actor-Critic"
+            + (
+                " + No Atom Output Regularization"
+                if args.disable_atom_output_regularization
+                else ""
+            )
             if args.adaptive_qfp_compression
             else "Evolving-Core Shared Frozen Down + Shared FastKAN Actor-Critic"
             if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
@@ -1239,6 +1293,11 @@ def main() -> int:
         "behavior_profile": args.behavior_profile,
         "prediction_head_profile": args.prediction_head_profile,
         "adaptive_qfp_compression": args.adaptive_qfp_compression,
+        "atom_output_regularization": {
+            "enabled": not args.disable_atom_output_regularization,
+            "scale": config["task_atom_output_regularization"],
+            "ablation": args.disable_atom_output_regularization,
+        },
         "source_task1_snapshot": None,
         "shared_core": (
             "CNN plus posterior/recurrent/prior RSSM stays plastic; each Q/F/P "

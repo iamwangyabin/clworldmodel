@@ -622,6 +622,17 @@ documented here, covered by focused parity tests, and followed by regenerating
     matching, signed return gating, strict protocol isolation, and exact
     compute/parameter bounds.
 
+60. Add the separately named
+    `Evolving-Core-DenseAcquire-ReturnGatedAdaptiveQFP-SharedDistilledHeads-PrivateMLPAC-NoAtomOutputReg-ARROW-v1`
+    ablation. It preserves the complete adaptive-compression protocol and sets
+    only the inherited online current-task Q/F/P output regularization scale
+    from `1e-4` to zero. The new method key is strictly isolated to the fixed
+    original-six adaptive-compression topology; Replay, teacher/interface and
+    shared-head losses, component-gradient projection, consolidation,
+    compression recovery, evaluation cohorts, return gates, and all budgets are
+    unchanged. Focused launcher/config tests prove that the resolved control and
+    ablation differ only in the method key and atom-output scale.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

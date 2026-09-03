@@ -59,10 +59,12 @@ from run_evolving_atomic_lora_shared_heads import (  # noqa: E402
 LEGACY_METHOD_PROFILE = "legacy"
 ATOMIC_LORA_SHARED_HEADS_PROFILE = "atomic_lora_shared_heads"
 ADAPTIVE_QFP_COMPRESSION_PROFILE = "adaptive_qfp_compression"
+ADAPTIVE_QFP_NO_ATOM_REG_PROFILE = "adaptive_qfp_compression_no_atom_reg"
 METHOD_PROFILES = (
     LEGACY_METHOD_PROFILE,
     ATOMIC_LORA_SHARED_HEADS_PROFILE,
     ADAPTIVE_QFP_COMPRESSION_PROFILE,
+    ADAPTIVE_QFP_NO_ATOM_REG_PROFILE,
 )
 
 
@@ -133,7 +135,10 @@ def _config(
                 "The atomic-LoRA shared-head smoke fixes all legacy profile selectors"
             )
         return Config.from_dict(_atomic_lora_shared_heads_config(source))
-    if method_profile == ADAPTIVE_QFP_COMPRESSION_PROFILE:
+    if method_profile in {
+        ADAPTIVE_QFP_COMPRESSION_PROFILE,
+        ADAPTIVE_QFP_NO_ATOM_REG_PROFILE,
+    }:
         if (
             mechanism_profile != DEFAULT_MECHANISM_PROFILE
             or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
@@ -150,6 +155,9 @@ def _config(
                 behavior_profile=PRIVATE_MLP_BEHAVIOR,
                 prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
                 adaptive_qfp_compression=True,
+                disable_atom_output_regularization=(
+                    method_profile == ADAPTIVE_QFP_NO_ATOM_REG_PROFILE
+                ),
             )
         )
     if method_profile != LEGACY_METHOD_PROFILE:
@@ -535,6 +543,9 @@ def main() -> int:
         "compute_dtype": config.compute_dtype,
         "behavior_profile": args.behavior_profile,
         "method_profile": args.method_profile,
+        "task_atom_output_regularization": (
+            config.task_atom_output_regularization
+        ),
         "prediction_head_profile": args.prediction_head_profile,
         "mechanism_profile": config.task_mechanism_capacity_profile,
         "mechanism_parameterization": config.task_mechanism_parameterization,

@@ -594,6 +594,24 @@ accepts the smallest width. Compression adds 6,000 explicitly budgeted
 world-model updates; it is not a compute-matched A result. See
 `docs/protocols/evolving_core_dense_acquire_adaptive_qfp_compression_v1_atari.md`.
 
+The separately named no-atom-output-regularization ablation keeps that complete
+protocol but sets the inherited online current-task Q/F/P output penalty from
+`1e-4` to zero:
+
+```bash
+python scripts/run_evolving_atomic_rssm.py \
+  --task-order arrow-original-six \
+  --prediction-head-profile shared_distilled \
+  --adaptive-qfp-compression \
+  --disable-atom-output-regularization \
+  --seed 0 \
+  --classification pilot \
+  --dry-run
+```
+
+This is an acquisition/retention ablation, not a redefinition of the adaptive-
+compression control or a performance claim.
+
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control
 and tests 120, 150, 180, and 240 MsPacman epochs on the spare GPUs:

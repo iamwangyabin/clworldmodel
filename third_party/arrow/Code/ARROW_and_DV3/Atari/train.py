@@ -3131,8 +3131,11 @@ def _consolidate_evolving_shared_core(
     return artifact
 
 
-_ADAPTIVE_QFP_COMPRESSION_METHOD = (
-    "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
+_ADAPTIVE_QFP_COMPRESSION_METHODS = frozenset(
+    {
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
+    }
 )
 
 
@@ -3312,7 +3315,7 @@ def _compress_evolving_task_qfp(
 
     from clworldmodel.continual import recursive_python_scalars
 
-    if config.continual_method != _ADAPTIVE_QFP_COMPRESSION_METHOD:
+    if config.continual_method not in _ADAPTIVE_QFP_COMPRESSION_METHODS:
         raise ValueError("Adaptive Q/F/P compression requires its named method")
     if actor_critic_bank is None:
         raise ValueError("Adaptive Q/F/P compression requires private Actor-Critics")
@@ -4186,6 +4189,7 @@ if __name__ == "__main__":
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -4376,6 +4380,7 @@ if __name__ == "__main__":
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
     }:
@@ -4712,6 +4717,7 @@ if __name__ == "__main__":
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",

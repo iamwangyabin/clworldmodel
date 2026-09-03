@@ -18,6 +18,8 @@ VENDORED_ATARI = (
 sys.path.insert(0, str(SCRIPTS))
 from run_evolving_atomic_rssm import (  # noqa: E402
     ADAPTIVE_QFP_COMPRESSION_PROTOCOL,
+    ADAPTIVE_QFP_NO_ATOM_REG_METHOD,
+    ADAPTIVE_QFP_NO_ATOM_REG_PROTOCOL,
     SHARED_DISTILLED_HEADS_PROFILE,
     _budget_manifest,
     _parameter_manifest,
@@ -132,6 +134,54 @@ class AdaptiveQfpLauncherStaticTests(unittest.TestCase):
                 _source_dict(),
                 task_order="arrow-original-six",
                 adaptive_qfp_compression=True,
+            )
+
+    def test_no_atom_output_regularization_is_a_named_isolated_ablation(self) -> None:
+        data = _resolved_config(
+            _source_dict(),
+            task_order="arrow-original-six",
+            prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
+            adaptive_qfp_compression=True,
+            disable_atom_output_regularization=True,
+        )
+
+        self.assertEqual(data["continual_method"], ADAPTIVE_QFP_NO_ATOM_REG_METHOD)
+        self.assertEqual(data["task_atom_output_regularization"], 0.0)
+        self.assertEqual(
+            _protocol_for_task_order(
+                "arrow-original-six",
+                prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
+                adaptive_qfp_compression=True,
+                disable_atom_output_regularization=True,
+            ),
+            ADAPTIVE_QFP_NO_ATOM_REG_PROTOCOL,
+        )
+        control = _resolved_config(
+            _source_dict(),
+            task_order="arrow-original-six",
+            prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
+            adaptive_qfp_compression=True,
+        )
+        changed = {
+            key: (control[key], data[key])
+            for key in data
+            if control.get(key) != data[key]
+        }
+        self.assertEqual(
+            changed,
+            {
+                "continual_method": (
+                    "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+                    ADAPTIVE_QFP_NO_ATOM_REG_METHOD,
+                ),
+                "task_atom_output_regularization": (1e-4, 0.0),
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "requires adaptive"):
+            _resolved_config(
+                _source_dict(),
+                task_order="arrow-original-six",
+                disable_atom_output_regularization=True,
             )
 
 
@@ -348,6 +398,23 @@ class AdaptiveQfpCompressionTests(unittest.TestCase):
         changed_budget["adaptive_compression_steps_per_candidate"] = 249
         with self.assertRaisesRegex(ValueError, "fixed optimizer"):
             Config.from_dict(changed_budget)
+
+        no_atom = _resolved_config(
+            self._source(),
+            task_order="arrow-original-six",
+            prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
+            adaptive_qfp_compression=True,
+            disable_atom_output_regularization=True,
+        )
+        no_atom_config = Config.from_dict(no_atom)
+        self.assertEqual(
+            no_atom_config.continual_method, ADAPTIVE_QFP_NO_ATOM_REG_METHOD
+        )
+        self.assertEqual(no_atom_config.task_atom_output_regularization, 0.0)
+        invalid_no_atom = copy.deepcopy(no_atom)
+        invalid_no_atom["task_atom_output_regularization"] = 1e-4
+        with self.assertRaisesRegex(ValueError, "fixed optimizer"):
+            Config.from_dict(invalid_no_atom)
 
         with self.assertRaisesRegex(ValueError, "shared distilled"):
             _resolved_config(

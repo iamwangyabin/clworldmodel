@@ -37,6 +37,7 @@ ContinualMethod = Literal[
     "evolving_atomic_rssm_arrow",
     "evolving_atomic_rssm_shared_heads_arrow",
     "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+    "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
     "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
     "evolving_atomic_rssm_learned_base_adapters_arrow",
     "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -494,6 +495,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -522,9 +524,13 @@ class Config(Serialisable):
             self.continual_method
             == "evolving_atomic_rssm_shared_heads_arrow"
         )
-        is_evolving_adaptive_compression_shared_heads = (
+        is_evolving_adaptive_compression_shared_heads = self.continual_method in {
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
+        }
+        is_evolving_adaptive_compression_no_atom_reg = (
             self.continual_method
-            == "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
+            == "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow"
         )
         is_evolving_atomic_lora_shared_heads = (
             self.continual_method
@@ -544,6 +550,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -848,6 +855,8 @@ class Config(Serialisable):
                 "task_atomic_routes": True,
                 "ac_lr": 4e-5 if is_evolving_shared_fastkan else 1e-4,
             }
+            if is_evolving_adaptive_compression_no_atom_reg:
+                expected_evolving["task_atom_output_regularization"] = 0.0
             if is_evolving_shared_fastkan:
                 expected_evolving[
                     "evolving_shared_behavior_current_task_fraction"
@@ -2107,6 +2116,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2141,6 +2151,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2182,6 +2193,7 @@ class Config(Serialisable):
             in {
                 "evolving_atomic_rssm_shared_heads_arrow",
                 "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+                "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
                 "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
                 "evolving_atomic_rssm_learned_base_adapters_arrow",
             }
@@ -2193,6 +2205,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2206,6 +2219,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2215,10 +2229,10 @@ class Config(Serialisable):
     def uses_adaptive_qfp_compression(self) -> bool:
         """Whether completed Dense Q/F/P modules are return-gated and compacted."""
 
-        return (
-            self.continual_method
-            == "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
-        )
+        return self.continual_method in {
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_no_atom_reg_arrow",
+        }
 
     def get_env_schedule(self) -> EnvironmentSchedule:
         return self.esc.env_schedule_type(
