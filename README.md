@@ -13,6 +13,9 @@ ablations at different stages of evidence:
 - the maintained ARROW source based on a pinned upstream commit;
 - the canonical ARROW-50 Atari launcher;
 - the matched DreamerV3/FIFO Atari control launcher;
+- the implementation-ready bounded Dream Rehearsal baseline, which keeps the
+  paper's actor-only graded self-imitation but caps its replay at the same
+  524,288 transitions as ARROW-50;
 - an opt-in decoder-free R2 representation-objective ablation with ARROW-50
   replay;
 - fixed-grid ReLU-KAN actor pilots, including a completed bounded-interface T1
@@ -138,6 +141,29 @@ not included. See `docs/protocols/dv3_fifo_atari.md` for the frozen protocol
 and artifact semantics. The component-level research questions, diagnostic-set
 rules, interpretation matrix, and planned result tables are defined in
 `docs/protocols/component_forgetting_audit.md`.
+
+## Bounded Dream Rehearsal baseline
+
+`Bounded-Dream-Rehearsal-v1-Atari` ports the Dream Rehearsal actor-only graded
+self-imitation update into the maintained DreamerV3 trainer. Unlike the
+reference artifact's never-clear phase libraries, it uses one fixed random-key
+reservoir with 1,024 trajectories x 512 transitions. uint8 mmap storage makes
+the run practical but does not increase that matched sample capacity. Task IDs
+exist only as replay-filter metadata and are not inputs to the shared world
+model or actor.
+
+```bash
+python scripts/run_bounded_dream_rehearsal_atari.py --seed 0 --dry-run
+python scripts/run_bounded_dream_rehearsal_atari.py \
+  --seed 0 \
+  --output-dir /persistent/path/bounded_dream_rehearsal_original_s0
+```
+
+This method is storage matched, not compute matched: the reference cadence adds
+actor-only optimization for every prior task, and its manifest reports those
+updates separately. No target-CUDA run has yet validated the implementation.
+See `docs/protocols/bounded_dream_rehearsal_atari.md` for formulas, provenance,
+declared deviations, and the required comparison matrix.
 
 ## Representation-objective ablation: ARROW-R2Rep-50
 

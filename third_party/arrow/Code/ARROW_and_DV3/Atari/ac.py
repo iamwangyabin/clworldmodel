@@ -914,6 +914,197 @@ def dream_rollout(
     return states, actions, rewards, lam_returns, replay_value_batch
 
 
+@torch.no_grad()
+def _graded_dream_rehearsal_batch(
+    wm: WorldModel,
+    ac: ActorCritic,
+    data: Replay,
+    *,
+    replay_task_id: int,
+    n_sync: int,
+    context_steps: int,
+    dream_steps: int,
+    discount: float,
+    top_fraction: float,
+    realized_threshold: float,
+    realized_bonus: float,
+    temperature: float = 1.0,
+) -> tuple[AcStateT, ActionT, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Generate and grade one paper-style dream self-imitation batch.
+
+    ``replay_task_id`` selects old-task start states only.  It is deliberately
+    not forwarded to the world model or Actor-Critic: Bounded Dream Rehearsal
+    has one shared model and policy, and task metadata belongs solely to the
+    scheduler/replay sampler.
+    """
+
+    from clworldmodel.continual.dream_rehearsal import (
+        realized_first_scores,
+        top_fraction_indices,
+    )
+
+    if replay_task_id < 0:
+        raise ValueError("Dream-rehearsal replay task must be non-negative")
+    z, h = wm.rssm.initial_state(n_sync)
+    compute_dtype = getattr(wm, "compute_dtype", "float32")
+    ctx_acts, ctx_images, _, _, ctx_resets = data.minibatch(
+        context_steps,
+        n_sync,
+        mb_device=z.device,
+        task_id=replay_task_id,
+    )
+    with _autocast_context(z.device, compute_dtype):
+        _, context_z, context_h = wm.rssm(
+            z,
+            ctx_acts,
+            h,
+            ctx_images,
+            ctx_resets,
+            temperature=temperature,
+        )
+        # The reference artifact imagines from every posterior state in its
+        # replay batch, rather than keeping only the final context state.
+        # Flatten only the public [T, N] axes; latent layouts remain opaque.
+        z = context_z.flatten(0, 1)
+        h = context_h.flatten(0, 1)
+        dream_batch = z.shape[0]
+        no_reset = torch.zeros(dream_batch, 1, device=z.device)
+        states = []
+        actions = []
+        rewards = []
+        continues = []
+        for _ in range(dream_steps):
+            state = zh_to_ac_state(z, h)
+            model_state = wm.zh_transform(z, h)
+            reward = symexp(wm.predict_reward_symlog(model_state, None))
+            cont = wm.predict_continue(model_state, None)
+            action_logs = ac.actor(state)
+            with _full_precision_context(action_logs.device):
+                action = td.OneHotCategorical(
+                    logits=action_logs.float()
+                ).sample()
+            states.append(state)
+            actions.append(action)
+            rewards.append(reward)
+            continues.append(cont)
+            _, z, h = wm.rssm(
+                z,
+                action,
+                h,
+                None,
+                no_reset,
+                temperature=temperature,
+            )
+
+        states_tensor = torch.stack(states).detach()
+        actions_tensor = torch.stack(actions).detach()
+        rewards_tensor = torch.stack(rewards).float()
+        continues_tensor = torch.stack(continues).float()
+        bootstrap_values = ac.value(zh_to_ac_state(z, h)).float()
+
+    scores, realized, _ = realized_first_scores(
+        rewards_tensor,
+        continues_tensor,
+        bootstrap_values,
+        discount=discount,
+        realized_threshold=realized_threshold,
+        realized_bonus=realized_bonus,
+    )
+    selected = top_fraction_indices(scores, top_fraction)
+    return states_tensor, actions_tensor, selected, scores, realized
+
+
+def train_bounded_dream_rehearsal(
+    wm: WorldModel,
+    data: Replay,
+    aco: ActorCriticOpt,
+    *,
+    replay_task_id: int,
+    updates: int,
+    n_sync: int,
+    context_steps: int,
+    dream_steps: int,
+    discount: float,
+    top_fraction: float,
+    realized_threshold: float,
+    realized_bonus: float,
+    grad_clip: float = 100.0,
+) -> dict[str, float]:
+    """Run actor-only graded dream rehearsal from one bounded task library."""
+
+    from clworldmodel.continual.dream_rehearsal import (
+        selected_behavior_cloning_loss,
+    )
+
+    if updates < 1:
+        raise ValueError("Dream rehearsal requires at least one actor update")
+    if grad_clip < 0:
+        raise ValueError("Dream-rehearsal gradient clipping must be non-negative")
+    if not data.available_task_ids() or replay_task_id not in data.available_task_ids():
+        raise ValueError(
+            f"Bounded replay contains no rehearsal starts for task {replay_task_id}"
+        )
+    ac, opt = aco.ac, aco.opt
+    compute_dtype = getattr(wm, "compute_dtype", "float32")
+    loss_total = torch.zeros((), device=next(wm.parameters()).device, dtype=torch.float64)
+    score_total = torch.zeros_like(loss_total)
+    success_fraction_total = torch.zeros_like(loss_total)
+    selected_total = 0
+    dreamed_total = 0
+    for _ in range(updates):
+        states, actions, selected, scores, realized = (
+            _graded_dream_rehearsal_batch(
+                wm,
+                ac,
+                data,
+                replay_task_id=replay_task_id,
+                n_sync=n_sync,
+                context_steps=context_steps,
+                dream_steps=dream_steps,
+                discount=discount,
+                top_fraction=top_fraction,
+                realized_threshold=realized_threshold,
+                realized_bonus=realized_bonus,
+            )
+        )
+        with _autocast_context(states.device, compute_dtype):
+            actor_log_probs = ac.actor(states)
+        loss = selected_behavior_cloning_loss(
+            actor_log_probs,
+            actions,
+            selected,
+        )
+        _assert_all_finite(loss, "dream-rehearsal behavior-cloning loss")
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        if grad_clip:
+            torch.nn.utils.clip_grad_norm_(ac.actor.parameters(), grad_clip)
+        opt.step()
+
+        loss_total.add_(loss.detach().to(torch.float64))
+        score_total.add_(scores.detach().mean().to(torch.float64))
+        success_fraction_total.add_(
+            (realized.detach() > realized_threshold)
+            .float()
+            .mean()
+            .to(torch.float64)
+        )
+        selected_total += selected.numel()
+        dreamed_total += scores.numel()
+
+    values = torch.stack(
+        (loss_total, score_total, success_fraction_total)
+    ).detach().cpu().tolist()
+    return {
+        "actor_bc_loss": values[0] / updates,
+        "dream_score_mean": values[1] / updates,
+        "realized_success_fraction": values[2] / updates,
+        "actor_updates": float(updates),
+        "selected_trajectories": float(selected_total),
+        "dreamed_trajectories": float(dreamed_total),
+    }
+
+
 def train_ac_from_wm(
     wm: WorldModel,
     data: Replay,

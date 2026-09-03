@@ -622,6 +622,25 @@ documented here, covered by focused parity tests, and followed by regenerating
     matching, signed return gating, strict protocol isolation, and exact
     compute/parameter bounds.
 
+60. Add the thin integration for the separately named, task-agnostic
+    `Bounded-Dream-Rehearsal-v1-Atari` baseline. DreamerV3 keeps one shared MLP
+    world model and Actor-Critic; task IDs are attached only to replay
+    trajectories for scheduler-side old-task sampling and never enter a
+    network. The official Dream Rehearsal realized-first score, horizon-15
+    sampling, top-25-percent selection, and actor-only behavior-cloning update
+    are reimplemented against the vendored interfaces. The reference
+    never-clear phase libraries are intentionally replaced by one CPU uint8
+    mmap `LongTermReplay` random-key reservoir whose default 1,024-by-512
+    capacity exactly matches ARROW-50's 524,288 transitions. Fifty updates per
+    encountered non-current task are scheduled for every 2,000 agent decisions;
+    because the Atari collector emits 16,384 decisions at once, all newly due
+    updates run at the next optimizer boundary with separate compute counters.
+    The inspected algorithm artifact is
+    `gurpnijjer/dream-rehearsal@7680778f798be3a27a17c320cc875b573c45f0e1`
+    under Apache-2.0. No reference source file is vendored. Project primitives,
+    exact storage/compute accounting, deviations, launcher, and focused tests
+    are documented outside this vendor directory.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

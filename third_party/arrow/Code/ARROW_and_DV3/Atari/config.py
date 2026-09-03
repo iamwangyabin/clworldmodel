@@ -28,6 +28,7 @@ DinoV3ReplayFeatureMode = Literal["cached", "on_the_fly"]
 DinoV3PatchAdapter = Literal["none", "conv_3x3_stride2"]
 ContinualMethod = Literal[
     "none",
+    "bounded_dream_rehearsal",
     "moe_arrow",
     "cnn_fullbank_arrow",
     "cnn_projector_lora_arrow",
@@ -392,6 +393,15 @@ class Config(Serialisable):
     shared_actor_distill_n_sync: int = 1
     shared_actor_distill_burnin_steps: int = 0
     shared_actor_distill_steps: int = 1
+    dream_rehearsal_interval_agent_decisions: int = 2_000
+    dream_rehearsal_updates_per_prior_task: int = 50
+    dream_rehearsal_batch_sequences: int = 4
+    dream_rehearsal_context_steps: int = 16
+    dream_rehearsal_horizon: int = 15
+    dream_rehearsal_top_fraction: float = 0.25
+    dream_rehearsal_realized_threshold: float = 0.3
+    dream_rehearsal_realized_bonus: float = 10.0
+    dream_rehearsal_grad_clip: float = 100.0
     dinov3_model_path: Optional[str] = None
     dinov3_input_size: int = 256
     dinov3_max_batch_size: int = 128
@@ -485,6 +495,7 @@ class Config(Serialisable):
                 sequential_task_durations = tuple(task_durations)
         if self.continual_method not in {
             "none",
+            "bounded_dream_rehearsal",
             "moe_arrow",
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
@@ -502,6 +513,9 @@ class Config(Serialisable):
             "dino_convbank_arrow",
         }:
             raise ValueError(f"Unknown continual method: {self.continual_method!r}")
+        is_bounded_dream_rehearsal = (
+            self.continual_method == "bounded_dream_rehearsal"
+        )
         is_moe_arrow = self.continual_method == "moe_arrow"
         is_cnn_fullbank = self.continual_method == "cnn_fullbank_arrow"
         is_cnn_projector_lora = (
@@ -1159,10 +1173,13 @@ class Config(Serialisable):
                 raise ValueError(
                     "The CNN task-bank protocol requires uint8 observation replay"
                 )
-        elif self.replay_observation_dtype != "float32":
+        elif (
+            not is_bounded_dream_rehearsal
+            and self.replay_observation_dtype != "float32"
+        ):
             raise ValueError(
                 "uint8 observation replay is reserved for DINO-ConvBank and "
-                "CNN-FullBank optimized protocols"
+                "CNN-FullBank optimized protocols or Bounded Dream Rehearsal"
             )
         if uses_task_experts:
             if self.algorithm != "arrow":
@@ -1210,6 +1227,94 @@ class Config(Serialisable):
             if self.rssm_num_experts != 1:
                 raise ValueError(
                     "RSSM experts require a task-aware continual_method"
+                )
+
+        dream_rehearsal_defaults = {
+            "dream_rehearsal_interval_agent_decisions": 2_000,
+            "dream_rehearsal_updates_per_prior_task": 50,
+            "dream_rehearsal_batch_sequences": 4,
+            "dream_rehearsal_context_steps": 16,
+            "dream_rehearsal_horizon": 15,
+            "dream_rehearsal_top_fraction": 0.25,
+            "dream_rehearsal_realized_threshold": 0.3,
+            "dream_rehearsal_realized_bonus": 10.0,
+            "dream_rehearsal_grad_clip": 100.0,
+        }
+        if is_bounded_dream_rehearsal:
+            from clworldmodel.continual.dream_rehearsal import (
+                DreamRehearsalConfig,
+            )
+
+            if self.algorithm != "dv3":
+                raise ValueError("Bounded Dream Rehearsal requires DreamerV3")
+            if self.esc.env_schedule_type is not SequentialEnvironments:
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires a sequential task schedule"
+                )
+            if len(self.esc.env_configs) < 2:
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires at least two tasks"
+                )
+            if len(self.replay_buffers) != 1 or (
+                self.replay_buffers[0].rb_type is not LongTermReplay
+            ):
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires one fixed-capacity "
+                    "LongTermReplay reservoir"
+                )
+            if self.replay_buffers[0].rb_device.split(":", 1)[0] != "cpu":
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires CPU-resident replay"
+                )
+            if self.replay_observation_dtype != "uint8":
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires uint8 replay observations"
+                )
+            if self.sac_dv3_data_n_max < 1:
+                raise ValueError(
+                    "Bounded Dream Rehearsal replay capacity must be positive"
+                )
+            if self.fresh_ac is not False or self.actor_network != "mlp":
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires one persistent shared MLP actor"
+                )
+            if self.data_parallel_world_size != 1:
+                raise ValueError(
+                    "Bounded Dream Rehearsal is initially validated on one device"
+                )
+            if self.dream_rehearsal_context_steps > self.data_t:
+                raise ValueError(
+                    "Dream-rehearsal context cannot exceed replay sequence length"
+                )
+            DreamRehearsalConfig(
+                interval_agent_decisions=(
+                    self.dream_rehearsal_interval_agent_decisions
+                ),
+                updates_per_prior_task=(
+                    self.dream_rehearsal_updates_per_prior_task
+                ),
+                batch_sequences=self.dream_rehearsal_batch_sequences,
+                context_steps=self.dream_rehearsal_context_steps,
+                horizon=self.dream_rehearsal_horizon,
+                top_fraction=self.dream_rehearsal_top_fraction,
+                realized_threshold=self.dream_rehearsal_realized_threshold,
+                realized_bonus=self.dream_rehearsal_realized_bonus,
+            )
+            if self.dream_rehearsal_grad_clip < 0:
+                raise ValueError(
+                    "Dream-rehearsal gradient clipping must be non-negative"
+                )
+        else:
+            nondefault_dream_rehearsal = {
+                name: (getattr(self, name), expected)
+                for name, expected in dream_rehearsal_defaults.items()
+                if getattr(self, name) != expected
+            }
+            if nondefault_dream_rehearsal:
+                raise ValueError(
+                    "Dream-rehearsal settings require "
+                    "continual_method='bounded_dream_rehearsal': "
+                    f"{nondefault_dream_rehearsal}"
                 )
 
         if is_moe_arrow:
@@ -2116,6 +2221,16 @@ class Config(Serialisable):
         }
 
     @property
+    def uses_bounded_dream_rehearsal(self) -> bool:
+        return self.continual_method == "bounded_dream_rehearsal"
+
+    @property
+    def uses_task_labelled_replay(self) -> bool:
+        """Whether task IDs are scheduler metadata on replay trajectories."""
+
+        return self.uses_task_experts or self.uses_bounded_dream_rehearsal
+
+    @property
     def uses_full_task_experts(self) -> bool:
         return self.continual_method in {
             "cnn_fullbank_arrow",
@@ -2282,10 +2397,28 @@ class Config(Serialisable):
             return MultiTypeReplay(*replays, sampling_weights=sampling_weights)
         if self.algorithm == "dv3" or self.algorithm == "sac":
             rc = self.replay_buffers[0]
+            storage_root = (
+                None
+                if storage_directory is None
+                else Path(storage_directory).expanduser().resolve()
+            )
+            if storage_root is not None:
+                storage_root.mkdir(parents=True, exist_ok=True)
+            observation_storage_path = (
+                None
+                if storage_root is None
+                else storage_root
+                / (
+                    f"0_{rc.rb_type.__name__}_observations."
+                    f"{self.replay_observation_dtype}.mmap"
+                )
+            )
             return rc.rb_type(
                 self.data_t,
                 self.sac_dv3_data_n_max,
                 self.action_space,
                 rc.rb_device,
+                store_task_ids=self.uses_task_labelled_replay,
+                observation_storage_path=observation_storage_path,
                 observation_dtype=self.replay_observation_dtype,
             )

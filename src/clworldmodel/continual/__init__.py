@@ -21,6 +21,14 @@ from .evolving_core import (
     recursive_python_scalars,
 )
 from .moe_arrow import ActorCriticBank, allocate_task_updates, shuffled_task_schedule
+from .dream_rehearsal import (
+    DreamRehearsalConfig,
+    crossed_rehearsal_intervals,
+    realized_first_scores,
+    rehearsal_update_allocation,
+    selected_behavior_cloning_loss,
+    top_fraction_indices,
+)
 
 __all__ = [
     "begin_kan_importance_estimation",
@@ -42,4 +50,10 @@ __all__ = [
     "ActorCriticBank",
     "allocate_task_updates",
     "shuffled_task_schedule",
+    "DreamRehearsalConfig",
+    "crossed_rehearsal_intervals",
+    "realized_first_scores",
+    "rehearsal_update_allocation",
+    "selected_behavior_cloning_loss",
+    "top_fraction_indices",
 ]

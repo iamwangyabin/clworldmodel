@@ -24,6 +24,7 @@ from replay import MultiTypeReplay
 from ac import (
     ActorCriticOpt,
     build_actor_critic_opt,
+    train_bounded_dream_rehearsal,
     train_ac_from_wm,
     zh_to_ac_state,
 )
@@ -196,10 +197,13 @@ def _print_replay_buffer_debug(config: Config, buf) -> None:
         )
 
 
-def _mapped_replay_storage_accounting(buf: MultiTypeReplay) -> dict[str, object]:
+def _mapped_replay_storage_accounting(
+    buf: replay.Replay,
+) -> dict[str, object]:
     buffers = []
     observation_dtypes = set()
-    for index, sub_replay in enumerate(buf.replays):
+    sub_replays = buf.replays if isinstance(buf, MultiTypeReplay) else (buf,)
+    for index, sub_replay in enumerate(sub_replays):
         storage_path = getattr(sub_replay, "observation_storage_path", None)
         if storage_path is None:
             continue
@@ -3599,6 +3603,7 @@ def _save_analysis_snapshot(
     total_env_steps: int,
     reason: str,
     task_metadata: Optional[dict] = None,
+    dream_rehearsal_actor_updates: int = 0,
 ) -> Path:
     """Save portable weights for offline diagnosis, not resumable training state."""
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -3628,7 +3633,14 @@ def _save_analysis_snapshot(
         "epoch": epoch,
         "completed_epochs": epoch + 1,
         "world_model_updates": world_model_updates,
+        # Keep the historical counter as the matched base Dreamer budget and
+        # account for actor-only rehearsal separately.
         "actor_critic_updates": (epoch + 1) * config.ac_train_steps,
+        "dream_rehearsal_actor_updates": dream_rehearsal_actor_updates,
+        "actor_updates_total": (
+            (epoch + 1) * config.ac_train_steps
+            + dream_rehearsal_actor_updates
+        ),
         "total_raw_environment_frames": total_env_steps,
         "algorithm": config.algorithm,
         "seed": config.seed,
@@ -4168,6 +4180,11 @@ if __name__ == "__main__":
             "Task-bank analysis snapshots are disabled until replay, all actor "
             "optimizers, and task-router state are saved resumably"
         )
+    if config.uses_bounded_dream_rehearsal and log_dir is None:
+        raise ValueError(
+            "Bounded Dream Rehearsal requires --log-dir for fixed-capacity "
+            "mapped replay and update accounting"
+        )
     if evaluation_snapshot_dir is not None:
         if not config.uses_task_experts:
             raise ValueError(
@@ -4334,6 +4351,16 @@ if __name__ == "__main__":
         f"local_rank={distributed_context.local_rank} device={device} "
         "global_batch_unchanged=True"
     )
+    if config.uses_bounded_dream_rehearsal:
+        print(
+            "Bounded Dream Rehearsal: "
+            f"reservoir_slots={config.sac_dv3_data_n_max} "
+            f"sequence_length={config.data_t} actor=single_shared "
+            "task_id_network_input=False actor_only=True "
+            f"interval_decisions={config.dream_rehearsal_interval_agent_decisions} "
+            f"updates_per_prior_task="
+            f"{config.dream_rehearsal_updates_per_prior_task}"
+        )
     if config.continual_method == "moe_arrow":
         print(
             "MoE-ARROW routing: "
@@ -4704,6 +4731,7 @@ if __name__ == "__main__":
         )
     replay_storage_directory = None
     if config.continual_method in {
+        "bounded_dream_rehearsal",
         "cnn_fullbank_arrow",
         "cnn_projector_lora_arrow",
         "cnn_compact_shared_actor_arrow",
@@ -4720,7 +4748,7 @@ if __name__ == "__main__":
     } and (not distributed_context.enabled or distributed_context.is_primary):
         if log_dir is None:
             raise ValueError(
-                "Pixel task banks require --log-dir for mapped observation replay"
+                "Mapped observation replay requires --log-dir"
             )
         mmap_root = log_dir / "mmap_replay"
         replay_storage_directory = mmap_root / "observations"
@@ -5182,6 +5210,15 @@ if __name__ == "__main__":
         if task1_seed_payload is not None
         else 0
     )  # number of *real* environment interactions so far
+    if total_env_steps % config.env_repeat:
+        raise ValueError("Raw environment-frame counter is not decision aligned")
+    total_agent_decisions = total_env_steps // config.env_repeat
+    dream_rehearsal_intervals = 0
+    dream_rehearsal_updates = 0
+    dream_rehearsal_updates_by_task: dict[int, int] = {}
+    dream_rehearsal_dreamed_trajectories = 0
+    dream_rehearsal_selected_trajectories = 0
+    encountered_replay_task_ids = set(replay.available_task_ids())
 
     best_rews_mean = float("-inf")
     best_validation_seen_task_raw_mean = float("-inf")
@@ -5204,6 +5241,7 @@ if __name__ == "__main__":
 
     for epoch in range(training_start_epoch, config.epochs):
         print("Starting Epoch ", epoch)
+        agent_decisions_before_epoch = total_agent_decisions
         current_task_id = None
         if config.uses_task_experts:
             current_task_id = envs.current_task_index()
@@ -5318,6 +5356,11 @@ if __name__ == "__main__":
                     route_lr=config.task_route_lr,
                     fused=args.fused_adam,
                 )
+        replay_task_id = (
+            envs.current_task_index()
+            if config.uses_bounded_dream_rehearsal
+            else current_task_id
+        )
         task_boundary = epoch > 0 and envs.is_new_env()
         if config.residual_consolidation == "replay_functional" and task_boundary:
             if aco is None:
@@ -5433,16 +5476,22 @@ if __name__ == "__main__":
                     _rews,
                     _conts,
                     _resets,
-                    task_id=current_task_id,
+                    task_id=replay_task_id,
                 )
+                if replay_task_id is not None:
+                    encountered_replay_task_ids.add(replay_task_id)
                 if feature_cache is not None and feature_cache.requires_recording:
                     feature_cache.record(write_slots, frozen_features)
                 print(f"{replay.n_valid=}")
                 num_new_env_steps = (
                     _acts.shape[0] * _acts.shape[1] * config.env_repeat
                 )
+                total_agent_decisions += _acts.shape[0] * _acts.shape[1]
                 total_env_steps += num_new_env_steps
                 writer.add_scalar("Sample/total_env_steps", total_env_steps, global_step)
+                writer.add_scalar(
+                    "Counters/agent_decisions", total_agent_decisions, global_step
+                )
 
             rews_eps_mean = _rews.sum().item() / _resets.sum().item()
             writer.add_scalar("Perf/rews_eps_mean", rews_eps_mean, global_step)
@@ -6077,6 +6126,168 @@ if __name__ == "__main__":
                 **actor_critic_kwargs,
             )
 
+        if config.uses_bounded_dream_rehearsal:
+            from clworldmodel.continual.dream_rehearsal import (
+                crossed_rehearsal_intervals,
+                rehearsal_update_allocation,
+            )
+
+            if replay_task_id is None or aco is None:
+                raise RuntimeError(
+                    "Bounded Dream Rehearsal requires its scheduler task and "
+                    "persistent Actor-Critic"
+                )
+            interval_count = crossed_rehearsal_intervals(
+                agent_decisions_before_epoch,
+                total_agent_decisions,
+                config.dream_rehearsal_interval_agent_decisions,
+            )
+            # Exclude only the task supplying this epoch's real data.  This
+            # remains correct for reversed curricula and for the published
+            # 541st epoch, where the cyclic schedule revisits its first task.
+            prior_task_ids = tuple(
+                sorted(encountered_replay_task_ids - {replay_task_id})
+            )
+            available_task_ids = replay.available_task_ids()
+            missing_task_ids = sorted(
+                set(prior_task_ids) - set(available_task_ids)
+            )
+            if missing_task_ids:
+                raise RuntimeError(
+                    "The fixed-capacity reservoir lost all rehearsal starts for "
+                    f"prior tasks {missing_task_ids}; available={available_task_ids}"
+                )
+            allocation = rehearsal_update_allocation(
+                interval_count,
+                prior_task_ids,
+                config.dream_rehearsal_updates_per_prior_task,
+            )
+            rehearsal_metric_totals: dict[str, float] = {}
+            for old_task_id, task_updates in allocation.items():
+                if not task_updates:
+                    continue
+                task_metrics = train_bounded_dream_rehearsal(
+                    wm,
+                    replay,
+                    aco,
+                    replay_task_id=old_task_id,
+                    updates=task_updates,
+                    n_sync=config.dream_rehearsal_batch_sequences,
+                    context_steps=config.dream_rehearsal_context_steps,
+                    dream_steps=config.dream_rehearsal_horizon,
+                    discount=config.ac_discount,
+                    top_fraction=config.dream_rehearsal_top_fraction,
+                    realized_threshold=(
+                        config.dream_rehearsal_realized_threshold
+                    ),
+                    realized_bonus=config.dream_rehearsal_realized_bonus,
+                    grad_clip=config.dream_rehearsal_grad_clip,
+                )
+                dream_rehearsal_updates_by_task[old_task_id] = (
+                    dream_rehearsal_updates_by_task.get(old_task_id, 0)
+                    + task_updates
+                )
+                dream_rehearsal_updates += task_updates
+                dream_rehearsal_dreamed_trajectories += int(
+                    task_metrics["dreamed_trajectories"]
+                )
+                dream_rehearsal_selected_trajectories += int(
+                    task_metrics["selected_trajectories"]
+                )
+                for metric_name, metric_value in task_metrics.items():
+                    writer.add_scalar(
+                        f"BoundedDreamRehearsal/task_{old_task_id}/{metric_name}",
+                        metric_value,
+                        dream_rehearsal_updates,
+                    )
+                    rehearsal_metric_totals[metric_name] = (
+                        rehearsal_metric_totals.get(metric_name, 0.0)
+                        + metric_value * task_updates
+                    )
+            dream_rehearsal_intervals += interval_count
+            writer.add_scalar(
+                "Counters/dream_rehearsal_actor_updates",
+                dream_rehearsal_updates,
+                total_agent_decisions,
+            )
+            writer.add_scalar(
+                "Counters/dream_rehearsal_intervals",
+                dream_rehearsal_intervals,
+                total_agent_decisions,
+            )
+            updates_this_epoch = sum(allocation.values())
+            if updates_this_epoch:
+                actor_critic_metrics.update(
+                    {
+                        f"dream_rehearsal_{name}": total / updates_this_epoch
+                        for name, total in rehearsal_metric_totals.items()
+                        if name
+                        not in {
+                            "actor_updates",
+                            "selected_trajectories",
+                            "dreamed_trajectories",
+                        }
+                    }
+                )
+            if distributed_context.is_primary:
+                accounting = {
+                    "schema_version": 1,
+                    "artifact_kind": "bounded_dream_rehearsal_accounting",
+                    "method": "Bounded-Dream-Rehearsal-v1-Atari",
+                    "replay": {
+                        "retention": "uniform_random_key_reservoir",
+                        "trajectory_slots": replay.n,
+                        "sequence_length": replay.t,
+                        "transition_capacity": replay.n * replay.t,
+                        "valid_trajectory_slots": replay.n_valid,
+                        "observation_dtype": config.replay_observation_dtype,
+                        "task_ids_are_replay_metadata_only": True,
+                        "task_ids_exposed_to_model_or_actor": False,
+                        "available_task_ids": list(available_task_ids),
+                    },
+                    "schedule": {
+                        "interval_agent_decisions": (
+                            config.dream_rehearsal_interval_agent_decisions
+                        ),
+                        "updates_per_prior_task_per_interval": (
+                            config.dream_rehearsal_updates_per_prior_task
+                        ),
+                        "collection_granularity_agent_decisions": (
+                            total_agent_decisions - agent_decisions_before_epoch
+                        ),
+                        "due_updates_are_batched_after_the_epoch_actor_update": True,
+                    },
+                    "counters": {
+                        "agent_decisions": total_agent_decisions,
+                        "completed_rehearsal_intervals": (
+                            dream_rehearsal_intervals
+                        ),
+                        "extra_actor_updates": dream_rehearsal_updates,
+                        "extra_actor_updates_by_prior_task": dict(
+                            sorted(dream_rehearsal_updates_by_task.items())
+                        ),
+                        "dreamed_trajectories": (
+                            dream_rehearsal_dreamed_trajectories
+                        ),
+                        "selected_trajectories": (
+                            dream_rehearsal_selected_trajectories
+                        ),
+                    },
+                    "actor_only_rehearsal": True,
+                    "world_model_and_critic_updated_by_rehearsal": False,
+                    "evaluation_transitions_enter_training": False,
+                }
+                accounting_path = log_dir / "bounded_dream_rehearsal_accounting.json"
+                temporary_accounting_path = accounting_path.with_suffix(
+                    ".json.tmp"
+                )
+                temporary_accounting_path.write_text(
+                    json.dumps(accounting, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(temporary_accounting_path, accounting_path)
+
+
         actor_seconds = _stage_elapsed(actor_started, profile_stages)
         if distributed_context.is_primary and (
             actor_critic_bank is not None
@@ -6186,6 +6397,11 @@ if __name__ == "__main__":
             "Counters/actor_critic_updates",
             actor_critic_updates,
             actor_critic_updates,
+        )
+        writer.add_scalar(
+            "Counters/actor_updates_total_including_dream_rehearsal",
+            actor_critic_updates + dream_rehearsal_updates,
+            total_agent_decisions,
         )
         for metric_name, metric_value in actor_critic_metrics.items():
             writer.add_scalar(
@@ -6554,6 +6770,7 @@ if __name__ == "__main__":
                     total_env_steps=total_env_steps,
                     reason="task_boundary",
                     task_metadata=boundary_metadata,
+                    dream_rehearsal_actor_updates=dream_rehearsal_updates,
                 )
                 writer.flush()
             if (
@@ -6570,6 +6787,7 @@ if __name__ == "__main__":
                     world_model_updates=global_step,
                     total_env_steps=total_env_steps,
                     reason="milestone",
+                    dream_rehearsal_actor_updates=dream_rehearsal_updates,
                 )
                 writer.flush()
             if epoch == config.epochs - 1:
@@ -6582,6 +6800,7 @@ if __name__ == "__main__":
                     world_model_updates=global_step,
                     total_env_steps=total_env_steps,
                     reason="final",
+                    dream_rehearsal_actor_updates=dream_rehearsal_updates,
                 )
                 writer.flush()
 

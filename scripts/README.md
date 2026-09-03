@@ -8,6 +8,9 @@ contains experiment-facing code.
 
 - `run_arrow_ar50_atari.py`: canonical ARROW-50 launcher and named ARROW actor/objective ablations.
 - `run_dv3_fifo_atari.py`: matched DreamerV3/FIFO control.
+- `run_bounded_dream_rehearsal_atari.py`: DreamerV3 with one shared actor,
+  realized-first actor-only dream self-imitation, and a configurable bounded
+  reservoir whose default 524,288-transition capacity matches ARROW-50.
 - `run_r2dreamer_arrow_atari.py`: native R2-Dreamer plus ARROW replay launcher.
 - `train_r2dreamer_arrow_atari.py`: native R2-Dreamer training implementation used by the launcher.
 - `run_karrow_ar50_atari.py`: all KARROW visual versions and `dino`/`mlp`/`kan` arms.

@@ -9,6 +9,13 @@ This product includes selected R2-Dreamer source files, copyright Naoki
 Morihira, licensed under the MIT License. See third_party/r2dreamer/LICENSE
 and third_party/r2dreamer/UPSTREAM.md.
 
+The Bounded Dream Rehearsal implementation follows the algorithm described by
+Nijjer et al. in arXiv:2607.19749 and the Apache-2.0 reference artifact at
+https://github.com/gurpnijjer/dream-rehearsal, inspected at commit
+7680778f798be3a27a17c320cc875b573c45f0e1. The reference source tree is not
+vendored; implementation provenance and deviations are documented in
+docs/protocols/bounded_dream_rehearsal_atari.md.
+
 KARROW can load DINOv3 model weights distributed separately by Meta Platforms,
 Inc. under the DINOv3 License. Those weights and DINOv3 source code are not
 included in this repository. Their exact local artifact hashes are recorded in
