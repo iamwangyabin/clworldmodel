@@ -281,12 +281,14 @@ def _evaluate_policy_tasks(
                     if actor_critic_bank is not None
                     else aco
                 )
-                evaluation_kwargs = {}
+                evaluation_kwargs = {
+                    "deterministic_policy": (
+                        config.deterministic_evaluation
+                        or config.uses_task_experts
+                    )
+                }
                 if config.uses_task_experts:
-                    evaluation_kwargs = {
-                        "task_id": task_id,
-                        "deterministic_policy": True,
-                    }
+                    evaluation_kwargs["task_id"] = task_id
                 mean, std = evaluate(
                     config.n_sync,
                     wm=wm,
@@ -316,12 +318,14 @@ def _evaluate_policy_tasks(
                 if actor_critic_bank is not None
                 else aco
             )
-            evaluation_kwargs = {}
+            evaluation_kwargs = {
+                "deterministic_policy": (
+                    config.deterministic_evaluation
+                    or config.uses_task_experts
+                )
+            }
             if config.uses_task_experts:
-                evaluation_kwargs = {
-                    "task_id": task_id,
-                    "deterministic_policy": True,
-                }
+                evaluation_kwargs["task_id"] = task_id
             mean, std = evaluate(
                 config.n_sync,
                 wm=wm,
@@ -427,6 +431,90 @@ def _raw_return_statistics(
         raw_means.append(float(scaled_mean / task.rew_scale))
         raw_stds.append(float(scaled_std / abs(task.rew_scale)))
     return raw_means, raw_stds
+
+
+def _write_evaluation_metrics(
+    directory: Path,
+    *,
+    checkpoint_kind: str,
+    collection_epoch_index: int,
+    completed_update_epochs: int,
+    training_environment_decisions: int,
+    world_model_updates: int,
+    actor_critic_updates: int,
+    task_seeds: Sequence[int],
+    task_configs,
+    scaled_means: Sequence[float],
+    scaled_stds: Sequence[float],
+    raw_means: Sequence[float],
+    raw_stds: Sequence[float],
+    deterministic_policy: bool,
+) -> Path:
+    """Atomically preserve one raw taskwise evaluation checkpoint."""
+    lengths = {
+        len(task_seeds),
+        len(task_configs),
+        len(scaled_means),
+        len(scaled_stds),
+        len(raw_means),
+        len(raw_stds),
+    }
+    if len(lengths) != 1:
+        raise ValueError("Evaluation metric vectors must have matching lengths")
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (
+        f"{checkpoint_kind}_env_{training_environment_decisions:012d}.json"
+    )
+    payload = {
+        "schema_version": "raw-taskwise-evaluation-v1",
+        "checkpoint_kind": checkpoint_kind,
+        "evaluation_after_collection_epoch_index": collection_epoch_index,
+        "completed_world_model_actor_update_epochs": completed_update_epochs,
+        "counters": {
+            "training_environment_decisions": training_environment_decisions,
+            "world_model_updates": world_model_updates,
+            "actor_critic_updates": actor_critic_updates,
+        },
+        "evaluation_transitions_enter_replay": False,
+        "policy": (
+            "deterministic_argmax_and_latent_mode"
+            if deterministic_policy
+            else "stochastic"
+        ),
+        "tasks": [
+            {
+                "task_index": index,
+                "task_name": task.name,
+                "evaluation_seed": int(seed),
+                "reward_scale": task.rew_scale,
+                "scaled_return_mean": float(scaled_mean),
+                "scaled_return_std": float(scaled_std),
+                "raw_return_mean": float(raw_mean),
+                "raw_return_std": float(raw_std),
+            }
+            for index, (
+                task,
+                seed,
+                scaled_mean,
+                scaled_std,
+                raw_mean,
+                raw_std,
+            ) in enumerate(
+                zip(
+                    task_configs,
+                    task_seeds,
+                    scaled_means,
+                    scaled_stds,
+                    raw_means,
+                    raw_stds,
+                )
+            )
+        ],
+    }
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    return path
 
 
 def _task_boundary_metadata(config: Config, epoch: int) -> Optional[dict]:
@@ -5494,6 +5582,25 @@ if __name__ == "__main__":
                 config.esc.env_configs, eval_results_mean, eval_results_std
             )
             if distributed_context.is_primary:
+                _write_evaluation_metrics(
+                    log_dir / "evaluation_metrics",
+                    checkpoint_kind="periodic_validation",
+                    collection_epoch_index=epoch,
+                    completed_update_epochs=epoch,
+                    training_environment_decisions=total_env_steps,
+                    world_model_updates=global_step,
+                    actor_critic_updates=epoch * config.ac_train_steps,
+                    task_seeds=periodic_task_seeds,
+                    task_configs=config.esc.env_configs,
+                    scaled_means=eval_results_mean,
+                    scaled_stds=eval_results_std,
+                    raw_means=eval_raw_mean,
+                    raw_stds=eval_raw_std,
+                    deterministic_policy=(
+                        config.deterministic_evaluation
+                        or config.uses_task_experts
+                    ),
+                )
                 writer.add_scalars(
                     "Perf/eval_rew_eps_mean",
                     {f"{i}": m for i, m in enumerate(eval_results_mean)},
@@ -6640,6 +6747,11 @@ if __name__ == "__main__":
         final_evaluation = {
             "schema_version": 1,
             "evaluation_after_completed_epochs": config.epochs,
+            "counters": {
+                "training_environment_decisions": total_env_steps,
+                "world_model_updates": global_step,
+                "actor_critic_updates": config.epochs * config.ac_train_steps,
+            },
             "seed_cohort": (
                 "heldout_final"
                 if fixed_evaluation_cohorts
@@ -6650,7 +6762,7 @@ if __name__ == "__main__":
             ),
             "policy": (
                 "deterministic_argmax_and_latent_mode"
-                if config.uses_task_experts
+                if config.deterministic_evaluation or config.uses_task_experts
                 else "stochastic"
             ),
             "rollouts_per_task": 16,
@@ -6682,6 +6794,25 @@ if __name__ == "__main__":
             ],
         }
         if distributed_context.is_primary:
+            _write_evaluation_metrics(
+                log_dir / "evaluation_metrics",
+                checkpoint_kind="heldout_final",
+                collection_epoch_index=config.epochs - 1,
+                completed_update_epochs=config.epochs,
+                training_environment_decisions=total_env_steps,
+                world_model_updates=global_step,
+                actor_critic_updates=config.epochs * config.ac_train_steps,
+                task_seeds=final_eval_task_seeds,
+                task_configs=task_configs,
+                scaled_means=final_scaled_means,
+                scaled_stds=final_scaled_stds,
+                raw_means=final_raw_means,
+                raw_stds=final_raw_stds,
+                deterministic_policy=(
+                    config.deterministic_evaluation
+                    or config.uses_task_experts
+                ),
+            )
             final_evaluation_path = log_dir / "final_evaluation.json"
             temporary_final_evaluation_path = final_evaluation_path.with_suffix(
                 ".json.tmp"

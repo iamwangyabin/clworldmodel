@@ -93,6 +93,11 @@ contains experiment-facing code.
 - `run_dv3_rs_minigrid_smoke.py`: matched one-GPU DreamerV3 reservoir replay
   mechanism port of Continual-Dreamer on the same MiniGrid smoke protocol.
   Neither MiniGrid smoke is a learning or paper-reproduction claim.
+- `run_arrow_minigrid_formal.py`: one seed of the formal five-seed ARROW-50
+  side of the matched MiniGrid comparison, with 2M-transition CPU uint8 replay.
+- `run_dv3_rs_minigrid_formal.py`: one seed of the matched full-capacity
+  reservoir side. Both formal launchers require a clean upstream-synced commit
+  and exactly one visible GPU.
 
 The former version-specific KARROW and DINO wrapper files were removed. Use
 explicit selectors instead:

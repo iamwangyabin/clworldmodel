@@ -297,6 +297,7 @@ class Config(Serialisable):
     data_parallel_world_size: DataParallelWorldSize = 1
     evaluation_seed_protocol: EvaluationSeedProtocol = "advancing"
     evaluation_task_seed_offset: int = 0
+    deterministic_evaluation: bool = False
     independent_expert_original_task_index: Optional[int] = None
 
     actor_network: ActorNetwork = "mlp"
@@ -1119,6 +1120,8 @@ class Config(Serialisable):
             raise ValueError(
                 f"Unknown evaluation seed protocol: {self.evaluation_seed_protocol!r}"
             )
+        if not isinstance(self.deterministic_evaluation, bool):
+            raise ValueError("deterministic_evaluation must be a boolean")
         if self.evaluation_task_seed_offset < 0:
             raise ValueError("evaluation_task_seed_offset must be non-negative")
         if (
@@ -1179,10 +1182,17 @@ class Config(Serialisable):
                 raise ValueError(
                     "The CNN task-bank protocol requires uint8 observation replay"
                 )
-        elif self.replay_observation_dtype != "float32":
+        elif (
+            self.replay_observation_dtype != "float32"
+            and not all(
+                env_config.family == "minigrid"
+                for env_config in self.esc.env_configs
+            )
+        ):
             raise ValueError(
                 "uint8 observation replay is reserved for DINO-ConvBank and "
-                "CNN-FullBank optimized protocols"
+                "CNN-FullBank optimized protocols, or declarative MiniGrid "
+                "protocols"
             )
         if uses_task_experts:
             if self.algorithm != "arrow":

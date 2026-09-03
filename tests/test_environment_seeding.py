@@ -336,6 +336,7 @@ class EnvironmentSeedingTests(unittest.TestCase):
     def test_seed_reaches_vector_reset_and_each_action_space(self) -> None:
         class FakeVectorEnv:
             reset_seed = None
+            single_action_space = generate_trajectory.gym.spaces.Discrete(18)
 
             def __init__(self, factories) -> None:
                 self.factories = factories
@@ -364,6 +365,7 @@ class EnvironmentSeedingTests(unittest.TestCase):
 
         class FakeEnv:
             action_space = FakeActionSpace()
+            unwrapped = SimpleNamespace()
 
         fake_env = FakeEnv()
         with mock.patch.object(
@@ -371,7 +373,7 @@ class EnvironmentSeedingTests(unittest.TestCase):
             "AtariPreprocessing",
             side_effect=lambda env, **_kwargs: env,
         ):
-            result = generate_trajectory._make_atari_env(
+            result = generate_trajectory._make_visual_env(
                 lambda: fake_env, env_repeat=4, action_seed=expected_actions[0]
             )
         self.assertIs(result, fake_env)
@@ -405,6 +407,62 @@ class EnvironmentSeedingTests(unittest.TestCase):
         torch.testing.assert_close(actual[2], expected[2], rtol=0, atol=0)
         if actual_cuda is not None:
             torch.testing.assert_close(actual_cuda, expected_cuda, rtol=0, atol=0)
+
+    def test_task_agnostic_evaluation_can_be_declared_deterministic(self) -> None:
+        config = SimpleNamespace(
+            n_sync=1,
+            env_repeat=1,
+            action_space=7,
+            uses_task_experts=False,
+            deterministic_evaluation=True,
+        )
+        with mock.patch.object(train, "evaluate", return_value=(0.5, 0.1)) as evaluate:
+            means, stds = train._evaluate_policy_tasks(
+                config,
+                wm=object(),
+                aco=None,
+                eval_funcs=[[lambda: None]],
+                task_seeds=[17],
+            )
+
+        self.assertEqual(means, [0.5])
+        self.assertEqual(stds, [0.1])
+        self.assertTrue(evaluate.call_args.kwargs["deterministic_policy"])
+        self.assertNotIn("task_id", evaluate.call_args.kwargs)
+
+    def test_raw_taskwise_evaluation_checkpoint_has_explicit_counters(self) -> None:
+        with TemporaryDirectory() as temporary:
+            path = train._write_evaluation_metrics(
+                Path(temporary),
+                checkpoint_kind="periodic_validation",
+                collection_epoch_index=10,
+                completed_update_epochs=10,
+                training_environment_decisions=20_000,
+                world_model_updates=1_159,
+                actor_critic_updates=490,
+                task_seeds=[17],
+                task_configs=[SimpleNamespace(name="task-0", rew_scale=1.0)],
+                scaled_means=[0.75],
+                scaled_stds=[0.1],
+                raw_means=[0.75],
+                raw_stds=[0.1],
+                deterministic_policy=True,
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["schema_version"], "raw-taskwise-evaluation-v1")
+        self.assertEqual(
+            payload["counters"],
+            {
+                "training_environment_decisions": 20_000,
+                "world_model_updates": 1_159,
+                "actor_critic_updates": 490,
+            },
+        )
+        self.assertEqual(payload["tasks"][0]["raw_return_mean"], 0.75)
+        self.assertEqual(
+            payload["policy"], "deterministic_argmax_and_latent_mode"
+        )
 
 
 if __name__ == "__main__":

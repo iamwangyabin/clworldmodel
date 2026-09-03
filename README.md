@@ -160,6 +160,19 @@ is a mechanism port, not a reproduction of the paper's DreamerV2 results. See
 five-seed CPU-replay campaign is recorded in
 `docs/protocols/dv3_rs_minigrid_campaign_plan.md`.
 
+Inspect one matched formal seed without allocating replay or interacting with
+the environments:
+
+```bash
+python scripts/run_arrow_minigrid_formal.py --seed-index 0 --dry-run
+python scripts/run_dv3_rs_minigrid_formal.py --seed-index 0 --dry-run
+```
+
+A real run must start from the exact clean, pushed commit and select exactly
+one accelerator, for example `CUDA_VISIBLE_DEVICES=1 ... --seed-index 0`.
+Formal replay is CPU-resident uint8 with 2M transitions per run; sampled images
+are decoded to float32 on the selected GPU.
+
 ## Representation-objective ablation: ARROW-R2Rep-50
 
 `ARROW-R2Rep-50` keeps ARROW-50 replay, budgets, curriculum, RSSM, reward and

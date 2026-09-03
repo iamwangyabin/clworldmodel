@@ -634,6 +634,26 @@ documented here, covered by focused parity tests, and followed by regenerating
     tests cover default-family validation, deterministic MiniGrid observations
     and actions, task order, capacity, sampling allocation, and smoke budgets.
 
+61. Add the opt-in execution behavior required by the separately named
+    `ARROW-DV3RS-MiniGrid-3Task-v1` comparison. Declarative all-MiniGrid
+    schedules may store replay observations as uint8 on CPU; sampled images are
+    decoded back to the existing float32 model values, while historical Atari
+    and other task-agnostic configs remain restricted to float32 unless already
+    covered by a named optimized protocol. A new
+    `deterministic_evaluation=false` config field preserves every historical
+    default and lets the formal MiniGrid configs explicitly evaluate the base
+    task-agnostic policy using action argmax and latent mode. The matched formal
+    configs give ARROW-50 and DV3-RS identical 2M-transition/24,656,000,000-byte
+    CPU replay budgets, interaction/update schedules, fixed evaluation cohorts,
+    and five predeclared seeds; they differ only in FIFO/reservoir retention and
+    whole-buffer minibatch selection. Every evaluation now also writes one
+    atomic `raw-taskwise-evaluation-v1` JSON record with explicit environment,
+    world-model-update, and actor-update counters; this adds an auditable metric
+    artifact without changing optimization or evaluation behavior. Focused
+    tests cover uint8 protocol isolation, deterministic task-agnostic
+    evaluation, raw-metric persistence, seed mapping, exact interaction/update
+    accounting, replay allocation, and byte parity.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from
