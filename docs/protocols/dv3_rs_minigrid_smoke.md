@@ -91,6 +91,9 @@ Consequently, report only execution correctness. A later full protocol must
 freeze a multi-seed design and match environmental interaction, update count,
 capacity and actual bytes before comparing performance.
 
+The proposed run counts and decision gates for that campaign are recorded in
+`docs/protocols/dv3_rs_minigrid_campaign_plan.md`.
+
 ## Commands
 
 Dry-run without environment interaction or gradient updates:

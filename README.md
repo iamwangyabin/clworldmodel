@@ -156,7 +156,9 @@ ARROW-50 divides capacity and minibatch selection equally between FIFO and an
 unbiased reservoir; DV3-RS assigns the full capacity to the reservoir. DV3-RS
 is a mechanism port, not a reproduction of the paper's DreamerV2 results. See
 `docs/protocols/arrow_ar50_minigrid_smoke.md` and
-`docs/protocols/dv3_rs_minigrid_smoke.md`.
+`docs/protocols/dv3_rs_minigrid_smoke.md`. The matched ARROW-50 versus DV3-RS
+five-seed CPU-replay campaign is recorded in
+`docs/protocols/dv3_rs_minigrid_campaign_plan.md`.
 
 ## Representation-objective ablation: ARROW-R2Rep-50
 
