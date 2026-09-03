@@ -100,6 +100,9 @@ class MiniGridAdapterTests(unittest.TestCase):
                     self.assertEqual(first.dtype, np.uint8)
                     self.assertTrue(np.array_equal(first, second))
                     self.assertEqual(env.action_space.n, 7)
+                    if name == "MiniGrid-DoorKey-9x9-v0":
+                        self.assertEqual(env.unwrapped.width, 9)
+                        self.assertEqual(env.unwrapped.height, 9)
                     env.action_space.seed(13)
                     actions_a = [env.action_space.sample() for _ in range(8)]
                     env.action_space.seed(13)

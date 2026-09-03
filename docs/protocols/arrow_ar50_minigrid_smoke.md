@@ -23,7 +23,9 @@ is removed. The native `56 x 56 x 3` `uint8` rendering is resized with OpenCV
 `INTER_AREA` to the vendored ARROW model's `64 x 64 x 3` visual boundary.
 Episodes are capped at 100 agent decisions, actions are the seven native
 MiniGrid actions, and action repeat is one. No task identity is exposed to the
-world model or policy.
+world model or policy. MiniGrid 3.x no longer registers the paper's legacy
+`DoorKey-9x9` identifier, so the adapter constructs `DoorKeyEnv(size=9)`
+explicitly rather than substituting the registered 8x8 environment.
 
 ## Smoke budgets
 

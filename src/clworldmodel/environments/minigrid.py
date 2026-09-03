@@ -68,7 +68,15 @@ def make_minigrid_environment(
     import minigrid  # noqa: F401
     from minigrid.wrappers import ImgObsWrapper, RGBImgPartialObsWrapper
 
-    env = gym.make(name, **kwargs)
+    if name == "MiniGrid-DoorKey-9x9-v0":
+        # MiniGrid 3.x removed this legacy registration while retaining the
+        # parameterized environment class.  Construct size 9 explicitly; using
+        # the still-registered 8x8 task would silently change the benchmark.
+        from minigrid.envs import DoorKeyEnv
+
+        env = DoorKeyEnv(size=9, **kwargs)
+    else:
+        env = gym.make(name, **kwargs)
     env = RGBImgPartialObsWrapper(env, tile_size=tile_size)
     env = ImgObsWrapper(env)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
