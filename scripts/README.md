@@ -49,7 +49,11 @@ contains experiment-facing code.
   original-six profile creates the separately named Dense-acquire protocol:
   every task is learned at full width, all fixed structured-pruning candidates
   receive equal LTDM recovery compute, and a dedicated raw-return cohort selects
-  the smallest acceptable physical Q/F/P width with Dense fallback.
+  the smallest acceptable physical Q/F/P width with Dense fallback. Combining
+  it with `--behavior-profile shared_adaptive_residual_mlp` selects the separate
+  Q/F/P+Actor-Critic method: one shared MLP behavior base pair, full-width
+  task-residual acquisition, fixed imagined-state Actor/Critic distillation,
+  and a second dedicated raw-return gate for physical residual compression.
 - `smoke_evolving_atomic_rssm.py`: target-CUDA, production-shaped synthetic
   update covering the fixed 12-current/4-memory split, component projection,
   frozen old private state, and shared/private/route Adam steps. Its explicit
@@ -65,7 +69,10 @@ contains experiment-facing code.
   through the shared heads, private residuals, and active reuse routes. With
   `--method-profile adaptive_qfp_compression` it physically compacts Task 1,
   takes a Q/F/P-only recovery step, and strictly reloads the heterogeneous
-  checkpoint topology.
+  checkpoint topology. With
+  `--method-profile adaptive_qfp_ac_compression` it additionally compacts the
+  Actor and Critic task-residual pair, takes one categorical distillation step,
+  and verifies the compact Actor-Critic plus optimizer checkpoint round trip.
 - `run_evolving_task0_sweep.py`: fixed-order, seed-0 MsPacman acquisition
   launcher for the preregistered single-LR profiles or the 120/150/180/240
   duration profiles. It omits held-out-final evaluation and stops at the

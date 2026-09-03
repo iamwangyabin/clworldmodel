@@ -37,6 +37,7 @@ ContinualMethod = Literal[
     "evolving_atomic_rssm_arrow",
     "evolving_atomic_rssm_shared_heads_arrow",
     "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+    "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
     "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
     "evolving_atomic_rssm_learned_base_adapters_arrow",
     "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -375,6 +376,18 @@ class Config(Serialisable):
     adaptive_compression_rollouts: int = 0
     adaptive_compression_max_return_drop: float = 0.0
     adaptive_compression_qfp_distill_scale: float = 0.0
+    adaptive_behavior_residuals: bool = False
+    adaptive_behavior_hidden_features: int = 512
+    adaptive_behavior_residual_scale: float = 0.1
+    adaptive_behavior_num_atoms: int = 4
+    adaptive_behavior_reuse: bool = True
+    adaptive_behavior_width_fractions: list[float] = field(default_factory=list)
+    adaptive_behavior_steps_per_candidate: int = 0
+    adaptive_behavior_lr: float = 0.0
+    adaptive_behavior_rollouts: int = 0
+    adaptive_behavior_max_return_drop: float = 0.0
+    adaptive_behavior_actor_distill_scale: float = 0.0
+    adaptive_behavior_critic_distill_scale: float = 0.0
     evolving_shared_behavior_current_task_fraction: float = 1.0
     task_private_heads: bool = False
     task_shared_prediction_heads: bool = False
@@ -485,7 +498,7 @@ class Config(Serialisable):
                 sequential_task_durations = tuple(task_durations)
         if self.continual_method not in {
             "none",
-            "moe_arrow",
+                    "moe_arrow",
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
             "cnn_compact_shared_actor_arrow",
@@ -494,6 +507,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -526,6 +540,10 @@ class Config(Serialisable):
             self.continual_method
             == "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
         )
+        is_evolving_adaptive_qfp_ac_compression_shared_heads = (
+            self.continual_method
+            == "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow"
+        )
         is_evolving_atomic_lora_shared_heads = (
             self.continual_method
             == "evolving_atomic_rssm_atomic_lora_shared_heads_arrow"
@@ -537,6 +555,7 @@ class Config(Serialisable):
         uses_evolving_shared_heads = (
             is_evolving_shared_heads
             or is_evolving_adaptive_compression_shared_heads
+            or is_evolving_adaptive_qfp_ac_compression_shared_heads
             or is_evolving_atomic_lora_shared_heads
             or is_evolving_learned_base_adapters
         )
@@ -544,6 +563,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -612,7 +632,10 @@ class Config(Serialisable):
                 )
         if (
             self.task_mechanism_parameterization == "adaptive_dense_width"
-            and not is_evolving_adaptive_compression_shared_heads
+            and not (
+                is_evolving_adaptive_compression_shared_heads
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
+            )
         ):
             raise ValueError(
                 "adaptive_dense_width is validated only for the separately named "
@@ -685,7 +708,10 @@ class Config(Serialisable):
                 "mechanism parameterization='dense_private'"
             )
         if (
-            is_evolving_adaptive_compression_shared_heads
+            (
+                is_evolving_adaptive_compression_shared_heads
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
+            )
             and self.task_mechanism_parameterization != "adaptive_dense_width"
         ):
             raise ValueError(
@@ -696,6 +722,7 @@ class Config(Serialisable):
             (
                 is_evolving_shared_heads
                 or is_evolving_adaptive_compression_shared_heads
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
             )
             and self.task_mechanism_capacity_profile != "matched_512"
         ):
@@ -787,6 +814,18 @@ class Config(Serialisable):
             "adaptive_compression_rollouts": 0,
             "adaptive_compression_max_return_drop": 0.0,
             "adaptive_compression_qfp_distill_scale": 0.0,
+            "adaptive_behavior_residuals": False,
+            "adaptive_behavior_hidden_features": 512,
+            "adaptive_behavior_residual_scale": 0.1,
+            "adaptive_behavior_num_atoms": 4,
+            "adaptive_behavior_reuse": True,
+            "adaptive_behavior_width_fractions": [],
+            "adaptive_behavior_steps_per_candidate": 0,
+            "adaptive_behavior_lr": 0.0,
+            "adaptive_behavior_rollouts": 0,
+            "adaptive_behavior_max_return_drop": 0.0,
+            "adaptive_behavior_actor_distill_scale": 0.0,
+            "adaptive_behavior_critic_distill_scale": 0.0,
             "evolving_shared_behavior_current_task_fraction": 1.0,
             "task_private_heads": False,
             "task_shared_prediction_heads": False,
@@ -844,11 +883,17 @@ class Config(Serialisable):
                 "shared_prediction_distill_scale": (
                     0.1 if uses_evolving_shared_heads else 0.0
                 ),
-                "task_private_actor_critic": not is_evolving_shared_fastkan,
+                "task_private_actor_critic": not (
+                    is_evolving_shared_fastkan
+                    or is_evolving_adaptive_qfp_ac_compression_shared_heads
+                ),
                 "task_atomic_routes": True,
                 "ac_lr": 4e-5 if is_evolving_shared_fastkan else 1e-4,
             }
-            if is_evolving_shared_fastkan:
+            if (
+                is_evolving_shared_fastkan
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
+            ):
                 expected_evolving[
                     "evolving_shared_behavior_current_task_fraction"
                 ] = 0.75
@@ -861,7 +906,10 @@ class Config(Serialisable):
                         "freeze_shared_prediction_heads_after_task0": True,
                     }
                 )
-            if is_evolving_adaptive_compression_shared_heads:
+            if (
+                is_evolving_adaptive_compression_shared_heads
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
+            ):
                 expected_evolving.update(
                     {
                         "adaptive_compression_width_fractions": [
@@ -875,6 +923,28 @@ class Config(Serialisable):
                         "adaptive_compression_rollouts": 16,
                         "adaptive_compression_max_return_drop": 0.05,
                         "adaptive_compression_qfp_distill_scale": 1.0,
+                    }
+                )
+            if is_evolving_adaptive_qfp_ac_compression_shared_heads:
+                expected_evolving.update(
+                    {
+                        "adaptive_behavior_residuals": True,
+                        "adaptive_behavior_hidden_features": 512,
+                        "adaptive_behavior_residual_scale": 0.1,
+                        "adaptive_behavior_num_atoms": 4,
+                        "adaptive_behavior_reuse": True,
+                        "adaptive_behavior_width_fractions": [
+                            0.75,
+                            0.5,
+                            0.25,
+                            0.125,
+                        ],
+                        "adaptive_behavior_steps_per_candidate": 250,
+                        "adaptive_behavior_lr": 2e-4,
+                        "adaptive_behavior_rollouts": 16,
+                        "adaptive_behavior_max_return_drop": 0.05,
+                        "adaptive_behavior_actor_distill_scale": 1.0,
+                        "adaptive_behavior_critic_distill_scale": 1.0,
                     }
                 )
             expected_evolving.update(
@@ -960,7 +1030,10 @@ class Config(Serialisable):
                     "Evolving-Core interface and atom regularization scales "
                     "must be non-negative"
                 )
-            if is_evolving_adaptive_compression_shared_heads:
+            if (
+                is_evolving_adaptive_compression_shared_heads
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
+            ):
                 fractions = self.adaptive_compression_width_fractions
                 if (
                     not isinstance(fractions, list)
@@ -1057,6 +1130,68 @@ class Config(Serialisable):
                             "Adaptive compression candidates must map to unique "
                             "atom-divisible Q/F/P widths"
                         )
+            if is_evolving_adaptive_qfp_ac_compression_shared_heads:
+                behavior_fractions = self.adaptive_behavior_width_fractions
+                if (
+                    not isinstance(behavior_fractions, list)
+                    or behavior_fractions
+                    != self.adaptive_compression_width_fractions
+                ):
+                    raise ValueError(
+                        "Adaptive behavior compression uses the fixed Q/F/P width grid"
+                    )
+                if not self.adaptive_behavior_residuals:
+                    raise ValueError(
+                        "Adaptive behavior compression requires routed residual heads"
+                    )
+                if (
+                    self.actor_network != "mlp"
+                    or self.ac_optimizer != "adam"
+                    or self.fresh_ac is not False
+                ):
+                    raise ValueError(
+                        "Adaptive behavior compression requires one persistent "
+                        "Dreamer MLP Actor-Critic with Adam"
+                    )
+                if (
+                    self.adaptive_behavior_hidden_features != 512
+                    or self.adaptive_behavior_num_atoms != 4
+                    or not self.adaptive_behavior_reuse
+                    or self.adaptive_behavior_residual_scale != 0.1
+                ):
+                    raise ValueError(
+                        "Adaptive behavior compression requires full-width four-atom "
+                        "shared-base residual acquisition"
+                    )
+                if self.adaptive_behavior_steps_per_candidate < 1:
+                    raise ValueError(
+                        "Adaptive behavior compression steps must be positive"
+                    )
+                if self.adaptive_behavior_lr <= 0:
+                    raise ValueError("Adaptive behavior compression LR must be positive")
+                if self.adaptive_behavior_rollouts < 1:
+                    raise ValueError(
+                        "Adaptive behavior compression rollouts must be positive"
+                    )
+                if not 0 <= self.adaptive_behavior_max_return_drop < 1:
+                    raise ValueError(
+                        "Adaptive behavior maximum return drop must lie in [0, 1)"
+                    )
+                if min(
+                    self.adaptive_behavior_actor_distill_scale,
+                    self.adaptive_behavior_critic_distill_scale,
+                ) <= 0:
+                    raise ValueError(
+                        "Adaptive behavior actor/critic distillation scales must be positive"
+                    )
+                if (
+                    self.ac_slow_critic_regularizer != 0
+                    or self.ac_use_slow_critic_targets
+                ):
+                    raise ValueError(
+                        "Adaptive behavior compression requires one routed critic; "
+                        "slow-critic regularization and targets must remain disabled"
+                    )
         else:
             if self.evolving_checkpoint_retention != "all_boundaries":
                 raise ValueError(
@@ -2107,6 +2242,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2141,6 +2277,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2155,6 +2292,7 @@ class Config(Serialisable):
     def uses_shared_actor(self) -> bool:
         return self.continual_method in {
             "cnn_compact_shared_actor_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }
 
@@ -2162,10 +2300,10 @@ class Config(Serialisable):
     def uses_replay_rehearsed_shared_behavior(self) -> bool:
         """Whether one shared actor-critic rehearses task-routed replay."""
 
-        return (
-            self.continual_method
-            == "evolving_atomic_rssm_shared_fastkan_arrow"
-        )
+        return self.continual_method in {
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_shared_fastkan_arrow",
+        }
 
     @property
     def uses_task_private_heads(self) -> bool:
@@ -2182,6 +2320,7 @@ class Config(Serialisable):
             in {
                 "evolving_atomic_rssm_shared_heads_arrow",
                 "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+                "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
                 "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
                 "evolving_atomic_rssm_learned_base_adapters_arrow",
             }
@@ -2193,6 +2332,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2206,6 +2346,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2215,9 +2356,18 @@ class Config(Serialisable):
     def uses_adaptive_qfp_compression(self) -> bool:
         """Whether completed Dense Q/F/P modules are return-gated and compacted."""
 
+        return self.continual_method in {
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
+        }
+
+    @property
+    def uses_adaptive_behavior_compression(self) -> bool:
+        """Whether routed Actor-Critic residuals are return-gated and compacted."""
+
         return (
             self.continual_method
-            == "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
+            == "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow"
         )
 
     def get_env_schedule(self) -> EnvironmentSchedule:

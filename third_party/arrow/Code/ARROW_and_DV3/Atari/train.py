@@ -23,7 +23,9 @@ import replay
 from replay import MultiTypeReplay
 from ac import (
     ActorCriticOpt,
+    actor_policy_kl,
     build_actor_critic_opt,
+    dream_rollout,
     train_ac_from_wm,
     zh_to_ac_state,
 )
@@ -106,6 +108,27 @@ def _adaptive_compression_task_seeds(
         raise ValueError("Adaptive compression requires at least one task seed")
     compression_rng = np.random.default_rng(
         np.random.SeedSequence(int(seed), spawn_key=(3,))
+    )
+    return tuple(
+        _next_environment_seed(compression_rng) for _ in range(task_count)
+    )
+
+
+def _adaptive_behavior_compression_task_seeds(
+    seed: int, task_count: int
+) -> tuple[int, ...]:
+    """Derive fixed behavior-pruning seeds in an isolated RNG domain.
+
+    Spawn index 4 is distinct from collection (0), periodic validation (1),
+    held-out final evaluation (2), and Q/F/P pruning validation (3).
+    """
+
+    if task_count < 1:
+        raise ValueError(
+            "Adaptive behavior compression requires at least one task seed"
+        )
+    compression_rng = np.random.default_rng(
+        np.random.SeedSequence(int(seed), spawn_key=(4,))
     )
     return tuple(
         _next_environment_seed(compression_rng) for _ in range(task_count)
@@ -517,6 +540,24 @@ def _actor_critic_opt_resumable_state_dict(aco: ActorCriticOpt) -> dict[str, Any
     }
 
 
+def _refresh_actor_critic_optimizer_parameters(aco: ActorCriticOpt) -> None:
+    """Rebind one optimizer after a structured module replacement/load.
+
+    Adaptive residual loading can rebuild compact modules from serialized width
+    buffers.  The optimizer must therefore own the new ``Parameter`` objects,
+    not the dense constructor objects that were replaced during ``load_state_dict``.
+    """
+
+    if len(aco.opt.param_groups) != 1:
+        raise RuntimeError("Actor-Critic optimizer must own one parameter group")
+    parameters = list(aco.ac.parameters())
+    parameter_ids = {id(parameter) for parameter in parameters}
+    for parameter in list(aco.opt.state):
+        if id(parameter) not in parameter_ids:
+            del aco.opt.state[parameter]
+    aco.opt.param_groups[0]["params"] = parameters
+
+
 def _load_actor_critic_opt_resumable_state_dict(
     aco: ActorCriticOpt, state: Mapping[str, Any]
 ) -> None:
@@ -525,6 +566,7 @@ def _load_actor_critic_opt_resumable_state_dict(
     if state.get("schema_version") != 1:
         raise ValueError("Shared Actor-Critic state is not resumable schema v1")
     aco.ac.load_state_dict(state["actor_critic"], strict=True)
+    _refresh_actor_critic_optimizer_parameters(aco)
     aco.opt.load_state_dict(state["optimizer"])
     slow_state = state.get("slow_critic")
     if (aco.slow_critic is None) != (slow_state is None):
@@ -555,6 +597,7 @@ def _save_evolving_resumable_checkpoint(
     current_task_id: int,
     world_model_updates: int,
     actor_critic_updates: int,
+    adaptive_behavior_compression_updates: int = 0,
     total_env_steps: int,
     task_update_rng: np.random.Generator,
     collection_environment_seed_rng: np.random.Generator,
@@ -580,7 +623,8 @@ def _save_evolving_resumable_checkpoint(
             or shared_behavior_replay_updates is None
         ):
             raise ValueError(
-                "Shared FastKAN checkpoints require exactly one actor-critic and "
+                "Shared replay-rehearsed behavior checkpoints require exactly one "
+                "actor-critic and "
                 "its independent route-schedule RNG plus routed update counters"
             )
     elif (
@@ -634,11 +678,11 @@ def _save_evolving_resumable_checkpoint(
             for task_id, update_count in routed_behavior_updates.items()
         ):
             raise ValueError(
-                "Shared FastKAN routed update counters must be non-negative"
+                "Shared behavior routed update counters must be non-negative"
             )
         if sum(routed_behavior_updates.values()) != actor_critic_updates:
             raise ValueError(
-                "Shared FastKAN routed update counters must sum to the total "
+                "Shared behavior routed update counters must sum to the total "
                 "Actor-Critic optimizer updates"
             )
     payload = {
@@ -666,6 +710,9 @@ def _save_evolving_resumable_checkpoint(
             "raw_environment_frames": total_env_steps,
             "world_model_updates": world_model_updates,
             "actor_critic_updates": actor_critic_updates,
+            "adaptive_behavior_compression_updates": int(
+                adaptive_behavior_compression_updates
+            ),
             **(
                 {
                     "actor_critic_updates_by_task_route": (
@@ -681,7 +728,7 @@ def _save_evolving_resumable_checkpoint(
             "all other replay tensors and retention indices are embedded"
         ),
     }
-    if config.uses_adaptive_qfp_compression:
+    if getattr(config, "uses_adaptive_qfp_compression", False):
         world_model_layout = wm.rssm.adaptive_compression_layout()
         teacher_layout = boundary_teacher.rssm.adaptive_compression_layout()
         if world_model_layout != teacher_layout:
@@ -705,7 +752,11 @@ def _save_evolving_resumable_checkpoint(
         }
     if uses_shared_behavior:
         payload["shared_behavior"] = {
-            "topology": "single_shared_fastkan_actor_critic",
+            "topology": (
+                "single_shared_mlp_plus_task_adaptive_residuals"
+                if getattr(config, "uses_adaptive_behavior_compression", False)
+                else "single_shared_fastkan_actor_critic"
+            ),
             "future_task_teacher_actor": aco.ac.actor.state_dict(),
             "teacher_seen_tasks": current_task_id + 1,
             "teacher_semantics": (
@@ -713,6 +764,10 @@ def _save_evolving_resumable_checkpoint(
                 "cumulative policy-interface teacher for the next task"
             ),
         }
+        if getattr(config, "uses_adaptive_behavior_compression", False):
+            payload["shared_behavior"]["adaptive_hidden_widths"] = (
+                aco.ac.adaptive_behavior_layout()
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     torch.save(payload, temporary)
@@ -832,7 +887,7 @@ def _restore_evolving_resumable_checkpoint(
 
     wm.load_state_dict(payload["world_model"], strict=True)
     boundary_teacher.load_state_dict(payload["boundary_teacher"], strict=True)
-    if config.uses_adaptive_qfp_compression:
+    if getattr(config, "uses_adaptive_qfp_compression", False):
         adaptive_state = payload.get("adaptive_compression")
         if not isinstance(adaptive_state, Mapping):
             raise ValueError(
@@ -848,7 +903,7 @@ def _restore_evolving_resumable_checkpoint(
                 "Adaptive checkpoint topology did not rebuild to recorded widths"
             )
     optimizers = payload["optimizers"]
-    if config.uses_adaptive_qfp_compression:
+    if getattr(config, "uses_adaptive_qfp_compression", False):
         for metadata_name, optimizer_name in (
             ("private_optimizer_task_ids", "private_by_task"),
             ("route_optimizer_task_ids", "route_by_task"),
@@ -880,7 +935,8 @@ def _restore_evolving_resumable_checkpoint(
             or shared_behavior_update_rng is None
         ):
             raise ValueError(
-                "Shared FastKAN restore requires exactly one actor-critic and "
+                "Shared replay-rehearsed behavior restore requires exactly one "
+                "actor-critic and "
                 "its independent route-schedule RNG"
             )
         _load_actor_critic_opt_resumable_state_dict(
@@ -888,7 +944,14 @@ def _restore_evolving_resumable_checkpoint(
         )
         shared_behavior = payload.get("shared_behavior")
         if not isinstance(shared_behavior, Mapping):
-            raise ValueError("Shared FastKAN checkpoint is missing behavior state")
+            raise ValueError("Shared behavior checkpoint is missing behavior state")
+        if getattr(config, "uses_adaptive_behavior_compression", False) and (
+            aco.ac.adaptive_behavior_layout()
+            != shared_behavior.get("adaptive_hidden_widths")
+        ):
+            raise ValueError(
+                "Adaptive Actor-Critic checkpoint did not rebuild recorded widths"
+            )
         restored_teacher = copy.deepcopy(aco.ac.actor).eval()
         restored_teacher.requires_grad_(False)
         restored_teacher.load_state_dict(
@@ -928,6 +991,13 @@ def _restore_evolving_resumable_checkpoint(
         )
     schedule = payload["schedule"]
     environment_schedule._step = int(schedule["environment_step"])
+    if (
+        config.uses_adaptive_behavior_compression
+        and aco is not None
+    ):
+        # The task route is scheduler state, deliberately not a CUDA buffer in
+        # the Actor-Critic. Restore it before any resumed collection can run.
+        aco.ac.set_task_route(int(schedule["current_task_id"]))
     counters = payload["counters"]
     restored = {
         "completed_epochs": int(schedule["completed_epochs"]),
@@ -935,6 +1005,9 @@ def _restore_evolving_resumable_checkpoint(
         "raw_environment_frames": int(counters["raw_environment_frames"]),
         "world_model_updates": int(counters["world_model_updates"]),
         "actor_critic_updates": int(counters["actor_critic_updates"]),
+        "adaptive_behavior_compression_updates": int(
+            counters.get("adaptive_behavior_compression_updates", 0)
+        ),
     }
     if config.uses_replay_rehearsed_shared_behavior:
         restored["shared_actor_teacher"] = restored_teacher
@@ -942,7 +1015,7 @@ def _restore_evolving_resumable_checkpoint(
         routed_updates = counters.get("actor_critic_updates_by_task_route")
         if not isinstance(routed_updates, Mapping):
             raise ValueError(
-                "Shared FastKAN checkpoint is missing routed update counters"
+                "Shared behavior checkpoint is missing routed update counters"
             )
         restored_updates = {
             int(task_id): int(update_count)
@@ -957,7 +1030,7 @@ def _restore_evolving_resumable_checkpoint(
             != restored["actor_critic_updates"]
         ):
             raise ValueError(
-                "Shared FastKAN checkpoint has inconsistent routed update counters"
+                "Shared behavior checkpoint has inconsistent routed update counters"
             )
         restored["shared_behavior_replay_updates"] = restored_updates
     return restored
@@ -1332,9 +1405,26 @@ def _shared_actor_parameter_accounting(
     teacher_actor: Optional[torch.nn.Module],
 ) -> dict:
     accounting = _actor_critic_parameter_accounting(aco)
-    accounting["topology"] = "single_shared_actor_critic"
+    adaptive_behavior = bool(aco.ac.adaptive_behavior_residuals)
+    accounting["topology"] = (
+        "single_shared_mlp_plus_task_adaptive_residuals"
+        if adaptive_behavior
+        else "single_shared_actor_critic"
+    )
     accounting["persistent_actor_copies"] = 1
-    accounting["per_task_actor_growth"] = 0
+    accounting["per_task_actor_growth"] = (
+        "outcome-dependent private actor/critic residual width"
+        if adaptive_behavior
+        else 0
+    )
+    if adaptive_behavior:
+        accounting["adaptive_behavior"] = {
+            "layout": aco.ac.adaptive_behavior_layout(),
+            "actor": aco.ac.actor.parameter_report(),
+            "critic": aco.ac.critic.parameter_report(),
+            "shared_bases_trainable": True,
+            "task_routes_explicit": True,
+        }
     accounting["transient_teacher"] = (
         {
             "persistent": False,
@@ -1345,6 +1435,28 @@ def _shared_actor_parameter_accounting(
         else None
     )
     return accounting
+
+
+def _active_actor_critic_parameter_accounting(
+    *,
+    config: Config,
+    aco: ActorCriticOpt,
+    actor_critic_bank,
+    shared_actor_teacher: Optional[torch.nn.Module],
+) -> dict:
+    """Account for the persistent behavior topology selected by the protocol."""
+
+    if actor_critic_bank is not None:
+        return _actor_critic_bank_parameter_accounting(actor_critic_bank)
+    if config.uses_shared_actor:
+        return _shared_actor_parameter_accounting(aco, shared_actor_teacher)
+    return _actor_critic_parameter_accounting(aco)
+
+
+def _write_json_atomically(path: Path, payload: Mapping[str, Any]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def _world_model_parameter_accounting(wm: WorldModel) -> dict:
@@ -1878,6 +1990,16 @@ def _actor_critic_kwargs(
         "residual_alpha": config.residual_alpha,
         "residual_input_mode": config.residual_input_mode,
         "residual_consolidation": config.residual_consolidation,
+        "adaptive_behavior_residuals": config.adaptive_behavior_residuals,
+        "adaptive_behavior_num_tasks": config.rssm_num_experts,
+        "adaptive_behavior_hidden_features": (
+            config.adaptive_behavior_hidden_features
+        ),
+        "adaptive_behavior_residual_scale": (
+            config.adaptive_behavior_residual_scale
+        ),
+        "adaptive_behavior_num_atoms": config.adaptive_behavior_num_atoms,
+        "adaptive_behavior_reuse": config.adaptive_behavior_reuse,
         "protect_residual_updates": protect_residual_updates,
         "feature_cache": feature_cache,
     }
@@ -2334,6 +2456,8 @@ def _evolving_memory_loss(
 
     if mechanism_output_scale < 0:
         raise ValueError("Mechanism-output distillation scale must be non-negative")
+    if hasattr(frozen_actor, "set_task_route"):
+        frozen_actor.set_task_route(task_id)
 
     actions, observations, rewards, continues, resets = batch
     cpu_state = torch.random.get_rng_state()
@@ -3134,6 +3258,9 @@ def _consolidate_evolving_shared_core(
 _ADAPTIVE_QFP_COMPRESSION_METHOD = (
     "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
 )
+_ADAPTIVE_QFP_AC_COMPRESSION_METHOD = (
+    "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow"
+)
 
 
 def _adaptive_compression_candidate_passes(
@@ -3255,12 +3382,18 @@ def _evaluate_adaptive_compression_task(
     *,
     config: Config,
     wm: WorldModel,
-    actor_critic_bank,
+    actor_critic_bank=None,
+    aco: Optional[ActorCriticOpt] = None,
     task_id: int,
     eval_env_fns,
     validation_seed: int,
 ) -> dict[str, float]:
-    task_aco = actor_critic_bank.get(task_id)
+    if (actor_critic_bank is None) == (aco is None):
+        raise ValueError(
+            "Adaptive Q/F/P evaluation requires exactly one behavior topology"
+        )
+    task_aco = actor_critic_bank.get(task_id) if actor_critic_bank is not None else aco
+    task_aco.ac.set_task_route(task_id)
     with _preserve_training_rng_state():
         scaled_mean, scaled_std = evaluate(
             config.n_sync,
@@ -3292,6 +3425,7 @@ def _compress_evolving_task_qfp(
     wm: WorldModel,
     replay_buffer,
     actor_critic_bank,
+    aco: Optional[ActorCriticOpt] = None,
     completed_task_id: int,
     eval_env_fns,
     validation_seed: int,
@@ -3312,10 +3446,15 @@ def _compress_evolving_task_qfp(
 
     from clworldmodel.continual import recursive_python_scalars
 
-    if config.continual_method != _ADAPTIVE_QFP_COMPRESSION_METHOD:
+    if config.continual_method not in {
+        _ADAPTIVE_QFP_COMPRESSION_METHOD,
+        _ADAPTIVE_QFP_AC_COMPRESSION_METHOD,
+    }:
         raise ValueError("Adaptive Q/F/P compression requires its named method")
-    if actor_critic_bank is None:
-        raise ValueError("Adaptive Q/F/P compression requires private Actor-Critics")
+    if (actor_critic_bank is None) == (aco is None):
+        raise ValueError(
+            "Adaptive Q/F/P compression requires exactly one behavior topology"
+        )
     if not 0 <= completed_task_id < len(config.esc.env_configs):
         raise ValueError("Completed task is outside the adaptive curriculum")
     if wm.rssm.task_mechanism_parameterization != "adaptive_dense_width":
@@ -3364,6 +3503,7 @@ def _compress_evolving_task_qfp(
                 config=config,
                 wm=dense_teacher,
                 actor_critic_bank=actor_critic_bank,
+                aco=aco,
                 task_id=completed_task_id,
                 eval_env_fns=eval_env_fns,
                 validation_seed=validation_seed,
@@ -3376,9 +3516,14 @@ def _compress_evolving_task_qfp(
                 if torch.cuda.is_available()
                 else None
             )
-            frozen_actor = copy.deepcopy(
-                actor_critic_bank.get(completed_task_id).ac.actor
-            ).eval()
+            source_aco = (
+                actor_critic_bank.get(completed_task_id)
+                if actor_critic_bank is not None
+                else aco
+            )
+            frozen_actor = copy.deepcopy(source_aco.ac.actor).eval()
+            if hasattr(frozen_actor, "set_task_route"):
+                frozen_actor.set_task_route(completed_task_id)
             frozen_actor.requires_grad_(False)
             for fraction in config.adaptive_compression_width_fractions:
                 # Equal update counts are not sufficient for a controlled width
@@ -3443,6 +3588,7 @@ def _compress_evolving_task_qfp(
                     config=config,
                     wm=wm,
                     actor_critic_bank=actor_critic_bank,
+                    aco=aco,
                     task_id=completed_task_id,
                     eval_env_fns=eval_env_fns,
                     validation_seed=validation_seed,
@@ -3576,6 +3722,516 @@ def _compress_evolving_task_qfp(
         "AdaptiveQFP/world_model_parameters_removed",
         artifact["world_model_parameters_removed"],
         global_step,
+    )
+    return artifact
+
+
+class _TaskLtdmReplayView:
+    """Expose one completed task's LTDM partition through Replay.minibatch.
+
+    Actor-Critic compression is an offline boundary phase.  Its imagined
+    trajectories may use real replay only to infer their initial latent state,
+    and this view prevents an accidental fallback to FIFO or another task.
+    """
+
+    def __init__(self, replay_buffer, task_id: int) -> None:
+        if task_id < 0:
+            raise ValueError("LTDM replay views require a non-negative task id")
+        self.replay_buffer = replay_buffer
+        self.task_id = int(task_id)
+
+    def minibatch(
+        self,
+        mb_t: int,
+        mb_n: int,
+        mb_device: str | torch.device = "cuda",
+        task_id: Optional[int] = None,
+    ):
+        if task_id is not None and int(task_id) != self.task_id:
+            raise ValueError(
+                "A completed-task LTDM view cannot serve another task route"
+            )
+        return self.replay_buffer.minibatch_for_task(
+            self.task_id,
+            mb_t,
+            mb_n,
+            source="ltdm",
+            mb_device=mb_device,
+        )
+
+
+def _adaptive_behavior_modules(
+    actor_critic: torch.nn.Module, task_id: int
+) -> dict[str, torch.nn.Module]:
+    if not getattr(actor_critic, "adaptive_behavior_residuals", False):
+        raise ValueError("Actor-Critic does not own adaptive behavior residuals")
+    modules: dict[str, torch.nn.Module] = {}
+    for name in ("actor", "critic"):
+        head = getattr(actor_critic, name)
+        modules[name] = head.mechanism_for(task_id)
+    return modules
+
+
+def _install_adaptive_behavior_modules(
+    actor_critic: torch.nn.Module,
+    task_id: int,
+    modules: Mapping[str, torch.nn.Module],
+) -> list[dict[str, Any]]:
+    if set(modules) != {"actor", "critic"}:
+        raise ValueError(
+            "Adaptive behavior replacement requires actor and critic residuals"
+        )
+    reference = next(actor_critic.parameters())
+    reports: list[dict[str, Any]] = []
+    for name in ("actor", "critic"):
+        head = getattr(actor_critic, name)
+        module = modules[name].to(device=reference.device, dtype=reference.dtype)
+        report = head.install_task_mechanism(task_id, module)
+        report["component"] = name
+        reports.append(report)
+    actor_critic.set_task_route(task_id)
+    return reports
+
+
+def _structured_adaptive_behavior_candidate(
+    *,
+    actor_critic: torch.nn.Module,
+    dense_teacher: torch.nn.Module,
+    task_id: int,
+    fraction: float,
+) -> tuple[list[dict[str, Any]], dict[str, torch.nn.Module]]:
+    from clworldmodel.models.mechanism_bank import ResidualMechanism
+
+    candidates: dict[str, torch.nn.Module] = {}
+    selection_reports: list[dict[str, Any]] = []
+    for name in ("actor", "critic"):
+        student_head = getattr(actor_critic, name)
+        teacher_head = getattr(dense_teacher, name)
+        source = teacher_head.mechanism_for(task_id)
+        if not isinstance(source, ResidualMechanism):
+            raise TypeError(
+                "Adaptive behavior compression teacher must own Dense residuals"
+            )
+        if source.hidden_features != student_head.hidden_features:
+            raise ValueError(
+                "Adaptive behavior compression must begin at the declared full width"
+            )
+        target_width = _adaptive_compression_target_width(
+            student_head.hidden_features,
+            fraction,
+            student_head.num_atoms,
+        )
+        candidate, selected = ResidualMechanism.structured_pruned_copy(
+            source, hidden_features=target_width
+        )
+        candidates[name] = candidate
+        selection_bytes = ",".join(str(index) for index in selected).encode("ascii")
+        selection_reports.append(
+            {
+                "component": name,
+                "dense_hidden_features": source.hidden_features,
+                "candidate_hidden_features": target_width,
+                "selected_channel_count": len(selected),
+                "selected_channel_sha256": hashlib.sha256(
+                    selection_bytes
+                ).hexdigest(),
+            }
+        )
+    install_reports = _install_adaptive_behavior_modules(
+        actor_critic, task_id, candidates
+    )
+    installed_by_name = {report["component"]: report for report in install_reports}
+    for report in selection_reports:
+        report.update(installed_by_name[report["component"]])
+    return selection_reports, _adaptive_behavior_modules(actor_critic, task_id)
+
+
+def _evaluate_adaptive_behavior_task(
+    *,
+    config: Config,
+    wm: WorldModel,
+    actor_critic: torch.nn.Module,
+    task_id: int,
+    eval_env_fns,
+    validation_seed: int,
+) -> dict[str, float]:
+    actor_critic.set_task_route(task_id)
+    with _preserve_training_rng_state():
+        scaled_mean, scaled_std = evaluate(
+            config.n_sync,
+            wm=wm,
+            ac=actor_critic,
+            env_fns=eval_env_fns,
+            env_repeat=config.env_repeat,
+            n_rollouts=config.adaptive_behavior_rollouts,
+            seed=validation_seed,
+            task_id=task_id,
+            deterministic_policy=True,
+        )
+    raw_mean, raw_std = _raw_return_statistics(
+        [config.esc.env_configs[task_id]],
+        [scaled_mean],
+        [scaled_std],
+    )
+    return {
+        "scaled_mean": float(scaled_mean),
+        "scaled_std": float(scaled_std),
+        "raw_mean": raw_mean[0],
+        "raw_std": raw_std[0],
+    }
+
+
+def _compress_evolving_task_actor_critic(
+    *,
+    config: Config,
+    wm: WorldModel,
+    aco: ActorCriticOpt,
+    replay_buffer,
+    completed_task_id: int,
+    eval_env_fns,
+    validation_seed: int,
+    epoch: int,
+    actor_critic_updates: int,
+    compression_updates_before: int,
+    log_dir: Path,
+    writer,
+    fused_adam: bool,
+) -> dict[str, Any]:
+    """Compress the completed task's Actor/Critic residuals behind a raw gate.
+
+    The shared MLP bases, older residuals, and reuse routes are frozen.  Every
+    fixed-width candidate is independently structured-pruned from the same
+    full-width post-task teacher, receives the same imagined-state
+    distillation budget, and is evaluated on one dedicated real-environment
+    cohort.  Failure of all candidates keeps the original Dense residuals.
+    """
+
+    from clworldmodel.continual import recursive_python_scalars
+
+    if config.continual_method != _ADAPTIVE_QFP_AC_COMPRESSION_METHOD:
+        raise ValueError("Adaptive Actor-Critic compression requires its named method")
+    if not config.uses_adaptive_behavior_compression:
+        raise ValueError("Adaptive Actor-Critic compression is not enabled")
+    if not 0 <= completed_task_id < len(config.esc.env_configs):
+        raise ValueError("Completed task is outside the adaptive curriculum")
+    if not getattr(aco.ac, "adaptive_behavior_residuals", False):
+        raise ValueError("Actor-Critic is not an adaptive residual topology")
+    if aco.slow_critic is not None:
+        raise ValueError(
+            "Adaptive Actor-Critic compression does not support a second slow "
+            "critic topology"
+        )
+
+    ac_was_training = aco.ac.training
+    wm_was_training = wm.training
+    dense_teacher = copy.deepcopy(aco.ac).eval()
+    dense_teacher.requires_grad_(False)
+    # Retain the actual objects so Dense fallback preserves their online Adam
+    # moments.  Candidates and the frozen teacher are separate copies.
+    dense_modules = _adaptive_behavior_modules(aco.ac, completed_task_id)
+    dense_layout = dense_teacher.adaptive_behavior_layout()
+    observed_dense_widths = {
+        name: widths[completed_task_id] for name, widths in dense_layout.items()
+    }
+    expected_dense_widths = {
+        "actor": config.adaptive_behavior_hidden_features,
+        "critic": config.adaptive_behavior_hidden_features,
+    }
+    if observed_dense_widths != expected_dense_widths:
+        raise ValueError(
+            "The just-completed Actor-Critic residuals were not acquired at full "
+            f"Dense width: {observed_dense_widths} != {expected_dense_widths}"
+        )
+
+    parameters_before = sum(parameter.numel() for parameter in aco.ac.parameters())
+    candidates: list[dict[str, Any]] = []
+    best_modules: dict[str, torch.nn.Module] | None = None
+    best_fraction = 1.0
+    best_evaluation: dict[str, float] | None = None
+    optimizer_updates = 0
+    imagined_states = 0
+    replay_view = _TaskLtdmReplayView(replay_buffer, completed_task_id)
+    try:
+        with _preserve_training_rng_state():
+            wm.eval()
+            aco.ac.eval()
+            dense_evaluation = _evaluate_adaptive_behavior_task(
+                config=config,
+                wm=wm,
+                actor_critic=dense_teacher,
+                task_id=completed_task_id,
+                eval_env_fns=eval_env_fns,
+                validation_seed=validation_seed,
+            )
+            candidate_python_state = random.getstate()
+            candidate_numpy_state = np.random.get_state()
+            candidate_torch_state = torch.random.get_rng_state()
+            candidate_cuda_states = (
+                torch.cuda.get_rng_state_all()
+                if torch.cuda.is_available()
+                else None
+            )
+            for fraction in config.adaptive_behavior_width_fractions:
+                random.setstate(candidate_python_state)
+                np.random.set_state(candidate_numpy_state)
+                _restore_sampling_rng(
+                    candidate_torch_state,
+                    candidate_cuda_states,
+                )
+                selection, installed = _structured_adaptive_behavior_candidate(
+                    actor_critic=aco.ac,
+                    dense_teacher=dense_teacher,
+                    task_id=completed_task_id,
+                    fraction=float(fraction),
+                )
+                aco.ac.requires_grad_(False)
+                trainable = [
+                    parameter
+                    for module in installed.values()
+                    for parameter in module.parameters()
+                ]
+                for parameter in trainable:
+                    parameter.requires_grad_(True)
+                optimizer = Adam(
+                    trainable,
+                    lr=config.adaptive_behavior_lr,
+                    fused=fused_adam,
+                )
+                actor_losses: list[float] = []
+                critic_losses: list[float] = []
+                total_losses: list[float] = []
+                for _ in range(config.adaptive_behavior_steps_per_candidate):
+                    with torch.no_grad():
+                        dense_teacher.set_task_route(completed_task_id)
+                        states, *_ = dream_rollout(
+                            wm,
+                            dense_teacher,
+                            replay_view,
+                            n_sync=config.mb_n_size,
+                            n_steps=config.ac_dream_steps,
+                            discount=config.ac_discount,
+                            lam=config.ac_lambda,
+                            n_ctx_frames=4,
+                            task_id=completed_task_id,
+                        )
+                        teacher_actor_logs = dense_teacher.actor(states).float()
+                        teacher_critic_logs = dense_teacher.critic(states).float()
+                    aco.ac.set_task_route(completed_task_id)
+                    optimizer.zero_grad(set_to_none=True)
+                    actor_loss = actor_policy_kl(
+                        aco.ac.actor, states, teacher_actor_logs
+                    )
+                    critic_loss = actor_policy_kl(
+                        aco.ac.critic, states, teacher_critic_logs
+                    )
+                    loss = (
+                        config.adaptive_behavior_actor_distill_scale * actor_loss
+                        + config.adaptive_behavior_critic_distill_scale * critic_loss
+                    )
+                    if not bool(torch.isfinite(loss).item()):
+                        raise FloatingPointError(
+                            "Adaptive Actor-Critic compression produced a "
+                            "non-finite distillation loss"
+                        )
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(trainable, config.ac_grad_clip)
+                    optimizer.step()
+                    optimizer_updates += 1
+                    imagined_states += int(states.shape[0] * states.shape[1])
+                    actor_losses.append(float(actor_loss.detach().float().cpu()))
+                    critic_losses.append(float(critic_loss.detach().float().cpu()))
+                    total_losses.append(float(loss.detach().float().cpu()))
+
+                aco.ac.eval()
+                evaluation = _evaluate_adaptive_behavior_task(
+                    config=config,
+                    wm=wm,
+                    actor_critic=aco.ac,
+                    task_id=completed_task_id,
+                    eval_env_fns=eval_env_fns,
+                    validation_seed=validation_seed,
+                )
+                relative_drop = (
+                    dense_evaluation["raw_mean"] - evaluation["raw_mean"]
+                ) / max(abs(dense_evaluation["raw_mean"]), 1.0)
+                passed = _adaptive_compression_candidate_passes(
+                    teacher_return=dense_evaluation["raw_mean"],
+                    candidate_return=evaluation["raw_mean"],
+                    maximum_relative_drop=(
+                        config.adaptive_behavior_max_return_drop
+                    ),
+                )
+                candidates.append(
+                    {
+                        "width_fraction": float(fraction),
+                        "components": selection,
+                        "optimizer_updates": len(total_losses),
+                        "imagined_states": int(
+                            len(total_losses)
+                            * config.mb_n_size
+                            * config.ac_dream_steps
+                        ),
+                        "actor_kl_mean": float(np.mean(actor_losses)),
+                        "actor_kl_first": actor_losses[0],
+                        "actor_kl_last": actor_losses[-1],
+                        "critic_categorical_kl_mean": float(
+                            np.mean(critic_losses)
+                        ),
+                        "critic_categorical_kl_first": critic_losses[0],
+                        "critic_categorical_kl_last": critic_losses[-1],
+                        "distillation_loss_mean": float(np.mean(total_losses)),
+                        "validation": evaluation,
+                        "relative_raw_return_drop": relative_drop,
+                        "passed": passed,
+                        "actor_critic_parameters": sum(
+                            parameter.numel()
+                            for parameter in aco.ac.parameters()
+                        ),
+                    }
+                )
+                if passed:
+                    best_modules = {
+                        name: copy.deepcopy(module)
+                        for name, module in _adaptive_behavior_modules(
+                            aco.ac, completed_task_id
+                        ).items()
+                    }
+                    best_fraction = float(fraction)
+                    best_evaluation = evaluation
+
+            expected_optimizer_updates = (
+                len(config.adaptive_behavior_width_fractions)
+                * config.adaptive_behavior_steps_per_candidate
+            )
+            expected_imagined_states = (
+                expected_optimizer_updates
+                * config.mb_n_size
+                * config.ac_dream_steps
+            )
+            if optimizer_updates != expected_optimizer_updates:
+                raise RuntimeError(
+                    "Adaptive Actor-Critic compression did not execute its fixed "
+                    f"candidate budget: {optimizer_updates} != "
+                    f"{expected_optimizer_updates}"
+                )
+            if imagined_states != expected_imagined_states:
+                raise RuntimeError(
+                    "Adaptive Actor-Critic compression imagined-state accounting "
+                    f"changed: {imagined_states} != {expected_imagined_states}"
+                )
+            selected_modules = (
+                dense_modules if best_modules is None else best_modules
+            )
+            _install_adaptive_behavior_modules(
+                aco.ac, completed_task_id, selected_modules
+            )
+        selected_evaluation = (
+            dense_evaluation if best_evaluation is None else best_evaluation
+        )
+        selected_layout = aco.ac.adaptive_behavior_layout()
+        parameters_after = sum(
+            parameter.numel() for parameter in aco.ac.parameters()
+        )
+    except Exception:
+        _install_adaptive_behavior_modules(
+            aco.ac, completed_task_id, dense_modules
+        )
+        raise
+    finally:
+        aco.ac.train(ac_was_training)
+        wm.train(wm_was_training)
+        # Nothing is optimized between this boundary and the next task
+        # activation.  Keep the completed residual genuinely frozen; the next
+        # epoch's ``activate_training_task`` reopens only its new route.
+        aco.ac.requires_grad_(False)
+        aco.ac.set_task_route(completed_task_id)
+        _refresh_actor_critic_optimizer_parameters(aco)
+
+    artifact = recursive_python_scalars(
+        {
+            "schema_version": 1,
+            "artifact_kind": (
+                "evolving_core_return_gated_actor_critic_residual_compression"
+            ),
+            "method": config.continual_method,
+            "epoch": epoch,
+            "completed_epochs": epoch + 1,
+            "completed_task_id": completed_task_id,
+            "online_actor_critic_update_count": actor_critic_updates,
+            "behavior_compression_update_start": compression_updates_before,
+            "behavior_compression_update_stop": (
+                compression_updates_before + optimizer_updates
+            ),
+            "optimizer_updates": optimizer_updates,
+            "expected_optimizer_updates": (
+                len(config.adaptive_behavior_width_fractions)
+                * config.adaptive_behavior_steps_per_candidate
+            ),
+            "imagined_states": imagined_states,
+            "expected_imagined_states": (
+                len(config.adaptive_behavior_width_fractions)
+                * config.adaptive_behavior_steps_per_candidate
+                * config.mb_n_size
+                * config.ac_dream_steps
+            ),
+            "candidate_compute_is_fixed": True,
+            "candidate_sampling_stream": (
+                "identical restored Python/NumPy/torch state for every width"
+            ),
+            "candidate_initialization": (
+                "independent structured channel pruning from one frozen full-width "
+                "post-task Actor-Critic residual teacher"
+            ),
+            "shared_actor_critic_bases_frozen_during_compression": True,
+            "older_task_residuals_and_routes_frozen_during_compression": True,
+            "recovery_state_context": "completed-task LTDM only",
+            "recovery_context_frames": 4,
+            "recovery_sequences_per_update": config.mb_n_size,
+            "dream_steps_per_update": config.ac_dream_steps,
+            "learning_rate": config.adaptive_behavior_lr,
+            "actor_policy_kl_scale": (
+                config.adaptive_behavior_actor_distill_scale
+            ),
+            "critic_categorical_kl_scale": (
+                config.adaptive_behavior_critic_distill_scale
+            ),
+            "seed_cohort": "fixed_behavior_pruning_validation",
+            "validation_seed": validation_seed,
+            "rollouts_per_evaluation": config.adaptive_behavior_rollouts,
+            "dense_teacher_validation": dense_evaluation,
+            "maximum_relative_raw_return_drop": (
+                config.adaptive_behavior_max_return_drop
+            ),
+            "candidates": candidates,
+            "selected_width_fraction": best_fraction,
+            "selected_dense_fallback": best_modules is None,
+            "selected_validation": selected_evaluation,
+            "dense_layout": dense_layout,
+            "selected_layout": selected_layout,
+            "actor_critic_parameters_before": parameters_before,
+            "actor_critic_parameters_after": parameters_after,
+            "actor_critic_parameters_removed": parameters_before - parameters_after,
+            "training_only_dense_teacher_discarded": True,
+            "completed_task_residual_frozen_after_boundary": True,
+            "evaluation_transitions_enter_replay": False,
+            "heldout_final_data_used": False,
+        }
+    )
+    output_dir = log_dir / "adaptive_behavior_compression"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"task_{completed_task_id:02d}_boundary.json"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    writer.add_scalar(
+        "AdaptiveBehavior/selected_width_fraction",
+        best_fraction,
+        actor_critic_updates,
+    )
+    writer.add_scalar(
+        "AdaptiveBehavior/actor_critic_parameters_removed",
+        artifact["actor_critic_parameters_removed"],
+        actor_critic_updates,
     )
     return artifact
 
@@ -4186,6 +4842,7 @@ if __name__ == "__main__":
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -4376,6 +5033,7 @@ if __name__ == "__main__":
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
     }:
@@ -4389,13 +5047,22 @@ if __name__ == "__main__":
         private_topology = (
             "projector_qfp_low_rank_prediction_adapters_actor_critic"
             if config.task_private_prediction_adapters
+            else "projector_dense_acquire_return_gated_compact_qfp_and_behavior"
+            if config.uses_adaptive_behavior_compression
             else "projector_dense_acquire_return_gated_compact_qfp_actor_critic"
             if config.uses_adaptive_qfp_compression
             else "projector_qfp_atoms_actor_critic"
         )
+        behavior_topology = (
+            "single_shared_mlp_plus_task_adaptive_residuals"
+            if config.uses_adaptive_behavior_compression
+            else "single_shared_fastkan_stable"
+            if config.uses_replay_rehearsed_shared_behavior
+            else "per_task_mlp_bank"
+        )
         print(
             "Evolving-Core Atomic RSSM routing: "
-            f"tasks={config.rssm_num_experts} actor_bank=per_task "
+            f"tasks={config.rssm_num_experts} behavior={behavior_topology} "
             "base=continually_updated_shared_cnn_rssm "
             f"prediction_heads={prediction_topology} "
             f"private={private_topology} "
@@ -4435,7 +5102,9 @@ if __name__ == "__main__":
         )
     elif config.uses_evolving_atomic_rssm:
         behavior_topology = (
-            "single_shared_fastkan_stable"
+            "single_shared_mlp_plus_task_adaptive_residuals"
+            if config.uses_adaptive_behavior_compression
+            else "single_shared_fastkan_stable"
             if config.uses_replay_rehearsed_shared_behavior
             else "per_task_mlp_bank"
         )
@@ -4530,6 +5199,13 @@ if __name__ == "__main__":
             config.seed, len(config.esc.env_configs)
         )
         if config.uses_adaptive_qfp_compression
+        else ()
+    )
+    behavior_compression_validation_task_seeds = (
+        _adaptive_behavior_compression_task_seeds(
+            config.seed, len(config.esc.env_configs)
+        )
+        if config.uses_adaptive_behavior_compression
         else ()
     )
     print("Training with seed: ", config.seed)
@@ -4712,6 +5388,7 @@ if __name__ == "__main__":
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -5061,6 +5738,22 @@ if __name__ == "__main__":
             evaluation_seed_manifest["final_evaluation"][
                 "used_for_adaptive_width_selection"
             ] = False
+        if config.uses_adaptive_behavior_compression:
+            evaluation_seed_manifest["adaptive_behavior_validation"] = {
+                "task_base_seeds": list(
+                    behavior_compression_validation_task_seeds
+                ),
+                "seed_sequence_spawn_index": 4,
+                "reused_for_dense_teacher_and_every_candidate": True,
+                "rollouts_per_condition": config.adaptive_behavior_rollouts,
+                "used_for_actor_critic_width_selection": True,
+                "disjoint_from_periodic_final_and_qfp_seed_domains": True,
+                "training_rng_state_restored": True,
+                "evaluation_transitions_enter_replay": False,
+            }
+            evaluation_seed_manifest["final_evaluation"][
+                "used_for_actor_critic_width_selection"
+            ] = False
         evaluation_seed_path = log_dir / "evaluation_seed_manifest.json"
         temporary_evaluation_seed_path = evaluation_seed_path.with_suffix(
             ".json.tmp"
@@ -5172,6 +5865,7 @@ if __name__ == "__main__":
         "burnin_state_uses": 0,
     }
     shared_behavior_replay_updates: dict[int, int] = {}
+    adaptive_behavior_compression_updates = 0
     profile_stages = args.profile_stages and distributed_context.is_primary
 
     
@@ -5251,6 +5945,7 @@ if __name__ == "__main__":
                         "Refreshed the one transient shared-actor teacher before "
                         f"task {current_task_id}; old routes={tuple(range(current_task_id))}"
                     )
+                aco.ac.activate_training_task(current_task_id)
                 wm.activate_task_expert(current_task_id)
             elif current_task_id not in actor_critic_bank:
                 if warm_start_from is not None:
@@ -5873,6 +6568,16 @@ if __name__ == "__main__":
             "residual_alpha": config.residual_alpha,
             "residual_input_mode": config.residual_input_mode,
             "residual_consolidation": config.residual_consolidation,
+            "adaptive_behavior_residuals": config.adaptive_behavior_residuals,
+            "adaptive_behavior_num_tasks": config.rssm_num_experts,
+            "adaptive_behavior_hidden_features": (
+                config.adaptive_behavior_hidden_features
+            ),
+            "adaptive_behavior_residual_scale": (
+                config.adaptive_behavior_residual_scale
+            ),
+            "adaptive_behavior_num_atoms": config.adaptive_behavior_num_atoms,
+            "adaptive_behavior_reuse": config.adaptive_behavior_reuse,
             "protect_residual_updates": (
                 shared_core_frozen
                 and config.residual_consolidation == "replay_functional"
@@ -5892,14 +6597,14 @@ if __name__ == "__main__":
                 or shared_behavior_update_rng is None
             ):
                 raise RuntimeError(
-                    "Shared FastKAN replay rehearsal requires an active route and "
+                    "Shared behavior replay rehearsal requires an active route and "
                     "actor-critic plus its independent schedule RNG"
                 )
             replay_task_ids = replay.available_task_ids()
             expected_replay_task_ids = tuple(range(current_task_id + 1))
             if replay_task_ids != expected_replay_task_ids:
                 raise RuntimeError(
-                    "Shared FastKAN fixed-budget rehearsal requires Replay coverage "
+                    "Shared behavior fixed-budget rehearsal requires Replay coverage "
                     "for every seen task route: "
                     f"available={replay_task_ids}, expected={expected_replay_task_ids}"
                 )
@@ -5914,9 +6619,14 @@ if __name__ == "__main__":
             behavior_schedule = shuffled_task_schedule(
                 behavior_allocation, shared_behavior_update_rng
             )
+            behavior_metric_namespace = (
+                "EvolvingCoreAdaptiveBehavior"
+                if config.uses_adaptive_behavior_compression
+                else "EvolvingCoreSharedFastKAN"
+            )
             for task_id, task_steps in behavior_allocation.items():
                 writer.add_scalar(
-                    f"EvolvingCoreSharedFastKAN/actor_critic_updates_task_{task_id}",
+                    f"{behavior_metric_namespace}/actor_critic_updates_task_{task_id}",
                     task_steps,
                     (epoch + 1) * config.ac_train_steps,
                 )
@@ -5931,6 +6641,11 @@ if __name__ == "__main__":
                 aco=aco,
                 lr=scheduled_ac_lr,
                 task_id_schedule=behavior_schedule,
+                training_task_id=(
+                    current_task_id
+                    if config.uses_adaptive_behavior_compression
+                    else None
+                ),
                 **actor_critic_kwargs,
             )
         elif config.uses_shared_actor:
@@ -6083,23 +6798,13 @@ if __name__ == "__main__":
             or config.uses_shared_actor
             or not actor_accounting_path.exists()
         ):
-            temporary_actor_accounting_path = actor_accounting_path.with_suffix(
-                ".json.tmp"
+            actor_accounting = _active_actor_critic_parameter_accounting(
+                config=config,
+                aco=aco,
+                actor_critic_bank=actor_critic_bank,
+                shared_actor_teacher=shared_actor_teacher,
             )
-            actor_accounting = (
-                _actor_critic_bank_parameter_accounting(actor_critic_bank)
-                if actor_critic_bank is not None
-                else _shared_actor_parameter_accounting(
-                    aco, shared_actor_teacher
-                )
-                if config.uses_shared_actor
-                else _actor_critic_parameter_accounting(aco)
-            )
-            temporary_actor_accounting_path.write_text(
-                json.dumps(actor_accounting, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            os.replace(temporary_actor_accounting_path, actor_accounting_path)
+            _write_json_atomically(actor_accounting_path, actor_accounting)
             if config.uses_replay_rehearsed_shared_behavior:
                 replay_accounting = {
                     "schema_version": 1,
@@ -6107,7 +6812,11 @@ if __name__ == "__main__":
                         "evolving_core_shared_behavior_replay_accounting"
                     ),
                     "method": config.continual_method,
-                    "topology": "single_shared_fastkan_actor_critic",
+                    "topology": (
+                        "single_shared_mlp_plus_task_adaptive_residuals"
+                        if config.uses_adaptive_behavior_compression
+                        else "single_shared_fastkan_actor_critic"
+                    ),
                     "fixed_optimizer_updates_per_epoch": config.ac_train_steps,
                     "optimizer_updates_are_extra": False,
                     "current_task_fraction_when_old_tasks_exist": (
@@ -6223,7 +6932,7 @@ if __name__ == "__main__":
                     or shared_behavior_update_rng is None
                 ):
                     raise RuntimeError(
-                        "Shared FastKAN boundary requires one actor-critic and its "
+                        "Shared behavior boundary requires one actor-critic and its "
                         "route-schedule RNG"
                     )
             elif actor_critic_bank is None:
@@ -6264,6 +6973,9 @@ if __name__ == "__main__":
                 current_task_id=completed_task_id,
                 world_model_updates=global_step,
                 actor_critic_updates=actor_critic_updates,
+                adaptive_behavior_compression_updates=(
+                    adaptive_behavior_compression_updates
+                ),
                 total_env_steps=total_env_steps,
                 task_update_rng=task_update_rng,
                 collection_environment_seed_rng=collection_environment_seed_rng,
@@ -6341,6 +7053,11 @@ if __name__ == "__main__":
                         wm=wm,
                         replay_buffer=replay,
                         actor_critic_bank=actor_critic_bank,
+                        aco=(
+                            aco
+                            if config.uses_adaptive_behavior_compression
+                            else None
+                        ),
                         completed_task_id=completed_task_id,
                         eval_env_fns=envs.eval_funcs()[completed_task_id],
                         validation_seed=(
@@ -6404,6 +7121,104 @@ if __name__ == "__main__":
                     f"dense_fallback={compression['selected_dense_fallback']} "
                     f"layout={compression['selected_layout']}"
                 )
+            if config.uses_adaptive_behavior_compression:
+                if aco is None:
+                    raise RuntimeError(
+                        "Adaptive behavior compression requires its shared "
+                        "Actor-Critic"
+                    )
+                behavior_dense_state = copy.deepcopy(
+                    _actor_critic_opt_resumable_state_dict(aco)
+                )
+                try:
+                    behavior_compression = _compress_evolving_task_actor_critic(
+                        config=config,
+                        wm=wm,
+                        aco=aco,
+                        replay_buffer=replay,
+                        completed_task_id=completed_task_id,
+                        eval_env_fns=envs.eval_funcs()[completed_task_id],
+                        validation_seed=(
+                            behavior_compression_validation_task_seeds[
+                                completed_task_id
+                            ]
+                        ),
+                        epoch=epoch,
+                        actor_critic_updates=actor_critic_updates,
+                        compression_updates_before=(
+                            adaptive_behavior_compression_updates
+                        ),
+                        log_dir=log_dir,
+                        writer=writer,
+                        fused_adam=args.fused_adam,
+                    )
+                except Exception as exc:
+                    _load_actor_critic_opt_resumable_state_dict(
+                        aco, behavior_dense_state
+                    )
+                    aco.ac.set_task_route(completed_task_id)
+                    failure = {
+                        "schema_version": 1,
+                        "artifact_kind": (
+                            "adaptive_actor_critic_compression_failure"
+                        ),
+                        "task_id": completed_task_id,
+                        "exception_type": type(exc).__name__,
+                        "message": str(exc),
+                        "pre_consolidation_checkpoint": str(pre_checkpoint),
+                        "dense_topology_and_optimizer_restored_before_failure": True,
+                        "training_stopped": True,
+                        "final_heldout_data_used": False,
+                    }
+                    failure_dir = log_dir / "adaptive_behavior_compression"
+                    failure_dir.mkdir(parents=True, exist_ok=True)
+                    failure_path = failure_dir / (
+                        f"task_{completed_task_id:02d}_failure.json"
+                    )
+                    temporary_failure = failure_path.with_suffix(".json.tmp")
+                    temporary_failure.write_text(
+                        json.dumps(failure, indent=2) + "\n", encoding="utf-8"
+                    )
+                    os.replace(temporary_failure, failure_path)
+                    raise
+                adaptive_behavior_compression_updates += int(
+                    behavior_compression["optimizer_updates"]
+                )
+                behavior_dense_state = None
+                writer.add_scalar(
+                    "Counters/adaptive_behavior_compression_updates",
+                    adaptive_behavior_compression_updates,
+                    actor_critic_updates,
+                )
+                print(
+                    "Compressed completed task Actor/Critic residuals after "
+                    "Dense acquisition: "
+                    f"task={completed_task_id} "
+                    "selected_fraction="
+                    f"{behavior_compression['selected_width_fraction']} "
+                    "dense_fallback="
+                    f"{behavior_compression['selected_dense_fallback']} "
+                    f"layout={behavior_compression['selected_layout']}"
+                )
+            # The per-epoch artifacts above describe the full-width acquisition
+            # topology. Rewrite them after both selectors so the boundary (and,
+            # for the last task, final) ledger describes the modules that are
+            # actually retained online rather than a stale pre-pruning count.
+            if distributed_context.is_primary:
+                if wm.rssm.task_mechanism_bank_enabled:
+                    _write_json_atomically(
+                        log_dir / "model_parameter_accounting.json",
+                        _world_model_parameter_accounting(wm),
+                    )
+                _write_json_atomically(
+                    actor_accounting_path,
+                    _active_actor_critic_parameter_accounting(
+                        config=config,
+                        aco=aco,
+                        actor_critic_bank=actor_critic_bank,
+                        shared_actor_teacher=shared_actor_teacher,
+                    ),
+                )
             boundary_teacher = copy.deepcopy(wm).eval()
             boundary_teacher.requires_grad_(False)
             post_checkpoint = checkpoint_dir / (
@@ -6437,6 +7252,9 @@ if __name__ == "__main__":
                 current_task_id=completed_task_id,
                 world_model_updates=global_step,
                 actor_critic_updates=actor_critic_updates,
+                adaptive_behavior_compression_updates=(
+                    adaptive_behavior_compression_updates
+                ),
                 total_env_steps=total_env_steps,
                 task_update_rng=task_update_rng,
                 collection_environment_seed_rng=collection_environment_seed_rng,
@@ -6509,17 +7327,19 @@ if __name__ == "__main__":
                 )
             if wm.rssm.task_mechanism_bank_enabled:
                 final_accounting_path = log_dir / "model_parameter_accounting.json"
-                temporary_final_accounting_path = final_accounting_path.with_suffix(
-                    ".json.tmp"
-                )
-                temporary_final_accounting_path.write_text(
-                    json.dumps(_world_model_parameter_accounting(wm), indent=2) + "\n",
-                    encoding="utf-8",
-                )
-                os.replace(
-                    temporary_final_accounting_path,
+                _write_json_atomically(
                     final_accounting_path,
+                    _world_model_parameter_accounting(wm),
                 )
+            _write_json_atomically(
+                actor_accounting_path,
+                _active_actor_critic_parameter_accounting(
+                    config=config,
+                    aco=aco,
+                    actor_critic_bank=actor_critic_bank,
+                    shared_actor_teacher=shared_actor_teacher,
+                ),
+            )
 
         if (
             distributed_context.is_primary

@@ -7,7 +7,9 @@ memory update, interface losses, component gradient projection, and all three
 world-model optimizer classes. The shared-FastKAN profile additionally performs
 one old-route and one current-route update on the single Actor-Critic. The
 adaptive-Q/F/P profile physically compacts one task, takes a recovery step, and
-strictly reloads the heterogeneous state dict.
+strictly reloads the heterogeneous state dict. The adaptive-Q/F/P+Actor-Critic
+profile also compacts both behavior residual heads and verifies their
+optimizer-aware round trip.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ import train  # noqa: E402
 from wm import WorldModel  # noqa: E402
 
 from run_evolving_atomic_rssm import (  # noqa: E402
+    ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
     BEHAVIOR_PROFILES,
     COMPACT_MECHANISM_PROFILE,
     DEFAULT_MECHANISM_PROFILE,
@@ -59,10 +62,12 @@ from run_evolving_atomic_lora_shared_heads import (  # noqa: E402
 LEGACY_METHOD_PROFILE = "legacy"
 ATOMIC_LORA_SHARED_HEADS_PROFILE = "atomic_lora_shared_heads"
 ADAPTIVE_QFP_COMPRESSION_PROFILE = "adaptive_qfp_compression"
+ADAPTIVE_QFP_AC_COMPRESSION_PROFILE = "adaptive_qfp_ac_compression"
 METHOD_PROFILES = (
     LEGACY_METHOD_PROFILE,
     ATOMIC_LORA_SHARED_HEADS_PROFILE,
     ADAPTIVE_QFP_COMPRESSION_PROFILE,
+    ADAPTIVE_QFP_AC_COMPRESSION_PROFILE,
 )
 
 
@@ -133,7 +138,10 @@ def _config(
                 "The atomic-LoRA shared-head smoke fixes all legacy profile selectors"
             )
         return Config.from_dict(_atomic_lora_shared_heads_config(source))
-    if method_profile == ADAPTIVE_QFP_COMPRESSION_PROFILE:
+    if method_profile in {
+        ADAPTIVE_QFP_COMPRESSION_PROFILE,
+        ADAPTIVE_QFP_AC_COMPRESSION_PROFILE,
+    }:
         if (
             mechanism_profile != DEFAULT_MECHANISM_PROFILE
             or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
@@ -141,13 +149,18 @@ def _config(
             or prediction_head_profile != PRIVATE_PREDICTION_HEADS_PROFILE
         ):
             raise ValueError(
-                "The adaptive-Q/F/P smoke fixes all legacy profile selectors"
+                "The adaptive-compression smoke fixes all legacy profile selectors"
             )
+        adaptive_behavior = (
+            ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
+            if method_profile == ADAPTIVE_QFP_AC_COMPRESSION_PROFILE
+            else PRIVATE_MLP_BEHAVIOR
+        )
         return Config.from_dict(
             _resolved_config(
                 source,
                 task_order="arrow-original-six",
-                behavior_profile=PRIVATE_MLP_BEHAVIOR,
+                behavior_profile=adaptive_behavior,
                 prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
                 adaptive_qfp_compression=True,
             )
@@ -439,6 +452,9 @@ def main() -> int:
             aco=shared_aco,
             lr=config.ac_lr,
             task_id_schedule=(0, 1),
+            training_task_id=(
+                1 if config.uses_adaptive_behavior_compression else None
+            ),
             **train._actor_critic_kwargs(
                 config,
                 feature_cache=None,
@@ -525,6 +541,114 @@ def main() -> int:
             "state_dict_dynamic_topology_round_trip": True,
         }
 
+    adaptive_behavior_compression_smoke = None
+    if config.uses_adaptive_behavior_compression:
+        if shared_aco is None:
+            raise RuntimeError(
+                "Adaptive behavior smoke requires one shared Actor-Critic"
+            )
+        dense_behavior_teacher = copy.deepcopy(shared_aco.ac).eval()
+        dense_behavior_teacher.requires_grad_(False)
+        dense_behavior_parameter_count = sum(
+            parameter.numel() for parameter in shared_aco.ac.parameters()
+        )
+        behavior_selection, installed_behavior = (
+            train._structured_adaptive_behavior_candidate(
+                actor_critic=shared_aco.ac,
+                dense_teacher=dense_behavior_teacher,
+                task_id=1,
+                fraction=config.adaptive_behavior_width_fractions[0],
+            )
+        )
+        shared_aco.ac.requires_grad_(False)
+        compact_behavior_parameters = [
+            parameter
+            for module in installed_behavior.values()
+            for parameter in module.parameters()
+        ]
+        for parameter in compact_behavior_parameters:
+            parameter.requires_grad_(True)
+        behavior_optimizer = torch.optim.Adam(
+            compact_behavior_parameters,
+            lr=config.adaptive_behavior_lr,
+            fused=True,
+        )
+        states = torch.randn(
+            2,
+            config.mb_n_size,
+            world_model.zh_transform.out_features,
+            device=device,
+        )
+        dense_behavior_teacher.set_task_route(1)
+        with torch.no_grad():
+            teacher_actor_logs = dense_behavior_teacher.actor(states).float()
+            teacher_critic_logs = dense_behavior_teacher.critic(states).float()
+        shared_aco.ac.set_task_route(1)
+        behavior_optimizer.zero_grad(set_to_none=True)
+        behavior_actor_loss = train.actor_policy_kl(
+            shared_aco.ac.actor, states, teacher_actor_logs
+        )
+        behavior_critic_loss = train.actor_policy_kl(
+            shared_aco.ac.critic, states, teacher_critic_logs
+        )
+        behavior_loss = (
+            config.adaptive_behavior_actor_distill_scale * behavior_actor_loss
+            + config.adaptive_behavior_critic_distill_scale
+            * behavior_critic_loss
+        )
+        if not bool(torch.isfinite(behavior_loss).item()):
+            raise FloatingPointError(
+                "Adaptive Actor-Critic smoke loss is non-finite"
+            )
+        behavior_loss.backward()
+        behavior_optimizer.step()
+
+        train._refresh_actor_critic_optimizer_parameters(shared_aco)
+        compact_behavior_parameter_count = sum(
+            parameter.numel() for parameter in shared_aco.ac.parameters()
+        )
+        behavior_state = copy.deepcopy(
+            train._actor_critic_opt_resumable_state_dict(shared_aco)
+        )
+        restored_aco = train.build_actor_critic_opt(
+            world_model,
+            lr=config.ac_lr,
+            **train._actor_critic_constructor_kwargs(config),
+        )
+        train._load_actor_critic_opt_resumable_state_dict(
+            restored_aco, behavior_state
+        )
+        expected_behavior_layout = shared_aco.ac.adaptive_behavior_layout()
+        if restored_aco.ac.adaptive_behavior_layout() != expected_behavior_layout:
+            raise RuntimeError(
+                "Adaptive Actor-Critic state-dict topology did not rebuild"
+            )
+        shared_aco.ac.set_task_route(1)
+        restored_aco.ac.set_task_route(1)
+        expected_behavior_outputs = shared_aco.ac(states)
+        actual_behavior_outputs = restored_aco.ac(states)
+        torch.testing.assert_close(
+            actual_behavior_outputs[0], expected_behavior_outputs[0]
+        )
+        torch.testing.assert_close(
+            actual_behavior_outputs[1], expected_behavior_outputs[1]
+        )
+        adaptive_behavior_compression_smoke = {
+            "task_id": 1,
+            "width_fraction": config.adaptive_behavior_width_fractions[0],
+            "selection": behavior_selection,
+            "layout": expected_behavior_layout,
+            "actor_kl": float(behavior_actor_loss.detach().cpu()),
+            "critic_categorical_kl": float(
+                behavior_critic_loss.detach().cpu()
+            ),
+            "optimizer_step": _optimizer_step(behavior_optimizer),
+            "behavior_parameters_before": dense_behavior_parameter_count,
+            "behavior_parameters_after": compact_behavior_parameter_count,
+            "state_dict_dynamic_topology_round_trip": True,
+            "optimizer_state_round_trip": True,
+        }
+
     result = {
         "schema_version": 1,
         "classification": "smoke",
@@ -533,9 +657,17 @@ def main() -> int:
         "device": str(device),
         "gpu": torch.cuda.get_device_name(device),
         "compute_dtype": config.compute_dtype,
-        "behavior_profile": args.behavior_profile,
+        "behavior_profile": (
+            ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
+            if config.uses_adaptive_behavior_compression
+            else args.behavior_profile
+        ),
         "method_profile": args.method_profile,
-        "prediction_head_profile": args.prediction_head_profile,
+        "prediction_head_profile": (
+            SHARED_DISTILLED_HEADS_PROFILE
+            if config.uses_shared_prediction_heads
+            else args.prediction_head_profile
+        ),
         "mechanism_profile": config.task_mechanism_capacity_profile,
         "mechanism_parameterization": config.task_mechanism_parameterization,
         "mechanism_widths": [
@@ -563,6 +695,9 @@ def main() -> int:
         ),
         "shared_behavior_metrics": behavior_metrics,
         "adaptive_compression_smoke": adaptive_compression_smoke,
+        "adaptive_behavior_compression_smoke": (
+            adaptive_behavior_compression_smoke
+        ),
         "peak_cuda_memory_bytes": torch.cuda.max_memory_allocated(device),
     }
     print(json.dumps(result, indent=2))

@@ -594,6 +594,32 @@ accepts the smallest width. Compression adds 6,000 explicitly budgeted
 world-model updates; it is not a compute-matched A result. See
 `docs/protocols/evolving_core_dense_acquire_adaptive_qfp_compression_v1_atari.md`.
 
+The separately named adaptive shared-behavior profile applies the same
+acquire-wide/return-gated-compress rule to Actor and Critic. It stores one
+shared MLP Actor/Critic base pair and a routed residual pair per task; online
+updates rehearse shared bases on a fixed 75% current/25% old-task split. At
+each boundary, all residual candidates `384/256/128/64` receive equal imagined
+LTDM distillation compute before a separate raw-return cohort selects the
+smallest acceptable pair with Dense fallback:
+
+```bash
+python scripts/run_evolving_atomic_rssm.py \
+  --task-order arrow-original-six \
+  --prediction-head-profile shared_distilled \
+  --adaptive-qfp-compression \
+  --behavior-profile shared_adaptive_residual_mlp \
+  --seed 0 \
+  --classification pilot \
+  --dry-run
+```
+
+Behavior parameters are outcome dependent from `12,036,591` (all Dense
+fallback) to `3,039,855` (all width 64). Joint online parameters range from
+`54,638,216` to `25,679,048`; the upper bound is slightly larger than D, so
+compression is measured rather than promised. The extra 6,000 behavior
+compression updates and 480 selector rollouts are explicit. See
+`docs/protocols/evolving_core_adaptive_qfp_ac_compression_v1_atari.md`.
+
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control
 and tests 120, 150, 180, and 240 MsPacman epochs on the spare GPUs:

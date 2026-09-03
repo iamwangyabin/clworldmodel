@@ -244,6 +244,9 @@ def generate_trajectories(
     # `target_terminals` if not None, forces at least some number of environment resets
     # (not including initial resets)
 
+    if ac is not None and task_id is not None:
+        ac.set_task_route(task_id)
+
     class DummyList(list):
         def append(self, __object: Any) -> None:
             return

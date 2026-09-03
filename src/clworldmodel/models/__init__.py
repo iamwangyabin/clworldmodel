@@ -1,5 +1,6 @@
 """Research model building blocks."""
 
+from .adaptive_behavior import TaskRoutedResidualCategoricalHead
 from .fast_kan import (
     FastKAN,
     FastKANActor,
@@ -29,6 +30,7 @@ from .relu_kan import (
 
 __all__ = [
     "AdaptiveReLUKANActor",
+    "TaskRoutedResidualCategoricalHead",
     "FastKAN",
     "FastKANActor",
     "FastKANCritic",
