@@ -87,6 +87,7 @@ EvaluationSeedProtocol = Literal[
 ]
 ComputeDType = Literal["float32", "bfloat16"]
 ReplayObservationDType = Literal["float32", "uint8"]
+EnvironmentFamily = Literal["atari", "minigrid"]
 DataParallelWorldSize = Literal[1, 2, 4]
 EvolvingTask0Profile = Literal[
     "fixed_v1",
@@ -159,8 +160,27 @@ class EnvConfig(Serialisable):
     name: str
     kwargs: dict[str, Any] = field(default_factory=dict)
     rew_scale: float = 1
+    family: EnvironmentFamily = "atari"
+
+    def __post_init__(self) -> None:
+        if self.family not in {"atari", "minigrid"}:
+            raise ValueError(f"Unknown environment family: {self.family!r}")
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        # Preserve the exact serialized form of every historical Atari config.
+        if self.family == "atari":
+            data.pop("family")
+        return data
 
     def get_function(self) -> Callable[[], Any]:
+        if self.family == "minigrid":
+            from clworldmodel.environments.minigrid import make_minigrid_environment
+
+            return lambda: TransformReward(
+                make_minigrid_environment(self.name, **self.kwargs),
+                lambda x: self.rew_scale * x,
+            )
         return lambda: TransformReward(
             gym.make(
                 self.name,

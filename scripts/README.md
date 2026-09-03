@@ -88,6 +88,8 @@ contains experiment-facing code.
   within five percent of the observed maximum.
 - `run_moe_arrow_atari.py`: task-aware MoE, CNN-FullBank, DINO-FullBank, DINO-PatchBank, and DINO-ConvBank launchers.
 - `verify_arrow_environment.py`: pinned dependency, CUDA, and Atari registration check.
+- `run_arrow_minigrid_smoke.py`: one-GPU, three-task MiniGrid execution smoke
+  for the ARROW-50 FIFO/LTDM route. It is not a learning or reproduction claim.
 
 The former version-specific KARROW and DINO wrapper files were removed. Use
 explicit selectors instead:

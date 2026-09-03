@@ -42,12 +42,24 @@ def _environment_worker_seeds(seed: int, n_sync: int) -> tuple[list[int], list[i
     return expand(reset_root), expand(action_root)
 
 
-def _make_atari_env(
+def _make_visual_env(
     env_fn: Callable[[], Any], env_repeat: int, action_seed: Optional[int]
 ) -> Any:
-    env = AtariPreprocessing(
-        env_fn(), frame_skip=env_repeat, screen_size=64, grayscale_obs=False
+    env = env_fn()
+    already_preprocessed = bool(
+        getattr(env.unwrapped, "_clworldmodel_visual_preprocessed", False)
     )
+    if already_preprocessed:
+        if env_repeat != 1:
+            raise ValueError("Preprocessed visual environments require env_repeat=1")
+        if env.observation_space.shape != (64, 64, 3):
+            raise ValueError(
+                "Preprocessed visual environments must expose 64x64 RGB observations"
+            )
+    else:
+        env = AtariPreprocessing(
+            env, frame_skip=env_repeat, screen_size=64, grayscale_obs=False
+        )
     if action_seed is not None:
         env.action_space.seed(action_seed)
     return env
@@ -194,6 +206,7 @@ def evaluate(
     seed: Optional[int] = None,
     task_id: Optional[int] = None,
     deterministic_policy: bool = False,
+    action_space: int = 18,
 ) -> tuple[float, float]:
     _, _, rews, conts, resets = generate_trajectories(
         n_rollouts * 2**13 // n_sync,
@@ -207,6 +220,7 @@ def evaluate(
         seed=seed,
         task_id=task_id,
         deterministic_policy=deterministic_policy,
+        action_space=action_space,
     )
     terms = torch.where(conts == 0)[0]
     starts = torch.where(resets == 1)[0]
@@ -238,6 +252,7 @@ def generate_trajectories(
     seed: Optional[int] = None,
     task_id: Optional[int] = None,
     deterministic_policy: bool = False,
+    action_space: int = 18,
 ) -> tuple[ActionT, Optional[ImageT], RewardT, ContT, ResetT]:
     # Returns [ X ... ] packed as [ N*T ... ] (sort of)
     # To change to [ T N ... ], do reshape and swapaxes
@@ -272,12 +287,24 @@ def generate_trajectories(
         env_fns[i] if env_fns is not None else default_env_fn
         for i in range(n_sync)
     ]
+    if action_space < 1:
+        raise ValueError("action_space must be positive")
     env = AsyncVectorEnv(
         [
-            partial(_make_atari_env, env_fn, env_repeat, action_seed)
+            partial(_make_visual_env, env_fn, env_repeat, action_seed)
             for env_fn, action_seed in zip(source_env_fns, action_seeds)
         ]
     )
+    if (
+        not isinstance(env.single_action_space, gym.spaces.Discrete)
+        or env.single_action_space.n != action_space
+    ):
+        observed_action_space = env.single_action_space
+        env.close()
+        raise ValueError(
+            "Configured categorical action dimension does not match the "
+            f"environment: config={action_space}, environment={observed_action_space}"
+        )
     z = None
 
     if wm is not None and ac is not None:
@@ -303,11 +330,11 @@ def generate_trajectories(
 
             n_samples += n_sync
             if wm is None or ac is None:
-                act = np.random.randint(0, 18, size=n_sync)
+                act = np.random.randint(0, action_space, size=n_sync)
             else:
                 if z is None:
                     z, h = wm.rssm.initial_state(n_sync)
-                    act_t = torch.zeros(n_sync, 18, device=z.device)
+                    act_t = torch.zeros(n_sync, action_space, device=z.device)
                     act_t[:, 0] = 1  # Previous move would have been all 0s
                 # Follow a stochastic policy
                 rssm_kwargs = {}
@@ -336,7 +363,7 @@ def generate_trajectories(
                 else:
                     act_prob_dist = td.Categorical(logits=act_prob)
                     act = act_prob_dist.sample()
-                act_t = torch.nn.functional.one_hot(act, 18)
+                act_t = torch.nn.functional.one_hot(act, action_space)
                 act = act.cpu().numpy()
 
             obs, rew, term, trunc, _ = env.step(act)
@@ -367,7 +394,9 @@ def generate_trajectories(
     resets = [np.stack(e) for e in resets]
 
     return (
-        torch.nn.functional.one_hot(torch.from_numpy(np.concatenate(acts)[:n]).long(), 18).float(),
+        torch.nn.functional.one_hot(
+            torch.from_numpy(np.concatenate(acts)[:n]).long(), action_space
+        ).float(),
         torch.from_numpy(np.concatenate(obss)[:n] / 255).float().permute(0, 3, 1, 2)
         if not no_images
         else None,
@@ -382,8 +411,10 @@ def reinterpret_nt_to_t_n(
 ) -> tuple[ActionT, ImageT, RewardT, ContT, ResetT]:
     if t * n != acts.shape[0]:
         raise ValueError(f"Illegal reinterpret (acts.shape={acts.shape}[0] != {t * n})")
+    if acts.ndim != 2 or acts.shape[-1] < 1:
+        raise ValueError(f"Actions must have shape [samples, categories], got {acts.shape}")
     return (
-        acts.reshape(n, t, 18).swapaxes(0, 1),
+        acts.reshape(n, t, acts.shape[-1]).swapaxes(0, 1),
         obss.reshape(n, t, 3, 64, 64).swapaxes(0, 1),
         rews.reshape(n, t, 1).swapaxes(0, 1),
         conts.reshape(n, t, 1).swapaxes(0, 1),

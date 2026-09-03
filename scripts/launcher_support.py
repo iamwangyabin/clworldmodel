@@ -6,10 +6,29 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 
-def runtime_info(python: Path, env: dict[str, str]) -> dict:
+_ATARI_RUNTIME_PACKAGES = (
+    "ale-py",
+    "gymnasium",
+    "numpy",
+    "opencv-python",
+    "sortedcontainers",
+    "tensorboard",
+    "torch",
+    "torchaudio",
+    "torchvision",
+    "tqdm",
+)
+
+
+def runtime_info(
+    python: Path,
+    env: dict[str, str],
+    package_names: Sequence[str] = _ATARI_RUNTIME_PACKAGES,
+) -> dict:
     """Collect the pinned runtime and accelerator fields for a launch manifest."""
     probe_code = """
 import json
@@ -22,18 +41,7 @@ import torch
 
 assert torch.cuda.is_available() and torch.cuda.device_count() >= 1
 properties = torch.cuda.get_device_properties(0)
-packages = (
-    "ale-py",
-    "gymnasium",
-    "numpy",
-    "opencv-python",
-    "sortedcontainers",
-    "tensorboard",
-    "torch",
-    "torchaudio",
-    "torchvision",
-    "tqdm",
-)
+packages = __PACKAGE_NAMES__
 package_versions = {name: metadata.version(name) for name in packages}
 try:
     package_versions["swanlab"] = metadata.version("swanlab")
@@ -52,6 +60,7 @@ print(json.dumps({
     "cuda_total_memory_bytes": properties.total_memory,
 }))
 """
+    probe_code = probe_code.replace("__PACKAGE_NAMES__", repr(tuple(package_names)))
     probe = subprocess.run(
         [str(python), "-c", probe_code],
         check=True,

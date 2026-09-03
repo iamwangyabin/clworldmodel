@@ -295,6 +295,7 @@ def _evaluate_policy_tasks(
                     env_repeat=config.env_repeat,
                     n_rollouts=16,
                     seed=task_seed,
+                    action_space=config.action_space,
                     **evaluation_kwargs,
                 )
                 local_values[task_id] = torch.tensor(
@@ -329,6 +330,7 @@ def _evaluate_policy_tasks(
                 env_repeat=config.env_repeat,
                 n_rollouts=16,
                 seed=task_seed,
+                action_space=config.action_space,
                 **evaluation_kwargs,
             )
             means.append(mean)
@@ -2612,6 +2614,7 @@ def _evaluate_rec_route(
             seed=seed,
             task_id=task_id,
             deterministic_policy=True,
+            action_space=config.action_space,
         )
 
 
@@ -3272,6 +3275,7 @@ def _evaluate_adaptive_compression_task(
             seed=validation_seed,
             task_id=task_id,
             deterministic_policy=True,
+            action_space=config.action_space,
         )
     raw_mean, raw_std = _raw_return_statistics(
         [config.esc.env_configs[task_id]],
@@ -5387,6 +5391,7 @@ if __name__ == "__main__":
                         env_repeat=config.env_repeat,
                         seed=_next_environment_seed(collection_environment_seed_rng),
                         task_id=current_task_id,
+                        action_space=config.action_space,
                     ),
                     config.data_t,
                     config.data_n,

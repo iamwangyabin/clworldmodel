@@ -29,6 +29,15 @@ atari = [
     "tensorboard==2.13.0",
     "tensorboard-data-server==0.7.2",
 ]
+minigrid = [
+    "gymnasium==1.1.1",
+    "minigrid==3.1.0",
+    "numpy==1.26.4",
+    "opencv-python==4.11.0.86",
+    "sortedcontainers==2.4.0",
+    "tensorboard==2.13.0",
+    "tqdm==4.67.1",
+]
 online = [
     "swanlab==0.9.4",
 ]

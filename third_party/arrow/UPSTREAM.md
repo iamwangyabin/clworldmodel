@@ -622,6 +622,18 @@ documented here, covered by focused parity tests, and followed by regenerating
     matching, signed return gating, strict protocol isolation, and exact
     compute/parameter bounds.
 
+60. Generalize only the vendored Atari collector's environment boundary for the
+    separately named `ARROW-50-MiniGrid-3Task-Smoke-v1` execution check. The
+    existing Atari default still applies `AtariPreprocessing`, uses action
+    dimension 18, and preserves every published config. A declarative
+    `EnvConfig.family="minigrid"` opt-in dispatches to the project-owned
+    adapter, which supplies an already preprocessed `64 x 64` partial RGB
+    observation and native seven-action interface; the shared collector now
+    receives the typed action dimension instead of hardcoding 18. ARROW
+    FIFO/LTDM retention and whole-minibatch selection are unchanged. Focused
+    tests cover default-family validation, deterministic MiniGrid observations
+    and actions, task order, capacity, sampling allocation, and smoke budgets.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from
