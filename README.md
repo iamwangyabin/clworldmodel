@@ -139,6 +139,25 @@ and artifact semantics. The component-level research questions, diagnostic-set
 rules, interpretation matrix, and planned result tables are defined in
 `docs/protocols/component_forgetting_audit.md`.
 
+## MiniGrid replay-mechanism smokes
+
+The three-task MiniGrid route provides matched execution smokes for ARROW-50
+and DV3-RS, an independent DreamerV3 port of Continual-Dreamer's reservoir
+mechanism:
+
+```bash
+python scripts/run_arrow_minigrid_smoke.py --seed 0 --dry-run
+python scripts/run_dv3_rs_minigrid_smoke.py --seed 0 --dry-run
+```
+
+Both smokes use the same DreamerV3 backbone, environment schedule, interaction
+and update counts, replay bytes, and evaluation. They differ only in replay:
+ARROW-50 divides capacity and minibatch selection equally between FIFO and an
+unbiased reservoir; DV3-RS assigns the full capacity to the reservoir. DV3-RS
+is a mechanism port, not a reproduction of the paper's DreamerV2 results. See
+`docs/protocols/arrow_ar50_minigrid_smoke.md` and
+`docs/protocols/dv3_rs_minigrid_smoke.md`.
+
 ## Representation-objective ablation: ARROW-R2Rep-50
 
 `ARROW-R2Rep-50` keeps ARROW-50 replay, budgets, curriculum, RSSM, reward and

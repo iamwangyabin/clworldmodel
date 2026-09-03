@@ -1,0 +1,61 @@
+{
+  "esc": {
+    "env_schedule_type": "SequentialEnvironments",
+    "env_configs": [
+      {
+        "name": "MiniGrid-DoorKey-9x9-v0",
+        "kwargs": {"max_episode_steps": 100, "tile_size": 8},
+        "rew_scale": 1.0,
+        "family": "minigrid"
+      },
+      {
+        "name": "MiniGrid-LavaCrossingS9N1-v0",
+        "kwargs": {"max_episode_steps": 100, "tile_size": 8},
+        "rew_scale": 1.0,
+        "family": "minigrid"
+      },
+      {
+        "name": "MiniGrid-SimpleCrossingS9N1-v0",
+        "kwargs": {"max_episode_steps": 100, "tile_size": 8},
+        "rew_scale": 1.0,
+        "family": "minigrid"
+      }
+    ],
+    "kwargs": {"swap_sched": 1}
+  },
+  "algorithm": "dv3",
+  "seed": 123456789,
+  "img_size": 64,
+  "epochs": 3,
+  "wm_lr": 0.0001,
+  "log_frequency": 1,
+  "steps_per_batch": 2,
+  "ac_train_steps": 2,
+  "ac_train_sync": 8,
+  "fresh_ac": false,
+  "n_sync": 2,
+  "gen_seq_len": 64,
+  "env_repeat": 1,
+  "data_n": 8,
+  "data_n_max": 8,
+  "data_t": 16,
+  "mb_t_size": 8,
+  "mb_n_size": 4,
+  "random_policy": "new",
+  "pretrain_enabled": false,
+  "pretrain_data_multiplier": 1,
+  "pretrain_mb_t_size": 8,
+  "pretrain_mb_n_size": 4,
+  "pretrain_steps": 2,
+  "gru_units": 64,
+  "cnn_depth": 8,
+  "mlp_features": 64,
+  "mlp_layers": 2,
+  "wall_time_optimisation": false,
+  "action_space": 7,
+  "replay_observation_dtype": "float32",
+  "sac_dv3_data_n_max": 16,
+  "replay_buffers": [
+    {"rb_type": "LongTermReplay", "rb_device": "cuda"}
+  ]
+}

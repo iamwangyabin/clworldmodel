@@ -48,7 +48,7 @@ class ArrowMiniGridLauncherTests(unittest.TestCase):
         self.assertEqual(launch["replay"]["observation_dtype"], "float32")
         self.assertEqual(
             launch["replay"]["buffer_selection_probability"],
-            {"fifo": 0.5, "ltdm": 0.5},
+            {"fifo": 0.5, "reservoir": 0.5},
         )
         self.assertEqual(launch["budgets"]["environment_decisions"], 384)
 

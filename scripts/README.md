@@ -89,7 +89,10 @@ contains experiment-facing code.
 - `run_moe_arrow_atari.py`: task-aware MoE, CNN-FullBank, DINO-FullBank, DINO-PatchBank, and DINO-ConvBank launchers.
 - `verify_arrow_environment.py`: pinned dependency, CUDA, and Atari registration check.
 - `run_arrow_minigrid_smoke.py`: one-GPU, three-task MiniGrid execution smoke
-  for the ARROW-50 FIFO/LTDM route. It is not a learning or reproduction claim.
+  for ARROW-50.
+- `run_dv3_rs_minigrid_smoke.py`: matched one-GPU DreamerV3 reservoir replay
+  mechanism port of Continual-Dreamer on the same MiniGrid smoke protocol.
+  Neither MiniGrid smoke is a learning or paper-reproduction claim.
 
 The former version-specific KARROW and DINO wrapper files were removed. Use
 explicit selectors instead:

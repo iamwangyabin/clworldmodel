@@ -37,6 +37,12 @@ world model or policy.
   CUDA;
 - final evaluation is isolated from replay and runs 16 episodes per seen task.
 
+The matched reservoir-only control is
+`DV3-RS-MiniGrid-3Task-Smoke-v1`, documented in
+`docs/protocols/dv3_rs_minigrid_smoke.md`. It keeps the same DreamerV3
+backbone and all non-replay budgets while assigning all 16 trajectory slots to
+the uniform long-term reservoir.
+
 These deliberately tiny budgets establish execution only. A later pilot or
 paper-aligned protocol must freeze its own interaction counts, model/update
 budgets, reward/termination semantics, replay byte budget, evaluation cohorts,
