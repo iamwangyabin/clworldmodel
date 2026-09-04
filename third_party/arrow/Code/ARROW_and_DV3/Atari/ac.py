@@ -346,11 +346,61 @@ class ActorCritic(nn.Module):
         residual_alpha: float = 0.1,
         residual_input_mode: str = "base_output",
         residual_consolidation: str = "none",
+        adaptive_behavior_residuals: bool = False,
+        adaptive_behavior_num_tasks: int = 1,
+        adaptive_behavior_hidden_features: int = 512,
+        adaptive_behavior_residual_scale: float = 0.1,
+        adaptive_behavior_num_atoms: int = 4,
+        adaptive_behavior_reuse: bool = True,
     ) -> None:
         super().__init__()
         if residual_correction != "none" and actor_network != "mlp":
             raise ValueError("KARROW residuals require the unchanged MLP behavior heads")
-        if residual_correction == "none":
+        if adaptive_behavior_residuals and (
+            actor_network != "mlp" or residual_correction != "none"
+        ):
+            raise ValueError(
+                "Adaptive shared behavior requires the unchanged MLP heads and "
+                "does not compose with KARROW residual corrections"
+            )
+        self.adaptive_behavior_residuals = bool(adaptive_behavior_residuals)
+        adaptive_critic = None
+        if self.adaptive_behavior_residuals:
+            from clworldmodel.models.adaptive_behavior import (
+                TaskRoutedResidualCategoricalHead,
+            )
+
+            actor_layers = get_mlp_layers(in_dim, act_space, final_activation=None)
+            critic_layers_for_base = get_mlp_layers(
+                in_dim, N_CRITIC_BINS, final_activation=None
+            )
+            torch.nn.init.constant_(critic_layers_for_base[-1].weight, 0)
+            torch.nn.init.constant_(critic_layers_for_base[-1].bias, 0)
+            adaptive_kwargs = {
+                "in_features": in_dim,
+                "num_tasks": adaptive_behavior_num_tasks,
+                "hidden_features": adaptive_behavior_hidden_features,
+                "residual_scale": adaptive_behavior_residual_scale,
+                "num_atoms": adaptive_behavior_num_atoms,
+                "reuse_enabled": adaptive_behavior_reuse,
+            }
+            # Preserve the base MLP initialization and subsequent training RNG
+            # stream of the private-MLP control. Residual parameters are a new
+            # method-owned stream and start with exactly zero output.
+            with torch.random.fork_rng(devices=[]):
+                self.actor = TaskRoutedResidualCategoricalHead(
+                    nn.Sequential(*actor_layers),
+                    out_features=act_space,
+                    **adaptive_kwargs,
+                )
+                adaptive_critic = TaskRoutedResidualCategoricalHead(
+                    nn.Sequential(*critic_layers_for_base),
+                    out_features=N_CRITIC_BINS,
+                    **adaptive_kwargs,
+                )
+            critic_layers = None
+            residual_critic = None
+        elif residual_correction == "none":
             self.actor: Callable[[AcStateT], ActionLogT] = build_actor(
                 in_dim,
                 act_space,
@@ -409,7 +459,9 @@ class ActorCritic(nn.Module):
             "symlog_bins", torch.linspace(-20, 20, N_CRITIC_BINS).float().unsqueeze(1)
         )
 
-        if critic_layers is None:
+        if adaptive_critic is not None:
+            self.critic = adaptive_critic
+        elif critic_layers is None:
             self.critic: Callable[[AcStateT], RewardSymlogCatT] = build_critic(
                 in_dim,
                 actor_network=actor_network,
@@ -426,6 +478,36 @@ class ActorCritic(nn.Module):
                 if residual_critic is not None
                 else ResidualCategoricalHead(critic_layers, **residual_kwargs)
             )
+
+    def set_task_route(self, task_id: int) -> None:
+        """Route both categorical heads for the named task-aware method."""
+
+        if not self.adaptive_behavior_residuals:
+            return
+        self.actor.set_task_route(task_id)
+        self.critic.set_task_route(task_id)
+
+    def activate_training_task(self, task_id: int) -> None:
+        """Train shared bases and only the current task's private residuals."""
+
+        if not self.adaptive_behavior_residuals:
+            return
+        self.actor.activate_training_task(task_id)
+        self.critic.activate_training_task(task_id)
+
+    def adaptive_behavior_banks(self) -> dict[str, nn.Module]:
+        if not self.adaptive_behavior_residuals:
+            raise ValueError("Actor-Critic does not use adaptive behavior residuals")
+        return {
+            "actor": self.actor.residual_bank,
+            "critic": self.critic.residual_bank,
+        }
+
+    def adaptive_behavior_layout(self) -> dict[str, list[int]]:
+        return {
+            name: bank.compression_layout()
+            for name, bank in self.adaptive_behavior_banks().items()
+        }
 
     def freeze_shared_core(self) -> None:
         """Freeze MLP behavior heads while leaving their residual adapters plastic."""
@@ -703,6 +785,12 @@ def build_actor_critic_opt(
     residual_alpha: float = 0.1,
     residual_input_mode: str = "base_output",
     residual_consolidation: str = "none",
+    adaptive_behavior_residuals: bool = False,
+    adaptive_behavior_num_tasks: int = 1,
+    adaptive_behavior_hidden_features: int = 512,
+    adaptive_behavior_residual_scale: float = 0.1,
+    adaptive_behavior_num_atoms: int = 4,
+    adaptive_behavior_reuse: bool = True,
 ) -> ActorCriticOpt:
     """Construct an actor-critic optimizer before the first update.
 
@@ -738,6 +826,12 @@ def build_actor_critic_opt(
         residual_alpha=residual_alpha,
         residual_input_mode=residual_input_mode,
         residual_consolidation=residual_consolidation,
+        adaptive_behavior_residuals=adaptive_behavior_residuals,
+        adaptive_behavior_num_tasks=adaptive_behavior_num_tasks,
+        adaptive_behavior_hidden_features=adaptive_behavior_hidden_features,
+        adaptive_behavior_residual_scale=adaptive_behavior_residual_scale,
+        adaptive_behavior_num_atoms=adaptive_behavior_num_atoms,
+        adaptive_behavior_reuse=adaptive_behavior_reuse,
     ).to(next(wm.parameters()).device)
     if optimizer_name == "adam":
         opt = Adam(
@@ -787,6 +881,8 @@ def dream_rollout(
     # Actions [ T N 18 ]
     # Rewards [ T N 1 ]
     # Lambda returns: [ T N 1 ]
+    if task_id is not None:
+        ac.set_task_route(task_id)
     z, h = wm.rssm.initial_state(n_sync)
     compute_dtype = getattr(wm, "compute_dtype", "float32")
     no_reset = torch.zeros(n_sync, 1, device=z.device)
@@ -914,6 +1010,197 @@ def dream_rollout(
     return states, actions, rewards, lam_returns, replay_value_batch
 
 
+@torch.no_grad()
+def _graded_dream_rehearsal_batch(
+    wm: WorldModel,
+    ac: ActorCritic,
+    data: Replay,
+    *,
+    replay_task_id: int,
+    n_sync: int,
+    context_steps: int,
+    dream_steps: int,
+    discount: float,
+    top_fraction: float,
+    realized_threshold: float,
+    realized_bonus: float,
+    temperature: float = 1.0,
+) -> tuple[AcStateT, ActionT, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Generate and grade one paper-style dream self-imitation batch.
+
+    ``replay_task_id`` selects old-task start states only.  It is deliberately
+    not forwarded to the world model or Actor-Critic: Bounded Dream Rehearsal
+    has one shared model and policy, and task metadata belongs solely to the
+    scheduler/replay sampler.
+    """
+
+    from clworldmodel.continual.dream_rehearsal import (
+        realized_first_scores,
+        top_fraction_indices,
+    )
+
+    if replay_task_id < 0:
+        raise ValueError("Dream-rehearsal replay task must be non-negative")
+    z, h = wm.rssm.initial_state(n_sync)
+    compute_dtype = getattr(wm, "compute_dtype", "float32")
+    ctx_acts, ctx_images, _, _, ctx_resets = data.minibatch(
+        context_steps,
+        n_sync,
+        mb_device=z.device,
+        task_id=replay_task_id,
+    )
+    with _autocast_context(z.device, compute_dtype):
+        _, context_z, context_h = wm.rssm(
+            z,
+            ctx_acts,
+            h,
+            ctx_images,
+            ctx_resets,
+            temperature=temperature,
+        )
+        # The reference artifact imagines from every posterior state in its
+        # replay batch, rather than keeping only the final context state.
+        # Flatten only the public [T, N] axes; latent layouts remain opaque.
+        z = context_z.flatten(0, 1)
+        h = context_h.flatten(0, 1)
+        dream_batch = z.shape[0]
+        no_reset = torch.zeros(dream_batch, 1, device=z.device)
+        states = []
+        actions = []
+        rewards = []
+        continues = []
+        for _ in range(dream_steps):
+            state = zh_to_ac_state(z, h)
+            model_state = wm.zh_transform(z, h)
+            reward = symexp(wm.predict_reward_symlog(model_state, None))
+            cont = wm.predict_continue(model_state, None)
+            action_logs = ac.actor(state)
+            with _full_precision_context(action_logs.device):
+                action = td.OneHotCategorical(
+                    logits=action_logs.float()
+                ).sample()
+            states.append(state)
+            actions.append(action)
+            rewards.append(reward)
+            continues.append(cont)
+            _, z, h = wm.rssm(
+                z,
+                action,
+                h,
+                None,
+                no_reset,
+                temperature=temperature,
+            )
+
+        states_tensor = torch.stack(states).detach()
+        actions_tensor = torch.stack(actions).detach()
+        rewards_tensor = torch.stack(rewards).float()
+        continues_tensor = torch.stack(continues).float()
+        bootstrap_values = ac.value(zh_to_ac_state(z, h)).float()
+
+    scores, realized, _ = realized_first_scores(
+        rewards_tensor,
+        continues_tensor,
+        bootstrap_values,
+        discount=discount,
+        realized_threshold=realized_threshold,
+        realized_bonus=realized_bonus,
+    )
+    selected = top_fraction_indices(scores, top_fraction)
+    return states_tensor, actions_tensor, selected, scores, realized
+
+
+def train_bounded_dream_rehearsal(
+    wm: WorldModel,
+    data: Replay,
+    aco: ActorCriticOpt,
+    *,
+    replay_task_id: int,
+    updates: int,
+    n_sync: int,
+    context_steps: int,
+    dream_steps: int,
+    discount: float,
+    top_fraction: float,
+    realized_threshold: float,
+    realized_bonus: float,
+    grad_clip: float = 100.0,
+) -> dict[str, float]:
+    """Run actor-only graded dream rehearsal from one bounded task library."""
+
+    from clworldmodel.continual.dream_rehearsal import (
+        selected_behavior_cloning_loss,
+    )
+
+    if updates < 1:
+        raise ValueError("Dream rehearsal requires at least one actor update")
+    if grad_clip < 0:
+        raise ValueError("Dream-rehearsal gradient clipping must be non-negative")
+    if not data.available_task_ids() or replay_task_id not in data.available_task_ids():
+        raise ValueError(
+            f"Bounded replay contains no rehearsal starts for task {replay_task_id}"
+        )
+    ac, opt = aco.ac, aco.opt
+    compute_dtype = getattr(wm, "compute_dtype", "float32")
+    loss_total = torch.zeros((), device=next(wm.parameters()).device, dtype=torch.float64)
+    score_total = torch.zeros_like(loss_total)
+    success_fraction_total = torch.zeros_like(loss_total)
+    selected_total = 0
+    dreamed_total = 0
+    for _ in range(updates):
+        states, actions, selected, scores, realized = (
+            _graded_dream_rehearsal_batch(
+                wm,
+                ac,
+                data,
+                replay_task_id=replay_task_id,
+                n_sync=n_sync,
+                context_steps=context_steps,
+                dream_steps=dream_steps,
+                discount=discount,
+                top_fraction=top_fraction,
+                realized_threshold=realized_threshold,
+                realized_bonus=realized_bonus,
+            )
+        )
+        with _autocast_context(states.device, compute_dtype):
+            actor_log_probs = ac.actor(states)
+        loss = selected_behavior_cloning_loss(
+            actor_log_probs,
+            actions,
+            selected,
+        )
+        _assert_all_finite(loss, "dream-rehearsal behavior-cloning loss")
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        if grad_clip:
+            torch.nn.utils.clip_grad_norm_(ac.actor.parameters(), grad_clip)
+        opt.step()
+
+        loss_total.add_(loss.detach().to(torch.float64))
+        score_total.add_(scores.detach().mean().to(torch.float64))
+        success_fraction_total.add_(
+            (realized.detach() > realized_threshold)
+            .float()
+            .mean()
+            .to(torch.float64)
+        )
+        selected_total += selected.numel()
+        dreamed_total += scores.numel()
+
+    values = torch.stack(
+        (loss_total, score_total, success_fraction_total)
+    ).detach().cpu().tolist()
+    return {
+        "actor_bc_loss": values[0] / updates,
+        "dream_score_mean": values[1] / updates,
+        "realized_success_fraction": values[2] / updates,
+        "actor_updates": float(updates),
+        "selected_trajectories": float(selected_total),
+        "dreamed_trajectories": float(dreamed_total),
+    }
+
+
 def train_ac_from_wm(
     wm: WorldModel,
     data: Replay,
@@ -963,10 +1250,17 @@ def train_ac_from_wm(
     residual_alpha: float = 0.1,
     residual_input_mode: str = "base_output",
     residual_consolidation: str = "none",
+    adaptive_behavior_residuals: bool = False,
+    adaptive_behavior_num_tasks: int = 1,
+    adaptive_behavior_hidden_features: int = 512,
+    adaptive_behavior_residual_scale: float = 0.1,
+    adaptive_behavior_num_atoms: int = 4,
+    adaptive_behavior_reuse: bool = True,
     protect_residual_updates: bool = False,
     feature_cache: Optional[object] = None,
     task_id: Optional[int] = None,
     task_id_schedule: Optional[Sequence[int]] = None,
+    training_task_id: Optional[int] = None,
     actor_teacher: Optional[nn.Module] = None,
     actor_distill_task_ids: Sequence[int] = (),
     actor_distill_scale: float = 0.0,
@@ -1024,19 +1318,42 @@ def train_ac_from_wm(
             residual_alpha=residual_alpha,
             residual_input_mode=residual_input_mode,
             residual_consolidation=residual_consolidation,
+            adaptive_behavior_residuals=adaptive_behavior_residuals,
+            adaptive_behavior_num_tasks=adaptive_behavior_num_tasks,
+            adaptive_behavior_hidden_features=adaptive_behavior_hidden_features,
+            adaptive_behavior_residual_scale=adaptive_behavior_residual_scale,
+            adaptive_behavior_num_atoms=adaptive_behavior_num_atoms,
+            adaptive_behavior_reuse=adaptive_behavior_reuse,
         )
     ac, opt = aco.ac, aco.opt
+    if ac.adaptive_behavior_residuals:
+        if training_task_id is None:
+            raise ValueError(
+                "Adaptive shared behavior training requires the acquiring task id"
+            )
+        ac.activate_training_task(training_task_id)
+    elif training_task_id is not None:
+        raise ValueError(
+            "training_task_id is reserved for adaptive shared behavior"
+        )
     trainable_parameters = [
         parameter for parameter in ac.parameters() if parameter.requires_grad
     ]
     if not trainable_parameters:
         raise RuntimeError("Actor-critic has no trainable parameters")
-    trainable_ids = {id(parameter) for parameter in trainable_parameters}
+    optimizer_parameters = (
+        list(ac.parameters())
+        if ac.adaptive_behavior_residuals
+        else trainable_parameters
+    )
+    optimizer_ids = {id(parameter) for parameter in optimizer_parameters}
     for parameter in list(opt.state):
-        if id(parameter) not in trainable_ids:
+        if id(parameter) not in optimizer_ids:
             del opt.state[parameter]
+    if len(opt.param_groups) != 1:
+        raise RuntimeError("Actor-Critic optimizer must own one parameter group")
     for parameter_group in opt.param_groups:
-        parameter_group["params"] = trainable_parameters
+        parameter_group["params"] = optimizer_parameters
     if use_slow_critic_targets and aco.slow_critic is None:
         raise ValueError("Slow critic targets require an initialized slow critic")
     for g in opt.param_groups:
@@ -1128,6 +1445,12 @@ def train_ac_from_wm(
             if task_id_schedule is not None
             else task_id
         )
+        if rollout_task_id is not None:
+            ac.set_task_route(rollout_task_id)
+            if aco.slow_critic is not None and hasattr(
+                aco.slow_critic, "set_task_route"
+            ):
+                aco.slow_critic.set_task_route(rollout_task_id)
         target_value = None
         if use_slow_critic_targets:
             target_value = lambda state: ac.value(state, critic=aco.slow_critic)
@@ -1355,6 +1678,12 @@ def train_ac_from_wm(
     if persistent_return_norm:
         aco.return_scale_ema = scale_ema.detach()
         aco.return_mean_ema = lam_returns_mean_ema.detach()
+    if training_task_id is not None:
+        ac.set_task_route(training_task_id)
+        if aco.slow_critic is not None and hasattr(
+            aco.slow_critic, "set_task_route"
+        ):
+            aco.slow_critic.set_task_route(training_task_id)
     summary_values = torch.cat(
         (metric_sums, actor_old_policy_kl_total.unsqueeze(0))
     ).detach().cpu().tolist()

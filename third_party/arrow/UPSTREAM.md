@@ -622,6 +622,52 @@ documented here, covered by focused parity tests, and followed by regenerating
     matching, signed return gating, strict protocol isolation, and exact
     compute/parameter bounds.
 
+60. Add the separately named, task-aware
+    `Evolving-Core-DenseAcquire-ReturnGatedAdaptiveQFPAC-SharedDistilledHeads-SharedResidualMLPAC-ARROW-v1`
+    original-six pilot without changing method D. Actor and Critic each keep
+    one shared MLP categorical base plus exact-zero, four-atom, task-routed
+    Dense residuals acquired at hidden width 512. The unchanged 800 online
+    behavior updates are replay-routed 75 percent to the current task and 25
+    percent across completed tasks; only shared bases and the acquiring
+    residual/routes are plastic. After Q/F/P selection, all physical residual
+    width candidates `384/256/128/64` receive 250 identical-stream LTDM-seeded
+    imagination updates matching frozen-teacher Actor policy KL and Critic
+    categorical KL. A disjoint fixed 16-rollout raw-return cohort selects the
+    smallest candidate within five percent, with restoration of the original
+    Dense modules and Adam state when no candidate passes. This adds exactly
+    6,000 behavior optimizer updates, 1,536,000 imagined states, and 480
+    selector rollouts over six tasks. Adaptive Actor/Critic banks persist width
+    metadata, rebuild compact topology before strict checkpoint loading, and
+    record a separate compression-update counter. The shared MLP bases remain
+    initialization/RNG-paired with the private-MLP control, task routing avoids
+    a per-forward CUDA-to-host synchronization, and the named config rejects a
+    second slow critic. Boundary/final parameter ledgers are rewritten after
+    selection so they cannot retain a stale pre-pruning topology. Runtime
+    artifacts report the outcome-dependent behavior range `12,036,591` to
+    `3,039,855` and joint online range `54,638,216` to `25,679,048` parameters;
+    compression is not guaranteed. Focused tests cover zero-effect routing,
+    physical compaction, heterogeneous checkpoint reconstruction, protocol
+    isolation, fixed budgets, and analytic parameter bounds.
+
+61. Add the thin integration for the separately named, task-agnostic
+    `Bounded-Dream-Rehearsal-v1-Atari` baseline. DreamerV3 keeps one shared MLP
+    world model and Actor-Critic; task IDs are attached only to replay
+    trajectories for scheduler-side old-task sampling and never enter a
+    network. The official Dream Rehearsal realized-first score, horizon-15
+    sampling, top-25-percent selection, and actor-only behavior-cloning update
+    are reimplemented against the vendored interfaces. The reference
+    never-clear phase libraries are intentionally replaced by one CPU uint8
+    mmap `LongTermReplay` random-key reservoir whose default 1,024-by-512
+    capacity exactly matches ARROW-50's 524,288 transitions. Fifty updates per
+    encountered non-current task are scheduled for every 2,000 agent decisions;
+    because the Atari collector emits 16,384 decisions at once, all newly due
+    updates run at the next optimizer boundary with separate compute counters.
+    The inspected algorithm artifact is
+    `gurpnijjer/dream-rehearsal@7680778f798be3a27a17c320cc875b573c45f0e1`
+    under Apache-2.0. No reference source file is vendored. Project primitives,
+    exact storage/compute accounting, deviations, launcher, and focused tests
+    are documented outside this vendor directory.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

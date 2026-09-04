@@ -28,6 +28,7 @@ DinoV3ReplayFeatureMode = Literal["cached", "on_the_fly"]
 DinoV3PatchAdapter = Literal["none", "conv_3x3_stride2"]
 ContinualMethod = Literal[
     "none",
+    "bounded_dream_rehearsal",
     "moe_arrow",
     "cnn_fullbank_arrow",
     "cnn_projector_lora_arrow",
@@ -37,6 +38,7 @@ ContinualMethod = Literal[
     "evolving_atomic_rssm_arrow",
     "evolving_atomic_rssm_shared_heads_arrow",
     "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+    "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
     "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
     "evolving_atomic_rssm_learned_base_adapters_arrow",
     "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -375,6 +377,18 @@ class Config(Serialisable):
     adaptive_compression_rollouts: int = 0
     adaptive_compression_max_return_drop: float = 0.0
     adaptive_compression_qfp_distill_scale: float = 0.0
+    adaptive_behavior_residuals: bool = False
+    adaptive_behavior_hidden_features: int = 512
+    adaptive_behavior_residual_scale: float = 0.1
+    adaptive_behavior_num_atoms: int = 4
+    adaptive_behavior_reuse: bool = True
+    adaptive_behavior_width_fractions: list[float] = field(default_factory=list)
+    adaptive_behavior_steps_per_candidate: int = 0
+    adaptive_behavior_lr: float = 0.0
+    adaptive_behavior_rollouts: int = 0
+    adaptive_behavior_max_return_drop: float = 0.0
+    adaptive_behavior_actor_distill_scale: float = 0.0
+    adaptive_behavior_critic_distill_scale: float = 0.0
     evolving_shared_behavior_current_task_fraction: float = 1.0
     task_private_heads: bool = False
     task_shared_prediction_heads: bool = False
@@ -392,6 +406,15 @@ class Config(Serialisable):
     shared_actor_distill_n_sync: int = 1
     shared_actor_distill_burnin_steps: int = 0
     shared_actor_distill_steps: int = 1
+    dream_rehearsal_interval_agent_decisions: int = 2_000
+    dream_rehearsal_updates_per_prior_task: int = 50
+    dream_rehearsal_batch_sequences: int = 4
+    dream_rehearsal_context_steps: int = 16
+    dream_rehearsal_horizon: int = 15
+    dream_rehearsal_top_fraction: float = 0.25
+    dream_rehearsal_realized_threshold: float = 0.3
+    dream_rehearsal_realized_bonus: float = 10.0
+    dream_rehearsal_grad_clip: float = 100.0
     dinov3_model_path: Optional[str] = None
     dinov3_input_size: int = 256
     dinov3_max_batch_size: int = 128
@@ -485,6 +508,7 @@ class Config(Serialisable):
                 sequential_task_durations = tuple(task_durations)
         if self.continual_method not in {
             "none",
+            "bounded_dream_rehearsal",
             "moe_arrow",
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
@@ -494,6 +518,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -502,6 +527,9 @@ class Config(Serialisable):
             "dino_convbank_arrow",
         }:
             raise ValueError(f"Unknown continual method: {self.continual_method!r}")
+        is_bounded_dream_rehearsal = (
+            self.continual_method == "bounded_dream_rehearsal"
+        )
         is_moe_arrow = self.continual_method == "moe_arrow"
         is_cnn_fullbank = self.continual_method == "cnn_fullbank_arrow"
         is_cnn_projector_lora = (
@@ -526,6 +554,10 @@ class Config(Serialisable):
             self.continual_method
             == "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
         )
+        is_evolving_adaptive_qfp_ac_compression_shared_heads = (
+            self.continual_method
+            == "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow"
+        )
         is_evolving_atomic_lora_shared_heads = (
             self.continual_method
             == "evolving_atomic_rssm_atomic_lora_shared_heads_arrow"
@@ -537,6 +569,7 @@ class Config(Serialisable):
         uses_evolving_shared_heads = (
             is_evolving_shared_heads
             or is_evolving_adaptive_compression_shared_heads
+            or is_evolving_adaptive_qfp_ac_compression_shared_heads
             or is_evolving_atomic_lora_shared_heads
             or is_evolving_learned_base_adapters
         )
@@ -544,6 +577,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -612,7 +646,10 @@ class Config(Serialisable):
                 )
         if (
             self.task_mechanism_parameterization == "adaptive_dense_width"
-            and not is_evolving_adaptive_compression_shared_heads
+            and not (
+                is_evolving_adaptive_compression_shared_heads
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
+            )
         ):
             raise ValueError(
                 "adaptive_dense_width is validated only for the separately named "
@@ -685,7 +722,10 @@ class Config(Serialisable):
                 "mechanism parameterization='dense_private'"
             )
         if (
-            is_evolving_adaptive_compression_shared_heads
+            (
+                is_evolving_adaptive_compression_shared_heads
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
+            )
             and self.task_mechanism_parameterization != "adaptive_dense_width"
         ):
             raise ValueError(
@@ -696,6 +736,7 @@ class Config(Serialisable):
             (
                 is_evolving_shared_heads
                 or is_evolving_adaptive_compression_shared_heads
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
             )
             and self.task_mechanism_capacity_profile != "matched_512"
         ):
@@ -787,6 +828,18 @@ class Config(Serialisable):
             "adaptive_compression_rollouts": 0,
             "adaptive_compression_max_return_drop": 0.0,
             "adaptive_compression_qfp_distill_scale": 0.0,
+            "adaptive_behavior_residuals": False,
+            "adaptive_behavior_hidden_features": 512,
+            "adaptive_behavior_residual_scale": 0.1,
+            "adaptive_behavior_num_atoms": 4,
+            "adaptive_behavior_reuse": True,
+            "adaptive_behavior_width_fractions": [],
+            "adaptive_behavior_steps_per_candidate": 0,
+            "adaptive_behavior_lr": 0.0,
+            "adaptive_behavior_rollouts": 0,
+            "adaptive_behavior_max_return_drop": 0.0,
+            "adaptive_behavior_actor_distill_scale": 0.0,
+            "adaptive_behavior_critic_distill_scale": 0.0,
             "evolving_shared_behavior_current_task_fraction": 1.0,
             "task_private_heads": False,
             "task_shared_prediction_heads": False,
@@ -844,11 +897,17 @@ class Config(Serialisable):
                 "shared_prediction_distill_scale": (
                     0.1 if uses_evolving_shared_heads else 0.0
                 ),
-                "task_private_actor_critic": not is_evolving_shared_fastkan,
+                "task_private_actor_critic": not (
+                    is_evolving_shared_fastkan
+                    or is_evolving_adaptive_qfp_ac_compression_shared_heads
+                ),
                 "task_atomic_routes": True,
                 "ac_lr": 4e-5 if is_evolving_shared_fastkan else 1e-4,
             }
-            if is_evolving_shared_fastkan:
+            if (
+                is_evolving_shared_fastkan
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
+            ):
                 expected_evolving[
                     "evolving_shared_behavior_current_task_fraction"
                 ] = 0.75
@@ -861,7 +920,10 @@ class Config(Serialisable):
                         "freeze_shared_prediction_heads_after_task0": True,
                     }
                 )
-            if is_evolving_adaptive_compression_shared_heads:
+            if (
+                is_evolving_adaptive_compression_shared_heads
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
+            ):
                 expected_evolving.update(
                     {
                         "adaptive_compression_width_fractions": [
@@ -875,6 +937,28 @@ class Config(Serialisable):
                         "adaptive_compression_rollouts": 16,
                         "adaptive_compression_max_return_drop": 0.05,
                         "adaptive_compression_qfp_distill_scale": 1.0,
+                    }
+                )
+            if is_evolving_adaptive_qfp_ac_compression_shared_heads:
+                expected_evolving.update(
+                    {
+                        "adaptive_behavior_residuals": True,
+                        "adaptive_behavior_hidden_features": 512,
+                        "adaptive_behavior_residual_scale": 0.1,
+                        "adaptive_behavior_num_atoms": 4,
+                        "adaptive_behavior_reuse": True,
+                        "adaptive_behavior_width_fractions": [
+                            0.75,
+                            0.5,
+                            0.25,
+                            0.125,
+                        ],
+                        "adaptive_behavior_steps_per_candidate": 250,
+                        "adaptive_behavior_lr": 2e-4,
+                        "adaptive_behavior_rollouts": 16,
+                        "adaptive_behavior_max_return_drop": 0.05,
+                        "adaptive_behavior_actor_distill_scale": 1.0,
+                        "adaptive_behavior_critic_distill_scale": 1.0,
                     }
                 )
             expected_evolving.update(
@@ -960,7 +1044,10 @@ class Config(Serialisable):
                     "Evolving-Core interface and atom regularization scales "
                     "must be non-negative"
                 )
-            if is_evolving_adaptive_compression_shared_heads:
+            if (
+                is_evolving_adaptive_compression_shared_heads
+                or is_evolving_adaptive_qfp_ac_compression_shared_heads
+            ):
                 fractions = self.adaptive_compression_width_fractions
                 if (
                     not isinstance(fractions, list)
@@ -1057,6 +1144,68 @@ class Config(Serialisable):
                             "Adaptive compression candidates must map to unique "
                             "atom-divisible Q/F/P widths"
                         )
+            if is_evolving_adaptive_qfp_ac_compression_shared_heads:
+                behavior_fractions = self.adaptive_behavior_width_fractions
+                if (
+                    not isinstance(behavior_fractions, list)
+                    or behavior_fractions
+                    != self.adaptive_compression_width_fractions
+                ):
+                    raise ValueError(
+                        "Adaptive behavior compression uses the fixed Q/F/P width grid"
+                    )
+                if not self.adaptive_behavior_residuals:
+                    raise ValueError(
+                        "Adaptive behavior compression requires routed residual heads"
+                    )
+                if (
+                    self.actor_network != "mlp"
+                    or self.ac_optimizer != "adam"
+                    or self.fresh_ac is not False
+                ):
+                    raise ValueError(
+                        "Adaptive behavior compression requires one persistent "
+                        "Dreamer MLP Actor-Critic with Adam"
+                    )
+                if (
+                    self.adaptive_behavior_hidden_features != 512
+                    or self.adaptive_behavior_num_atoms != 4
+                    or not self.adaptive_behavior_reuse
+                    or self.adaptive_behavior_residual_scale != 0.1
+                ):
+                    raise ValueError(
+                        "Adaptive behavior compression requires full-width four-atom "
+                        "shared-base residual acquisition"
+                    )
+                if self.adaptive_behavior_steps_per_candidate < 1:
+                    raise ValueError(
+                        "Adaptive behavior compression steps must be positive"
+                    )
+                if self.adaptive_behavior_lr <= 0:
+                    raise ValueError("Adaptive behavior compression LR must be positive")
+                if self.adaptive_behavior_rollouts < 1:
+                    raise ValueError(
+                        "Adaptive behavior compression rollouts must be positive"
+                    )
+                if not 0 <= self.adaptive_behavior_max_return_drop < 1:
+                    raise ValueError(
+                        "Adaptive behavior maximum return drop must lie in [0, 1)"
+                    )
+                if min(
+                    self.adaptive_behavior_actor_distill_scale,
+                    self.adaptive_behavior_critic_distill_scale,
+                ) <= 0:
+                    raise ValueError(
+                        "Adaptive behavior actor/critic distillation scales must be positive"
+                    )
+                if (
+                    self.ac_slow_critic_regularizer != 0
+                    or self.ac_use_slow_critic_targets
+                ):
+                    raise ValueError(
+                        "Adaptive behavior compression requires one routed critic; "
+                        "slow-critic regularization and targets must remain disabled"
+                    )
         else:
             if self.evolving_checkpoint_retention != "all_boundaries":
                 raise ValueError(
@@ -1159,10 +1308,13 @@ class Config(Serialisable):
                 raise ValueError(
                     "The CNN task-bank protocol requires uint8 observation replay"
                 )
-        elif self.replay_observation_dtype != "float32":
+        elif (
+            not is_bounded_dream_rehearsal
+            and self.replay_observation_dtype != "float32"
+        ):
             raise ValueError(
                 "uint8 observation replay is reserved for DINO-ConvBank and "
-                "CNN-FullBank optimized protocols"
+                "CNN-FullBank optimized protocols or Bounded Dream Rehearsal"
             )
         if uses_task_experts:
             if self.algorithm != "arrow":
@@ -1210,6 +1362,94 @@ class Config(Serialisable):
             if self.rssm_num_experts != 1:
                 raise ValueError(
                     "RSSM experts require a task-aware continual_method"
+                )
+
+        dream_rehearsal_defaults = {
+            "dream_rehearsal_interval_agent_decisions": 2_000,
+            "dream_rehearsal_updates_per_prior_task": 50,
+            "dream_rehearsal_batch_sequences": 4,
+            "dream_rehearsal_context_steps": 16,
+            "dream_rehearsal_horizon": 15,
+            "dream_rehearsal_top_fraction": 0.25,
+            "dream_rehearsal_realized_threshold": 0.3,
+            "dream_rehearsal_realized_bonus": 10.0,
+            "dream_rehearsal_grad_clip": 100.0,
+        }
+        if is_bounded_dream_rehearsal:
+            from clworldmodel.continual.dream_rehearsal import (
+                DreamRehearsalConfig,
+            )
+
+            if self.algorithm != "dv3":
+                raise ValueError("Bounded Dream Rehearsal requires DreamerV3")
+            if self.esc.env_schedule_type is not SequentialEnvironments:
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires a sequential task schedule"
+                )
+            if len(self.esc.env_configs) < 2:
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires at least two tasks"
+                )
+            if len(self.replay_buffers) != 1 or (
+                self.replay_buffers[0].rb_type is not LongTermReplay
+            ):
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires one fixed-capacity "
+                    "LongTermReplay reservoir"
+                )
+            if self.replay_buffers[0].rb_device.split(":", 1)[0] != "cpu":
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires CPU-resident replay"
+                )
+            if self.replay_observation_dtype != "uint8":
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires uint8 replay observations"
+                )
+            if self.sac_dv3_data_n_max < 1:
+                raise ValueError(
+                    "Bounded Dream Rehearsal replay capacity must be positive"
+                )
+            if self.fresh_ac is not False or self.actor_network != "mlp":
+                raise ValueError(
+                    "Bounded Dream Rehearsal requires one persistent shared MLP actor"
+                )
+            if self.data_parallel_world_size != 1:
+                raise ValueError(
+                    "Bounded Dream Rehearsal is initially validated on one device"
+                )
+            if self.dream_rehearsal_context_steps > self.data_t:
+                raise ValueError(
+                    "Dream-rehearsal context cannot exceed replay sequence length"
+                )
+            DreamRehearsalConfig(
+                interval_agent_decisions=(
+                    self.dream_rehearsal_interval_agent_decisions
+                ),
+                updates_per_prior_task=(
+                    self.dream_rehearsal_updates_per_prior_task
+                ),
+                batch_sequences=self.dream_rehearsal_batch_sequences,
+                context_steps=self.dream_rehearsal_context_steps,
+                horizon=self.dream_rehearsal_horizon,
+                top_fraction=self.dream_rehearsal_top_fraction,
+                realized_threshold=self.dream_rehearsal_realized_threshold,
+                realized_bonus=self.dream_rehearsal_realized_bonus,
+            )
+            if self.dream_rehearsal_grad_clip < 0:
+                raise ValueError(
+                    "Dream-rehearsal gradient clipping must be non-negative"
+                )
+        else:
+            nondefault_dream_rehearsal = {
+                name: (getattr(self, name), expected)
+                for name, expected in dream_rehearsal_defaults.items()
+                if getattr(self, name) != expected
+            }
+            if nondefault_dream_rehearsal:
+                raise ValueError(
+                    "Dream-rehearsal settings require "
+                    "continual_method='bounded_dream_rehearsal': "
+                    f"{nondefault_dream_rehearsal}"
                 )
 
         if is_moe_arrow:
@@ -2107,6 +2347,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2114,6 +2355,16 @@ class Config(Serialisable):
             "dino_patchbank_arrow",
             "dino_convbank_arrow",
         }
+
+    @property
+    def uses_bounded_dream_rehearsal(self) -> bool:
+        return self.continual_method == "bounded_dream_rehearsal"
+
+    @property
+    def uses_task_labelled_replay(self) -> bool:
+        """Whether task IDs are scheduler metadata on replay trajectories."""
+
+        return self.uses_task_experts or self.uses_bounded_dream_rehearsal
 
     @property
     def uses_full_task_experts(self) -> bool:
@@ -2141,6 +2392,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2155,6 +2407,7 @@ class Config(Serialisable):
     def uses_shared_actor(self) -> bool:
         return self.continual_method in {
             "cnn_compact_shared_actor_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }
 
@@ -2162,10 +2415,10 @@ class Config(Serialisable):
     def uses_replay_rehearsed_shared_behavior(self) -> bool:
         """Whether one shared actor-critic rehearses task-routed replay."""
 
-        return (
-            self.continual_method
-            == "evolving_atomic_rssm_shared_fastkan_arrow"
-        )
+        return self.continual_method in {
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_shared_fastkan_arrow",
+        }
 
     @property
     def uses_task_private_heads(self) -> bool:
@@ -2182,6 +2435,7 @@ class Config(Serialisable):
             in {
                 "evolving_atomic_rssm_shared_heads_arrow",
                 "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+                "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
                 "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
                 "evolving_atomic_rssm_learned_base_adapters_arrow",
             }
@@ -2193,6 +2447,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2206,6 +2461,7 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2215,9 +2471,18 @@ class Config(Serialisable):
     def uses_adaptive_qfp_compression(self) -> bool:
         """Whether completed Dense Q/F/P modules are return-gated and compacted."""
 
+        return self.continual_method in {
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
+        }
+
+    @property
+    def uses_adaptive_behavior_compression(self) -> bool:
+        """Whether routed Actor-Critic residuals are return-gated and compacted."""
+
         return (
             self.continual_method
-            == "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
+            == "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow"
         )
 
     def get_env_schedule(self) -> EnvironmentSchedule:
@@ -2282,10 +2547,28 @@ class Config(Serialisable):
             return MultiTypeReplay(*replays, sampling_weights=sampling_weights)
         if self.algorithm == "dv3" or self.algorithm == "sac":
             rc = self.replay_buffers[0]
+            storage_root = (
+                None
+                if storage_directory is None
+                else Path(storage_directory).expanduser().resolve()
+            )
+            if storage_root is not None:
+                storage_root.mkdir(parents=True, exist_ok=True)
+            observation_storage_path = (
+                None
+                if storage_root is None
+                else storage_root
+                / (
+                    f"0_{rc.rb_type.__name__}_observations."
+                    f"{self.replay_observation_dtype}.mmap"
+                )
+            )
             return rc.rb_type(
                 self.data_t,
                 self.sac_dv3_data_n_max,
                 self.action_space,
                 rc.rb_device,
+                store_task_ids=self.uses_task_labelled_replay,
+                observation_storage_path=observation_storage_path,
                 observation_dtype=self.replay_observation_dtype,
             )

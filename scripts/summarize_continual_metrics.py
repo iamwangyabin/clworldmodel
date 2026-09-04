@@ -225,6 +225,7 @@ def _policy(config: dict[str, Any], final_path: Path) -> str:
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
         "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -266,6 +267,15 @@ def _budget_signature(
     adaptive_compression_updates = int(
         declared_budgets.get("adaptive_compression_world_model_updates", 0)
     )
+    online_actor_critic_updates = int(
+        declared_budgets.get(
+            "actor_critic_updates",
+            sum(durations) * int(config["ac_train_steps"]),
+        )
+    )
+    adaptive_behavior_compression_updates = int(
+        declared_budgets.get("adaptive_behavior_compression_updates", 0)
+    )
     return {
         "task_duration_epochs": durations,
         "n_sync": int(config["n_sync"]),
@@ -287,6 +297,27 @@ def _budget_signature(
             declared_budgets.get("adaptive_compression_validation_rollouts", 0)
         ),
         "actor_critic_updates_per_epoch": int(config["ac_train_steps"]),
+        "online_actor_critic_updates": online_actor_critic_updates,
+        "adaptive_behavior_compression_updates": (
+            adaptive_behavior_compression_updates
+        ),
+        "adaptive_behavior_compression_imagined_states": int(
+            declared_budgets.get(
+                "adaptive_behavior_compression_imagined_states", 0
+            )
+        ),
+        "adaptive_behavior_compression_validation_rollouts": int(
+            declared_budgets.get(
+                "adaptive_behavior_compression_validation_rollouts", 0
+            )
+        ),
+        "total_actor_critic_optimizer_steps": int(
+            declared_budgets.get(
+                "total_actor_critic_optimizer_steps",
+                online_actor_critic_updates
+                + adaptive_behavior_compression_updates,
+            )
+        ),
         "world_model_batch_time": int(config["mb_t_size"]),
         "world_model_batch_sequences": int(config["mb_n_size"]),
         "replay_sequence_slots": replay_sequence_slots,
@@ -345,6 +376,55 @@ def _resource_accounting(run_dir: Path) -> dict[str, Any]:
                 "selected_layout"
             ],
             "artifacts": compression_artifacts,
+        }
+    behavior_compression_dir = run_dir / "adaptive_behavior_compression"
+    behavior_compression_artifacts = []
+    for path in sorted(
+        behavior_compression_dir.glob("task_*_boundary.json")
+    ):
+        data = _json(path)
+        if (
+            data.get("artifact_kind")
+            != "evolving_core_return_gated_actor_critic_residual_compression"
+        ):
+            raise ValueError(
+                f"Unexpected adaptive-behavior-compression artifact: {path}"
+            )
+        behavior_compression_artifacts.append(
+            {
+                "path": _portable_path(path),
+                "sha256": _sha256(path),
+                "data": data,
+            }
+        )
+    if behavior_compression_artifacts:
+        result["adaptive_behavior_compression"] = {
+            "task_count": len(behavior_compression_artifacts),
+            "optimizer_updates": sum(
+                int(item["data"]["optimizer_updates"])
+                for item in behavior_compression_artifacts
+            ),
+            "imagined_states": sum(
+                int(item["data"]["imagined_states"])
+                for item in behavior_compression_artifacts
+            ),
+            "selected_width_fractions": [
+                float(item["data"]["selected_width_fraction"])
+                for item in behavior_compression_artifacts
+            ],
+            "dense_fallback_tasks": [
+                int(item["data"]["completed_task_id"])
+                for item in behavior_compression_artifacts
+                if bool(item["data"]["selected_dense_fallback"])
+            ],
+            "actor_critic_parameters_removed": sum(
+                int(item["data"]["actor_critic_parameters_removed"])
+                for item in behavior_compression_artifacts
+            ),
+            "final_selected_layout": behavior_compression_artifacts[-1][
+                "data"
+            ]["selected_layout"],
+            "artifacts": behavior_compression_artifacts,
         }
     return result
 

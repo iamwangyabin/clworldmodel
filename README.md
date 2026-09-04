@@ -13,6 +13,9 @@ ablations at different stages of evidence:
 - the maintained ARROW source based on a pinned upstream commit;
 - the canonical ARROW-50 Atari launcher;
 - the matched DreamerV3/FIFO Atari control launcher;
+- the implementation-ready bounded Dream Rehearsal baseline, which keeps the
+  paper's actor-only graded self-imitation but caps its replay at the same
+  524,288 transitions as ARROW-50;
 - an opt-in decoder-free R2 representation-objective ablation with ARROW-50
   replay;
 - fixed-grid ReLU-KAN actor pilots, including a completed bounded-interface T1
@@ -138,6 +141,29 @@ not included. See `docs/protocols/dv3_fifo_atari.md` for the frozen protocol
 and artifact semantics. The component-level research questions, diagnostic-set
 rules, interpretation matrix, and planned result tables are defined in
 `docs/protocols/component_forgetting_audit.md`.
+
+## Bounded Dream Rehearsal baseline
+
+`Bounded-Dream-Rehearsal-v1-Atari` ports the Dream Rehearsal actor-only graded
+self-imitation update into the maintained DreamerV3 trainer. Unlike the
+reference artifact's never-clear phase libraries, it uses one fixed random-key
+reservoir with 1,024 trajectories x 512 transitions. uint8 mmap storage makes
+the run practical but does not increase that matched sample capacity. Task IDs
+exist only as replay-filter metadata and are not inputs to the shared world
+model or actor.
+
+```bash
+python scripts/run_bounded_dream_rehearsal_atari.py --seed 0 --dry-run
+python scripts/run_bounded_dream_rehearsal_atari.py \
+  --seed 0 \
+  --output-dir /persistent/path/bounded_dream_rehearsal_original_s0
+```
+
+This method is storage matched, not compute matched: the reference cadence adds
+actor-only optimization for every prior task, and its manifest reports those
+updates separately. No target-CUDA run has yet validated the implementation.
+See `docs/protocols/bounded_dream_rehearsal_atari.md` for formulas, provenance,
+declared deviations, and the required comparison matrix.
 
 ## Representation-objective ablation: ARROW-R2Rep-50
 
@@ -593,6 +619,32 @@ and `64/64/32`. The outcome-dependent final model ranges from the
 accepts the smallest width. Compression adds 6,000 explicitly budgeted
 world-model updates; it is not a compute-matched A result. See
 `docs/protocols/evolving_core_dense_acquire_adaptive_qfp_compression_v1_atari.md`.
+
+The separately named adaptive shared-behavior profile applies the same
+acquire-wide/return-gated-compress rule to Actor and Critic. It stores one
+shared MLP Actor/Critic base pair and a routed residual pair per task; online
+updates rehearse shared bases on a fixed 75% current/25% old-task split. At
+each boundary, all residual candidates `384/256/128/64` receive equal imagined
+LTDM distillation compute before a separate raw-return cohort selects the
+smallest acceptable pair with Dense fallback:
+
+```bash
+python scripts/run_evolving_atomic_rssm.py \
+  --task-order arrow-original-six \
+  --prediction-head-profile shared_distilled \
+  --adaptive-qfp-compression \
+  --behavior-profile shared_adaptive_residual_mlp \
+  --seed 0 \
+  --classification pilot \
+  --dry-run
+```
+
+Behavior parameters are outcome dependent from `12,036,591` (all Dense
+fallback) to `3,039,855` (all width 64). Joint online parameters range from
+`54,638,216` to `25,679,048`; the upper bound is slightly larger than D, so
+compression is measured rather than promised. The extra 6,000 behavior
+compression updates and 480 selector rollouts are explicit. See
+`docs/protocols/evolving_core_adaptive_qfp_ac_compression_v1_atari.md`.
 
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control

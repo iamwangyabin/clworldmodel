@@ -38,9 +38,11 @@ from summarize_continual_metrics import build_run_report
 FORMAL_TASK0_PROFILE = "fixed_v2"
 PRIVATE_MLP_BEHAVIOR = "private_mlp"
 SHARED_FASTKAN_STABLE_BEHAVIOR = "shared_fastkan_stable"
+ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR = "shared_adaptive_residual_mlp"
 BEHAVIOR_PROFILES = (
     PRIVATE_MLP_BEHAVIOR,
     SHARED_FASTKAN_STABLE_BEHAVIOR,
+    ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
 )
 PRIVATE_PREDICTION_HEADS_PROFILE = "private"
 SHARED_DISTILLED_HEADS_PROFILE = "shared_distilled"
@@ -86,6 +88,14 @@ ADAPTIVE_QFP_COMPRESSION_PROTOCOL = (
 )
 ADAPTIVE_QFP_COMPRESSION_METHOD = (
     "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
+)
+ADAPTIVE_QFP_AC_COMPRESSION_PROTOCOL = (
+    "Evolving-Core-DenseAcquire-ReturnGatedAdaptiveQFPAC-"
+    "SharedDistilledHeads-SharedResidualMLPAC-ARROW-v1-"
+    "OriginalSix-Atari-TaskAware-Pilot"
+)
+ADAPTIVE_QFP_AC_COMPRESSION_METHOD = (
+    "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow"
 )
 ADAPTIVE_QFP_WIDTH_FRACTIONS = (0.75, 0.5, 0.25, 0.125)
 ADAPTIVE_QFP_STEPS_PER_CANDIDATE = 250
@@ -200,6 +210,7 @@ def _protocol_for_task_order(
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
     task0_profile: str | None = None,
     prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
+    behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
     adaptive_qfp_compression: bool = False,
 ) -> str:
     _validate_mechanism_profile(
@@ -210,6 +221,8 @@ def _protocol_for_task_order(
         raise ValueError(
             f"Unknown prediction-head profile: {prediction_head_profile!r}"
         )
+    if behavior_profile not in BEHAVIOR_PROFILES:
+        raise ValueError(f"Unknown behavior profile: {behavior_profile!r}")
     if adaptive_qfp_compression:
         if task_order != "arrow-original-six":
             raise ValueError(
@@ -228,7 +241,24 @@ def _protocol_for_task_order(
             raise ValueError(
                 "Adaptive Q/F/P compression acquires dense matched_512 mechanisms"
             )
-        return ADAPTIVE_QFP_COMPRESSION_PROTOCOL
+        if behavior_profile not in {
+            PRIVATE_MLP_BEHAVIOR,
+            ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
+        }:
+            raise ValueError(
+                "Adaptive Q/F/P compression supports private MLP behavior or "
+                "the separately named adaptive shared-residual MLP behavior"
+            )
+        return (
+            ADAPTIVE_QFP_AC_COMPRESSION_PROTOCOL
+            if behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
+            else ADAPTIVE_QFP_COMPRESSION_PROTOCOL
+        )
+    if behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR:
+        raise ValueError(
+            "Adaptive shared-residual MLP behavior requires adaptive Q/F/P "
+            "compression under its separately named protocol"
+        )
     if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
         if (
             mechanism_profile != DEFAULT_MECHANISM_PROFILE
@@ -453,6 +483,15 @@ MLP_ACTOR_PARAMETERS = 797_202
 MLP_CRITIC_PARAMETERS = 918_783
 FASTKAN_ACTOR_PARAMETERS = 793_692
 FASTKAN_CRITIC_PARAMETERS = 906_978
+ADAPTIVE_BEHAVIOR_HIDDEN_FEATURES = 512
+ADAPTIVE_BEHAVIOR_NUM_ATOMS = 4
+ADAPTIVE_BEHAVIOR_RESIDUAL_SCALE = 0.1
+ADAPTIVE_BEHAVIOR_STEPS_PER_CANDIDATE = 250
+ADAPTIVE_BEHAVIOR_LEARNING_RATE = 2e-4
+ADAPTIVE_BEHAVIOR_VALIDATION_ROLLOUTS = 16
+ADAPTIVE_BEHAVIOR_MAXIMUM_RETURN_DROP = 0.05
+ADAPTIVE_BEHAVIOR_ACTOR_DISTILL_SCALE = 1.0
+ADAPTIVE_BEHAVIOR_CRITIC_DISTILL_SCALE = 1.0
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -514,7 +553,9 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "private_mlp exactly reproduces Evolving-Core v1/v2 behavior banks; "
             "shared_fastkan_stable selects the separately named shared-frozen-"
-            "down world model plus shared FastKAN Actor/Critic with replay rehearsal."
+            "down world model plus shared FastKAN Actor/Critic with replay rehearsal; "
+            "shared_adaptive_residual_mlp stores one shared MLP Actor/Critic base "
+            "plus return-gated task residuals and requires adaptive Q/F/P compression."
         ),
     )
     parser.add_argument("--output-dir", type=Path)
@@ -555,9 +596,13 @@ def _resolved_config(
                 "Adaptive Q/F/P compression v1 is fixed to the ARROW "
                 "original-six order"
             )
-        if behavior_profile != PRIVATE_MLP_BEHAVIOR:
+        if behavior_profile not in {
+            PRIVATE_MLP_BEHAVIOR,
+            ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
+        }:
             raise ValueError(
-                "Adaptive Q/F/P compression retains private MLP Actor-Critics"
+                "Adaptive Q/F/P compression supports private MLP Actor-Critics "
+                "or the named adaptive shared-residual MLP Actor-Critic"
             )
         if prediction_head_profile != SHARED_DISTILLED_HEADS_PROFILE:
             raise ValueError(
@@ -572,10 +617,13 @@ def _resolved_config(
                 "Adaptive Q/F/P compression acquires dense matched_512 mechanisms"
             )
     if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
-        if behavior_profile != PRIVATE_MLP_BEHAVIOR:
+        if behavior_profile not in {
+            PRIVATE_MLP_BEHAVIOR,
+            ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
+        }:
             raise ValueError(
-                "Shared distilled prediction heads retain the private MLP "
-                "Actor-Critic bank"
+                "Shared distilled prediction heads support the private MLP bank "
+                "or the named adaptive shared-residual MLP Actor-Critic"
             )
         if (
             mechanism_profile != DEFAULT_MECHANISM_PROFILE
@@ -602,6 +650,16 @@ def _resolved_config(
             raise ValueError(
                 "Shared FastKAN v1 fixes matched_512 capacity and owns its "
                 "shared-frozen-down parameterization"
+            )
+    if behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR:
+        if not adaptive_qfp_compression:
+            raise ValueError(
+                "Adaptive shared-residual MLP behavior requires --adaptive-qfp-compression"
+            )
+        if task_order != "arrow-original-six":
+            raise ValueError(
+                "Adaptive Q/F/P + Actor-Critic compression v1 is fixed to the "
+                "ARROW original-six order"
             )
     config = copy.deepcopy(source)
     by_name = {
@@ -689,6 +747,18 @@ def _resolved_config(
             "task_private_actor_critic": True,
             "task_atomic_routes": True,
             "full_task_rssm_experts": False,
+            "adaptive_behavior_residuals": False,
+            "adaptive_behavior_hidden_features": 512,
+            "adaptive_behavior_residual_scale": 0.1,
+            "adaptive_behavior_num_atoms": 4,
+            "adaptive_behavior_reuse": True,
+            "adaptive_behavior_width_fractions": [],
+            "adaptive_behavior_steps_per_candidate": 0,
+            "adaptive_behavior_lr": 0.0,
+            "adaptive_behavior_rollouts": 0,
+            "adaptive_behavior_max_return_drop": 0.0,
+            "adaptive_behavior_actor_distill_scale": 0.0,
+            "adaptive_behavior_critic_distill_scale": 0.0,
         }
     )
     if behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR:
@@ -739,6 +809,42 @@ def _resolved_config(
                 ),
                 "adaptive_compression_qfp_distill_scale": (
                     ADAPTIVE_QFP_DISTILL_SCALE
+                ),
+            }
+        )
+    if behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR:
+        config.update(
+            {
+                "continual_method": ADAPTIVE_QFP_AC_COMPRESSION_METHOD,
+                "task_private_actor_critic": False,
+                "evolving_shared_behavior_current_task_fraction": 0.75,
+                "adaptive_behavior_residuals": True,
+                "adaptive_behavior_hidden_features": (
+                    ADAPTIVE_BEHAVIOR_HIDDEN_FEATURES
+                ),
+                "adaptive_behavior_residual_scale": (
+                    ADAPTIVE_BEHAVIOR_RESIDUAL_SCALE
+                ),
+                "adaptive_behavior_num_atoms": ADAPTIVE_BEHAVIOR_NUM_ATOMS,
+                "adaptive_behavior_reuse": True,
+                "adaptive_behavior_width_fractions": list(
+                    ADAPTIVE_QFP_WIDTH_FRACTIONS
+                ),
+                "adaptive_behavior_steps_per_candidate": (
+                    ADAPTIVE_BEHAVIOR_STEPS_PER_CANDIDATE
+                ),
+                "adaptive_behavior_lr": ADAPTIVE_BEHAVIOR_LEARNING_RATE,
+                "adaptive_behavior_rollouts": (
+                    ADAPTIVE_BEHAVIOR_VALIDATION_ROLLOUTS
+                ),
+                "adaptive_behavior_max_return_drop": (
+                    ADAPTIVE_BEHAVIOR_MAXIMUM_RETURN_DROP
+                ),
+                "adaptive_behavior_actor_distill_scale": (
+                    ADAPTIVE_BEHAVIOR_ACTOR_DISTILL_SCALE
+                ),
+                "adaptive_behavior_critic_distill_scale": (
+                    ADAPTIVE_BEHAVIOR_CRITIC_DISTILL_SCALE
                 ),
             }
         )
@@ -845,9 +951,36 @@ def _parameter_manifest(config: dict) -> dict:
         config["continual_method"]
         == "evolving_atomic_rssm_shared_fastkan_arrow"
     )
+    adaptive_behavior = (
+        config["continual_method"] == ADAPTIVE_QFP_AC_COMPRESSION_METHOD
+    )
     mlp_pair = MLP_ACTOR_PARAMETERS + MLP_CRITIC_PARAMETERS
     fastkan_pair = FASTKAN_ACTOR_PARAMETERS + FASTKAN_CRITIC_PARAMETERS
-    behavior_parameters = fastkan_pair if shared_fastkan else task_count * mlp_pair
+    adaptive_hidden = int(config.get("adaptive_behavior_hidden_features", 512))
+    adaptive_actor_residual = _residual_mechanism_parameters(
+        in_features=1536,
+        out_features=18,
+        hidden_features=adaptive_hidden,
+    )
+    adaptive_critic_residual = _residual_mechanism_parameters(
+        in_features=1536,
+        out_features=255,
+        hidden_features=adaptive_hidden,
+    )
+    adaptive_residual_pair = adaptive_actor_residual + adaptive_critic_residual
+    adaptive_route_parameters = (
+        2 * int(config.get("adaptive_behavior_num_atoms", 4))
+        * sum(range(task_count))
+    )
+    behavior_parameters = (
+        mlp_pair
+        + task_count * adaptive_residual_pair
+        + adaptive_route_parameters
+        if adaptive_behavior
+        else fastkan_pair
+        if shared_fastkan
+        else task_count * mlp_pair
+    )
     online_parameters = world_model_parameters + behavior_parameters
     matched_world_model_private_mlp_parameters = (
         world_model_parameters + task_count * mlp_pair
@@ -882,7 +1015,7 @@ def _parameter_manifest(config: dict) -> dict:
         "model_parameter_accounting.json",
         "actor_critic_parameter_accounting.json",
     ]
-    if shared_fastkan:
+    if shared_fastkan or adaptive_behavior:
         runtime_verification_artifacts.append(
             "shared_behavior_replay_accounting.json"
         )
@@ -903,11 +1036,24 @@ def _parameter_manifest(config: dict) -> dict:
         ),
         "mechanism_parameterization": mechanism_parameterization,
         "shared_frozen_down_parameters": shared_mechanism_parameters,
+        "behavior_topology": (
+            "single_shared_mlp_plus_task_adaptive_residuals"
+            if adaptive_behavior
+            else "single_shared_fastkan"
+            if shared_fastkan
+            else "per_task_private_mlp"
+        ),
         "behavior_parameters": behavior_parameters,
         "online_parameters": online_parameters,
         "fp32_parameter_bytes": online_parameters * 4,
         "per_task_world_model_additions": per_task_world_model_additions,
-        "per_later_task_behavior_growth": 0 if shared_fastkan else mlp_pair,
+        "per_later_task_behavior_growth": (
+            "outcome-dependent adaptive residual plus route"
+            if adaptive_behavior
+            else 0
+            if shared_fastkan
+            else mlp_pair
+        ),
         "runtime_verification_artifacts": runtime_verification_artifacts,
         "comparison_to_matched_world_model_private_mlp": {
             "reference_parameters": matched_world_model_private_mlp_parameters,
@@ -942,6 +1088,51 @@ def _parameter_manifest(config: dict) -> dict:
                 fastkan_pair + FASTKAN_CRITIC_PARAMETERS + FASTKAN_ACTOR_PARAMETERS
             ),
             "common_evolving_boundary_world_model_teacher_excluded": True,
+        }
+    if adaptive_behavior:
+        fractions = [
+            float(value)
+            for value in config["adaptive_behavior_width_fractions"]
+        ]
+        minimum_hidden = int(round(adaptive_hidden * fractions[-1]))
+        minimum_actor_residual = _residual_mechanism_parameters(
+            in_features=1536,
+            out_features=18,
+            hidden_features=minimum_hidden,
+        )
+        minimum_critic_residual = _residual_mechanism_parameters(
+            in_features=1536,
+            out_features=255,
+            hidden_features=minimum_hidden,
+        )
+        minimum_behavior_parameters = (
+            mlp_pair
+            + task_count
+            * (minimum_actor_residual + minimum_critic_residual)
+            + adaptive_route_parameters
+        )
+        result["adaptive_behavior_compression"] = {
+            "outcome_dependent": True,
+            "shared_mlp_base_parameters": mlp_pair,
+            "dense_private_actor_residual_parameters_per_task": (
+                adaptive_actor_residual
+            ),
+            "dense_private_critic_residual_parameters_per_task": (
+                adaptive_critic_residual
+            ),
+            "reuse_route_parameters": adaptive_route_parameters,
+            "dense_acquisition_hidden_width": adaptive_hidden,
+            "candidate_width_fractions": fractions,
+            "candidate_hidden_widths": [
+                int(round(adaptive_hidden * fraction)) for fraction in fractions
+            ],
+            "minimum_final_behavior_parameters": minimum_behavior_parameters,
+            "maximum_final_behavior_parameters": behavior_parameters,
+            "maximum_acquisition_behavior_parameters": behavior_parameters,
+            "dense_fallback_retained_when_no_candidate_passes": True,
+            "selection_metric": "current-task raw episodic return",
+            "final_heldout_cohort_used_for_selection": False,
+            "full_dense_behavior_teacher_persistent": False,
         }
     if shared_prediction_heads:
         result["training_only_prediction_head_teacher"] = {
@@ -1015,6 +1206,23 @@ def _parameter_manifest(config: dict) -> dict:
             "final_heldout_cohort_used_for_selection": False,
             "full_dense_teacher_persistent": False,
         }
+        if adaptive_behavior:
+            minimum_behavior_parameters = int(
+                result["adaptive_behavior_compression"][
+                    "minimum_final_behavior_parameters"
+                ]
+            )
+            result["adaptive_joint_compression"] = {
+                "outcome_dependent": True,
+                "minimum_final_online_parameters": (
+                    minimum_final_world_model_parameters
+                    + minimum_behavior_parameters
+                ),
+                "maximum_final_online_parameters": online_parameters,
+                "maximum_acquisition_online_parameters": online_parameters,
+                "dense_fallback_can_exceed_private_mlp_d": True,
+                "parameter_reduction_is_not_guaranteed": True,
+            }
     return result
 
 
@@ -1026,8 +1234,12 @@ def _budget_manifest(config: dict) -> dict:
     consolidation_updates = task_count * int(
         config["boundary_consolidation_steps"]
     )
-    adaptive_compression = (
-        config.get("continual_method") == ADAPTIVE_QFP_COMPRESSION_METHOD
+    adaptive_compression = config.get("continual_method") in {
+        ADAPTIVE_QFP_COMPRESSION_METHOD,
+        ADAPTIVE_QFP_AC_COMPRESSION_METHOD,
+    }
+    adaptive_behavior_compression = (
+        config.get("continual_method") == ADAPTIVE_QFP_AC_COMPRESSION_METHOD
     )
     adaptive_compression_updates = (
         task_count
@@ -1038,6 +1250,18 @@ def _budget_manifest(config: dict) -> dict:
     )
     adaptive_compression_sequences = adaptive_compression_updates * int(
         config["mb_n_size"]
+    )
+    adaptive_behavior_compression_updates = (
+        task_count
+        * len(config.get("adaptive_behavior_width_fractions", ()))
+        * int(config.get("adaptive_behavior_steps_per_candidate", 0))
+        if adaptive_behavior_compression
+        else 0
+    )
+    adaptive_behavior_compression_imagined_states = (
+        adaptive_behavior_compression_updates
+        * int(config["mb_n_size"])
+        * int(config.get("ac_dream_steps", 16))
     )
     task_updates = TASK_DURATION_EPOCHS * int(config["steps_per_batch"])
     replay_budget = _arrow_replay_storage_budget(config)
@@ -1067,11 +1291,31 @@ def _budget_manifest(config: dict) -> dict:
             if adaptive_compression
             else 0
         ),
+        "adaptive_behavior_compression_updates": (
+            adaptive_behavior_compression_updates
+        ),
+        "adaptive_behavior_compression_imagined_states": (
+            adaptive_behavior_compression_imagined_states
+        ),
+        "adaptive_behavior_compression_validation_rollouts": (
+            task_count
+            * (
+                1
+                + len(config.get("adaptive_behavior_width_fractions", ()))
+            )
+            * int(config.get("adaptive_behavior_rollouts", 0))
+            if adaptive_behavior_compression
+            else 0
+        ),
         "total_world_model_optimizer_steps": online_updates
         + consolidation_updates
         + adaptive_compression_updates,
         "actor_critic_updates": int(config["epochs"])
         * int(config["ac_train_steps"]),
+        "total_actor_critic_optimizer_steps": (
+            int(config["epochs"]) * int(config["ac_train_steps"])
+            + adaptive_behavior_compression_updates
+        ),
         "online_current_sequences": task_updates * int(config["mb_n_size"])
         + (task_count - 1) * task_updates * int(config["current_batch_n"]),
         "online_memory_sequences": (task_count - 1)
@@ -1110,6 +1354,17 @@ def _budget_manifest(config: dict) -> dict:
         "adaptive_compression_replay_source": (
             "completed-task LTDM" if adaptive_compression else None
         ),
+        "adaptive_behavior_compression_is_extra_compute": (
+            adaptive_behavior_compression
+        ),
+        "adaptive_behavior_compression_candidate_compute_is_fixed": (
+            adaptive_behavior_compression
+        ),
+        "adaptive_behavior_compression_replay_source": (
+            "completed-task LTDM imagined states"
+            if adaptive_behavior_compression
+            else None
+        ),
     }
 
 
@@ -1140,6 +1395,7 @@ def main() -> int:
         mechanism_parameterization=args.mechanism_parameterization,
         task0_profile=resolved_task0_profile,
         prediction_head_profile=args.prediction_head_profile,
+        behavior_profile=args.behavior_profile,
         adaptive_qfp_compression=args.adaptive_qfp_compression,
     )
     if args.task_order == "arrow-original-six" and args.classification != "pilot":
@@ -1204,6 +1460,11 @@ def main() -> int:
     launch = {
         "schema_version": 1,
         "method": (
+            "Evolving-Core Dense Acquire + Return-Gated Adaptive Q/F/P and "
+            "Shared-Base Task-Residual MLP Actor-Critic Compression + Shared "
+            "Distilled Prediction Heads"
+            if args.behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
+            else
             "Evolving-Core Dense Acquire + Return-Gated Adaptive Q/F/P "
             "Compression + Shared Distilled Prediction Heads + Private MLP "
             "Actor-Critic"
@@ -1251,6 +1512,11 @@ def main() -> int:
         ),
         "private_state": (
             "per-task projector, physically width-adaptive Dense Q/F/P atoms, "
+            "Q/F/P routes, and physically width-adaptive Actor/Critic residuals; "
+            "decoder/reward/continue and Actor/Critic MLP bases are shared"
+            if args.behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
+            else
+            "per-task projector, physically width-adaptive Dense Q/F/P atoms, "
             "routes, and independent MLP actor-critic; decoder/reward/continue "
             "are shared"
             if args.adaptive_qfp_compression
@@ -1296,6 +1562,30 @@ def main() -> int:
             }
         ),
         "behavior_topology": (
+            {
+                "actor_critic": (
+                    "one shared MLP base pair plus one routed adaptive residual "
+                    "pair per task"
+                ),
+                "acquisition_hidden_width": config[
+                    "adaptive_behavior_hidden_features"
+                ],
+                "candidate_width_fractions": config[
+                    "adaptive_behavior_width_fractions"
+                ],
+                "current_old_update_split": [0.75, 0.25],
+                "old_task_selection": "uniform over completed task routes",
+                "boundary_selection": "smallest candidate within 5% raw-return gate",
+                "dense_fallback": True,
+                "online_extra_optimizer_updates": 0,
+                "compression_extra_optimizer_updates": (
+                    len(config["adaptive_behavior_width_fractions"])
+                    * config["adaptive_behavior_steps_per_candidate"]
+                    * task_count
+                ),
+            }
+            if args.behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
+            else
             {
                 "actor_critic": "one cross-task width-53 FastKAN pair",
                 "stable_targets": True,
@@ -1345,7 +1635,10 @@ def main() -> int:
                 "candidate_replay": "completed-task LTDM only",
                 "selection_cohort": "dedicated fixed pruning validation",
                 "final_heldout_cohort_used_for_selection": False,
-                "actor_critic_compression": False,
+                "actor_critic_compression": (
+                    args.behavior_profile
+                    == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
+                ),
             }
             if args.adaptive_qfp_compression
             else None
@@ -1410,13 +1703,21 @@ def main() -> int:
         "model_parameter_accounting.json",
         "actor_critic_parameter_accounting.json",
     ]
-    if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR:
+    if args.behavior_profile in {
+        SHARED_FASTKAN_STABLE_BEHAVIOR,
+        ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
+    }:
         required.append("shared_behavior_replay_accounting.json")
     else:
         required.append("save_ac_bank.pt")
     if args.adaptive_qfp_compression:
         required.extend(
             f"adaptive_qfp_compression/task_{task_id:02d}_boundary.json"
+            for task_id in range(task_count)
+        )
+    if args.behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR:
+        required.extend(
+            f"adaptive_behavior_compression/task_{task_id:02d}_boundary.json"
             for task_id in range(task_count)
         )
     required_checkpoint_task_ids = (
