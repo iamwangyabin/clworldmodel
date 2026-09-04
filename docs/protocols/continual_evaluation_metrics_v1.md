@@ -136,6 +136,89 @@ For the named two-cycle protocol, additionally report:
 
 These fields are `null` for a one-cycle run.
 
+## Publication reporting checklist
+
+Do not reduce a continual Atari result to a single final score. The publication
+record consists of an immutable raw evaluation matrix, derived headline
+metrics, and resource/comparability accounting.
+
+### Headline performance metrics
+
+For a one-cycle curriculum, report the following six aggregate metrics in
+addition to the raw and normalized per-task curves:
+
+1. forgetting;
+2. forward transfer (FT);
+3. ACC;
+4. min-ACC;
+5. WC-ACC;
+6. sample efficiency.
+
+For a two-cycle curriculum, report the following ten aggregate metrics in
+addition to the raw and normalized per-task curves:
+
+1. cycle-1 forgetting (`C1-F`);
+2. cycle-2 forgetting (`C2-F`);
+3. maximum forgetting (`Max-F`);
+4. cycle-1 forward transfer (`C1-FT`);
+5. cycle-2 forward transfer (`C2-FT`);
+6. recovery;
+7. ACC;
+8. min-ACC;
+9. WC-ACC;
+10. sample efficiency.
+
+Preserve the per-task terms for forgetting, FT, Max-F, and recovery rather
+than retaining only their averages. Raw return is not one cross-game scalar:
+report each Atari game separately as mean and standard deviation and never
+average unnormalized returns across games.
+
+### Size of the canonical Atari evaluation record
+
+The full six-task, 540-epoch protocol evaluates all six tasks at 55 declared
+checkpoints (epoch 0 and every 10 epochs through epoch 540). Each seed therefore
+contains 330 task-checkpoint cells. At minimum, retaining raw-return mean and
+standard deviation produces 660 summary scalars per seed, or 3,300 across the
+five-seed cohort. Preserve the underlying episode returns when available so
+that means, dispersion, and alternative robust summaries can be regenerated.
+
+Each task-checkpoint cell must remain associated with the source fields listed
+above: task/index, epoch, agent decisions, raw frames, rollout count, policy
+mode, evaluator cohort, task-boundary flag, and evaluation-isolation status.
+Derived normalization and aggregate metrics may be regenerated; these raw
+measurements must not be overwritten.
+
+### Resource and fairness accounting
+
+Performance tables must be accompanied by the following accounting fields:
+
+- total, trainable, and inference-active parameter counts;
+- parameters added per task for a growing or task-private method;
+- Replay trajectory/sample capacity and actual allocated bytes;
+- peak GPU memory and peak host memory;
+- environment frames, collected transitions, world-model updates, and
+  actor-critic updates;
+- any additional consolidation, distillation, or boundary-only updates;
+- wall-clock duration and GPU-hours;
+- accelerator model/count, compute and Replay dtypes/devices, and whether task
+  identity is exposed to the agent.
+
+These are required comparability fields, not optional implementation details.
+A method that grows parameters, receives task identity, stores more bytes, or
+performs extra updates must not share an unqualified headline ranking with a
+fixed-capacity task-agnostic baseline.
+
+### Minimum publication package
+
+A publication-ready result therefore contains:
+
+1. the per-seed raw task-by-checkpoint return matrix and evaluation metadata;
+2. normalized per-task learning curves;
+3. the applicable six one-cycle or ten two-cycle aggregate metrics;
+4. five predeclared seed records and their median `[q25, q75]` aggregation;
+5. parameter, Replay-memory, interaction, update, and hardware accounting;
+6. immutable source hashes, resolved configuration, and protocol identifier.
+
 ## Cross-seed aggregation
 
 The per-run metric artifact is a seed-level record. An official table contains
