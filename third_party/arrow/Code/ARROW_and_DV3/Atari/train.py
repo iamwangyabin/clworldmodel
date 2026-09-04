@@ -4180,10 +4180,10 @@ if __name__ == "__main__":
             "Task-bank analysis snapshots are disabled until replay, all actor "
             "optimizers, and task-router state are saved resumably"
         )
-    if config.uses_bounded_dream_rehearsal and log_dir is None:
+    if config.uses_dream_rehearsal and log_dir is None:
         raise ValueError(
-            "Bounded Dream Rehearsal requires --log-dir for fixed-capacity "
-            "mapped replay and update accounting"
+            "Dream Rehearsal requires --log-dir for mapped replay and "
+            "update accounting"
         )
     if evaluation_snapshot_dir is not None:
         if not config.uses_task_experts:
@@ -4351,10 +4351,15 @@ if __name__ == "__main__":
         f"local_rank={distributed_context.local_rank} device={device} "
         "global_batch_unchanged=True"
     )
-    if config.uses_bounded_dream_rehearsal:
+    if config.uses_dream_rehearsal:
+        replay_semantics = (
+            "never_clear_full_history"
+            if config.uses_never_clear_dream_rehearsal
+            else "bounded_uniform_reservoir"
+        )
         print(
-            "Bounded Dream Rehearsal: "
-            f"reservoir_slots={config.sac_dv3_data_n_max} "
+            "Dream Rehearsal: "
+            f"replay={replay_semantics} slots={config.sac_dv3_data_n_max} "
             f"sequence_length={config.data_t} actor=single_shared "
             "task_id_network_input=False actor_only=True "
             f"interval_decisions={config.dream_rehearsal_interval_agent_decisions} "
@@ -4732,6 +4737,7 @@ if __name__ == "__main__":
     replay_storage_directory = None
     if config.continual_method in {
         "bounded_dream_rehearsal",
+        "never_clear_dream_rehearsal",
         "cnn_fullbank_arrow",
         "cnn_projector_lora_arrow",
         "cnn_compact_shared_actor_arrow",
@@ -5358,7 +5364,7 @@ if __name__ == "__main__":
                 )
         replay_task_id = (
             envs.current_task_index()
-            if config.uses_bounded_dream_rehearsal
+            if config.uses_dream_rehearsal
             else current_task_id
         )
         task_boundary = epoch > 0 and envs.is_new_env()
@@ -5739,8 +5745,13 @@ if __name__ == "__main__":
                 global_step += 1
                 continue
             replay_sample_kwargs = {}
-            if update_task_id is not None:
-                replay_sample_kwargs["task_id"] = update_task_id
+            replay_filter_task_id = (
+                replay_task_id
+                if config.uses_never_clear_dream_rehearsal
+                else update_task_id
+            )
+            if replay_filter_task_id is not None:
+                replay_sample_kwargs["task_id"] = replay_filter_task_id
             if feature_cache is None:
                 mb_acts, mb_obss, mb_rews, mb_conts, mb_resets = replay.minibatch(
                     mb_t_size, mb_n_size, **replay_sample_kwargs
@@ -6123,10 +6134,15 @@ if __name__ == "__main__":
                 local_ac_train_sync,
                 aco=aco,
                 lr=scheduled_ac_lr,
+                replay_task_id=(
+                    replay_task_id
+                    if config.uses_never_clear_dream_rehearsal
+                    else None
+                ),
                 **actor_critic_kwargs,
             )
 
-        if config.uses_bounded_dream_rehearsal:
+        if config.uses_dream_rehearsal:
             from clworldmodel.continual.dream_rehearsal import (
                 crossed_rehearsal_intervals,
                 rehearsal_update_allocation,
@@ -6134,7 +6150,7 @@ if __name__ == "__main__":
 
             if replay_task_id is None or aco is None:
                 raise RuntimeError(
-                    "Bounded Dream Rehearsal requires its scheduler task and "
+                    "Dream Rehearsal requires its scheduler task and "
                     "persistent Actor-Critic"
                 )
             interval_count = crossed_rehearsal_intervals(
@@ -6230,12 +6246,25 @@ if __name__ == "__main__":
                     }
                 )
             if distributed_context.is_primary:
+                never_clear = config.uses_never_clear_dream_rehearsal
                 accounting = {
                     "schema_version": 1,
-                    "artifact_kind": "bounded_dream_rehearsal_accounting",
-                    "method": "Bounded-Dream-Rehearsal-v1-Atari",
+                    "artifact_kind": (
+                        "never_clear_dream_rehearsal_accounting"
+                        if never_clear
+                        else "bounded_dream_rehearsal_accounting"
+                    ),
+                    "method": (
+                        "Never-Clear-Dream-Rehearsal-v1-Atari"
+                        if never_clear
+                        else "Bounded-Dream-Rehearsal-v1-Atari"
+                    ),
                     "replay": {
-                        "retention": "uniform_random_key_reservoir",
+                        "retention": (
+                            "never_clear_full_history_preallocated"
+                            if never_clear
+                            else "uniform_random_key_reservoir"
+                        ),
                         "trajectory_slots": replay.n,
                         "sequence_length": replay.t,
                         "transition_capacity": replay.n * replay.t,
@@ -6244,6 +6273,11 @@ if __name__ == "__main__":
                         "task_ids_are_replay_metadata_only": True,
                         "task_ids_exposed_to_model_or_actor": False,
                         "available_task_ids": list(available_task_ids),
+                        "base_training_sampling": (
+                            "current_task_only"
+                            if never_clear
+                            else "global_uniform"
+                        ),
                     },
                     "schedule": {
                         "interval_agent_decisions": (
@@ -6277,7 +6311,11 @@ if __name__ == "__main__":
                     "world_model_and_critic_updated_by_rehearsal": False,
                     "evaluation_transitions_enter_training": False,
                 }
-                accounting_path = log_dir / "bounded_dream_rehearsal_accounting.json"
+                accounting_path = log_dir / (
+                    "never_clear_dream_rehearsal_accounting.json"
+                    if never_clear
+                    else "bounded_dream_rehearsal_accounting.json"
+                )
                 temporary_accounting_path = accounting_path.with_suffix(
                     ".json.tmp"
                 )

@@ -11,6 +11,10 @@ contains experiment-facing code.
 - `run_bounded_dream_rehearsal_atari.py`: DreamerV3 with one shared actor,
   realized-first actor-only dream self-imitation, and a configurable bounded
   reservoir whose default 524,288-transition capacity matches ARROW-50.
+- `run_never_clear_dream_rehearsal_atari.py`: the storage-heavy paper-semantics
+  control that retains every collected trajectory, trains ordinary DreamerV3
+  only on the current task, and uses old-task libraries only for graded dream
+  rehearsal.
 - `run_r2dreamer_arrow_atari.py`: native R2-Dreamer plus ARROW replay launcher.
 - `train_r2dreamer_arrow_atari.py`: native R2-Dreamer training implementation used by the launcher.
 - `run_karrow_ar50_atari.py`: all KARROW visual versions and `dino`/`mlp`/`kan` arms.

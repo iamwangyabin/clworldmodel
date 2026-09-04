@@ -641,6 +641,21 @@ documented here, covered by focused parity tests, and followed by regenerating
     exact storage/compute accounting, deviations, launcher, and focused tests
     are documented outside this vendor directory.
 
+61. Add the separately named, task-agnostic
+    `Never-Clear-Dream-Rehearsal-v1-Atari` control. It preallocates one FIFO
+    slot for every trajectory in the finite schedule and therefore never
+    evicts, overwrites, rejects, or subsamples a collected experience. Exact
+    task-labelled views in the single uint8 CPU mmap implement logical phase
+    libraries. Ordinary world-model and Actor-Critic minibatches are filtered
+    to the current scheduled task; old-task views are used only for the
+    existing actor-only graded dream rehearsal. Actor rollout now accepts a
+    replay-only task filter separately from model routing, so shared networks
+    still receive no task identity. Typed config rejects the never-clear name
+    unless FIFO capacity equals the complete projected history. The new
+    launcher, byte ledger, protocol and decision records, and focused tests
+    distinguish this storage-heavy paper-semantics control from the bounded
+    diagnostic and from a MiniGrid reproduction.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

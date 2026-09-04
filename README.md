@@ -161,9 +161,33 @@ python scripts/run_bounded_dream_rehearsal_atari.py \
 
 This method is storage matched, not compute matched: the reference cadence adds
 actor-only optimization for every prior task, and its manifest reports those
-updates separately. No target-CUDA run has yet validated the implementation.
+updates separately. Its seed-0 Atari run is a diagnostic pilot rather than a
+paper reproduction.
 See `docs/protocols/bounded_dream_rehearsal_atari.md` for formulas, provenance,
 declared deviations, and the required comparison matrix.
+
+## Never-clear Dream Rehearsal control
+
+`Never-Clear-Dream-Rehearsal-v1-Atari` retains every trajectory collected by
+the finite Atari protocol. The original 541-epoch schedule stores 17,312
+complete trajectories, or 8,863,744 transitions. Ordinary world-model and
+actor-critic updates sample the current task only; old-task libraries are used
+only for actor-only Dream Rehearsal. One task-labelled uint8 CPU mmap provides
+the logical per-task libraries without exposing task identity to a network.
+
+```bash
+python scripts/run_never_clear_dream_rehearsal_atari.py \
+  --seed 0 --smoke-epochs 1 \
+  --output-dir /persistent/path/never_clear_dream_rehearsal_smoke_s0
+python scripts/run_never_clear_dream_rehearsal_atari.py \
+  --seed 0 --cpu-threads 12 --profile-stages \
+  --output-dir /persistent/path/never_clear_dream_rehearsal_original_s0
+```
+
+This control deliberately uses about 109.7 GB of accounted replay tensors and
+is not storage matched to ARROW-50. See
+`docs/protocols/never_clear_dream_rehearsal_atari.md` for its exact data flow,
+resource ledger, and claim restrictions.
 
 ## Representation-objective ablation: ARROW-R2Rep-50
 

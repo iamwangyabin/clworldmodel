@@ -29,6 +29,7 @@ DinoV3PatchAdapter = Literal["none", "conv_3x3_stride2"]
 ContinualMethod = Literal[
     "none",
     "bounded_dream_rehearsal",
+    "never_clear_dream_rehearsal",
     "moe_arrow",
     "cnn_fullbank_arrow",
     "cnn_projector_lora_arrow",
@@ -496,6 +497,7 @@ class Config(Serialisable):
         if self.continual_method not in {
             "none",
             "bounded_dream_rehearsal",
+            "never_clear_dream_rehearsal",
             "moe_arrow",
             "cnn_fullbank_arrow",
             "cnn_projector_lora_arrow",
@@ -515,6 +517,12 @@ class Config(Serialisable):
             raise ValueError(f"Unknown continual method: {self.continual_method!r}")
         is_bounded_dream_rehearsal = (
             self.continual_method == "bounded_dream_rehearsal"
+        )
+        is_never_clear_dream_rehearsal = (
+            self.continual_method == "never_clear_dream_rehearsal"
+        )
+        is_dream_rehearsal = (
+            is_bounded_dream_rehearsal or is_never_clear_dream_rehearsal
         )
         is_moe_arrow = self.continual_method == "moe_arrow"
         is_cnn_fullbank = self.continual_method == "cnn_fullbank_arrow"
@@ -1174,12 +1182,12 @@ class Config(Serialisable):
                     "The CNN task-bank protocol requires uint8 observation replay"
                 )
         elif (
-            not is_bounded_dream_rehearsal
+            not is_dream_rehearsal
             and self.replay_observation_dtype != "float32"
         ):
             raise ValueError(
                 "uint8 observation replay is reserved for DINO-ConvBank and "
-                "CNN-FullBank optimized protocols or Bounded Dream Rehearsal"
+                "CNN-FullBank optimized protocols or Dream Rehearsal"
             )
         if uses_task_experts:
             if self.algorithm != "arrow":
@@ -1240,47 +1248,68 @@ class Config(Serialisable):
             "dream_rehearsal_realized_bonus": 10.0,
             "dream_rehearsal_grad_clip": 100.0,
         }
-        if is_bounded_dream_rehearsal:
+        if is_dream_rehearsal:
             from clworldmodel.continual.dream_rehearsal import (
                 DreamRehearsalConfig,
             )
 
             if self.algorithm != "dv3":
-                raise ValueError("Bounded Dream Rehearsal requires DreamerV3")
+                raise ValueError("Dream Rehearsal requires DreamerV3")
             if self.esc.env_schedule_type is not SequentialEnvironments:
                 raise ValueError(
-                    "Bounded Dream Rehearsal requires a sequential task schedule"
+                    "Dream Rehearsal requires a sequential task schedule"
                 )
             if len(self.esc.env_configs) < 2:
                 raise ValueError(
-                    "Bounded Dream Rehearsal requires at least two tasks"
+                    "Dream Rehearsal requires at least two tasks"
                 )
-            if len(self.replay_buffers) != 1 or (
-                self.replay_buffers[0].rb_type is not LongTermReplay
+            if is_bounded_dream_rehearsal:
+                if len(self.replay_buffers) != 1 or (
+                    self.replay_buffers[0].rb_type is not LongTermReplay
+                ):
+                    raise ValueError(
+                        "Bounded Dream Rehearsal requires one fixed-capacity "
+                        "LongTermReplay reservoir"
+                    )
+            elif len(self.replay_buffers) != 1 or (
+                self.replay_buffers[0].rb_type is not FifoReplay
             ):
                 raise ValueError(
-                    "Bounded Dream Rehearsal requires one fixed-capacity "
-                    "LongTermReplay reservoir"
+                    "Never-clear Dream Rehearsal requires one full-history "
+                    "FifoReplay library"
                 )
             if self.replay_buffers[0].rb_device.split(":", 1)[0] != "cpu":
                 raise ValueError(
-                    "Bounded Dream Rehearsal requires CPU-resident replay"
+                    "Dream Rehearsal requires CPU-resident replay"
                 )
             if self.replay_observation_dtype != "uint8":
                 raise ValueError(
-                    "Bounded Dream Rehearsal requires uint8 replay observations"
+                    "Dream Rehearsal requires uint8 replay observations"
                 )
             if self.sac_dv3_data_n_max < 1:
                 raise ValueError(
-                    "Bounded Dream Rehearsal replay capacity must be positive"
+                    "Dream Rehearsal replay capacity must be positive"
                 )
+            if is_never_clear_dream_rehearsal:
+                expected_full_history_slots = self.epochs * self.data_n
+                if self.pretrain_enabled:
+                    expected_full_history_slots += (
+                        self.pretrain_data_multiplier - 1
+                    ) * self.data_n
+                if self.sac_dv3_data_n_max != expected_full_history_slots:
+                    raise ValueError(
+                        "Never-clear Dream Rehearsal must preallocate exactly "
+                        "one slot for every collected trajectory: "
+                        f"{self.sac_dv3_data_n_max} != "
+                        f"{expected_full_history_slots}"
+                    )
             if self.fresh_ac is not False or self.actor_network != "mlp":
                 raise ValueError(
-                    "Bounded Dream Rehearsal requires one persistent shared MLP actor"
+                    "Dream Rehearsal requires one persistent shared MLP actor"
                 )
             if self.data_parallel_world_size != 1:
                 raise ValueError(
-                    "Bounded Dream Rehearsal is initially validated on one device"
+                    "Dream Rehearsal is initially validated on one device"
                 )
             if self.dream_rehearsal_context_steps > self.data_t:
                 raise ValueError(
@@ -1313,7 +1342,7 @@ class Config(Serialisable):
             if nondefault_dream_rehearsal:
                 raise ValueError(
                     "Dream-rehearsal settings require "
-                    "continual_method='bounded_dream_rehearsal': "
+                    "a Dream Rehearsal continual_method: "
                     f"{nondefault_dream_rehearsal}"
                 )
 
@@ -2225,10 +2254,21 @@ class Config(Serialisable):
         return self.continual_method == "bounded_dream_rehearsal"
 
     @property
+    def uses_never_clear_dream_rehearsal(self) -> bool:
+        return self.continual_method == "never_clear_dream_rehearsal"
+
+    @property
+    def uses_dream_rehearsal(self) -> bool:
+        return (
+            self.uses_bounded_dream_rehearsal
+            or self.uses_never_clear_dream_rehearsal
+        )
+
+    @property
     def uses_task_labelled_replay(self) -> bool:
         """Whether task IDs are scheduler metadata on replay trajectories."""
 
-        return self.uses_task_experts or self.uses_bounded_dream_rehearsal
+        return self.uses_task_experts or self.uses_dream_rehearsal
 
     @property
     def uses_full_task_experts(self) -> bool:

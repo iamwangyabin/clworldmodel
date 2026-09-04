@@ -781,22 +781,36 @@ def dream_rollout(
     corrected_terminal_bootstrap: bool = False,
     feature_cache: Optional[object] = None,
     task_id: Optional[int] = None,
+    replay_task_id: Optional[int] = None,
 ) -> tuple[AcStateT, ActionT, RewardT, ReturnT, ReplayValueBatch]:
     # Returns: (T=n_steps N=n_sync)
     # States [ T N n_dis n_cls ]
     # Actions [ T N 18 ]
     # Rewards [ T N 1 ]
     # Lambda returns: [ T N 1 ]
+    if replay_task_id is not None and (
+        isinstance(replay_task_id, bool)
+        or not isinstance(replay_task_id, int)
+        or replay_task_id < 0
+    ):
+        raise ValueError("Replay task id must be a non-negative integer")
     z, h = wm.rssm.initial_state(n_sync)
     compute_dtype = getattr(wm, "compute_dtype", "float32")
     no_reset = torch.zeros(n_sync, 1, device=z.device)
+    # Task-expert protocols historically use ``task_id`` for both replay
+    # selection and model routing.  Never-clear Dream Rehearsal instead needs
+    # a current-task replay filter while keeping its shared model task agnostic.
+    sample_task_id = task_id if replay_task_id is None else replay_task_id
     # Arbitrary (n_ctx_frames) context frames
     if feature_cache is None:
-        if task_id is None:
+        if sample_task_id is None:
             sample = data.minibatch(n_ctx_frames, n_sync, mb_device=z.device)
         else:
             sample = data.minibatch(
-                n_ctx_frames, n_sync, mb_device=z.device, task_id=task_id
+                n_ctx_frames,
+                n_sync,
+                mb_device=z.device,
+                task_id=sample_task_id,
             )
         ctx_acts, ctx_images, ctx_rewards, ctx_conts, ctx_resets = sample
         assert ctx_images.shape == (n_ctx_frames, n_sync, 3, 64, 64), ctx_images.shape
@@ -809,8 +823,8 @@ def dream_rollout(
             )
     else:
         feature_kwargs = {"mb_device": z.device}
-        if task_id is not None:
-            feature_kwargs["task_id"] = task_id
+        if sample_task_id is not None:
+            feature_kwargs["task_id"] = sample_task_id
         feature_sample = feature_cache.minibatch(
             n_ctx_frames, n_sync, **feature_kwargs
         )
@@ -1157,6 +1171,7 @@ def train_ac_from_wm(
     protect_residual_updates: bool = False,
     feature_cache: Optional[object] = None,
     task_id: Optional[int] = None,
+    replay_task_id: Optional[int] = None,
     task_id_schedule: Optional[Sequence[int]] = None,
     actor_teacher: Optional[nn.Module] = None,
     actor_distill_task_ids: Sequence[int] = (),
@@ -1167,7 +1182,17 @@ def train_ac_from_wm(
     actor_distill_steps: int = 1,
     distributed_context: Optional[object] = None,
 ) -> tuple[ActorCriticOpt, torch.Tensor, dict[str, float]]:
+    if replay_task_id is not None and (
+        isinstance(replay_task_id, bool)
+        or not isinstance(replay_task_id, int)
+        or replay_task_id < 0
+    ):
+        raise ValueError("Replay task id must be a non-negative integer")
     if task_id_schedule is not None:
+        if replay_task_id is not None:
+            raise ValueError(
+                "A fixed replay task id cannot accompany a routed task schedule"
+            )
         if task_id is not None:
             raise ValueError("task_id and task_id_schedule are mutually exclusive")
         if len(task_id_schedule) != steps:
@@ -1334,6 +1359,7 @@ def train_ac_from_wm(
             corrected_terminal_bootstrap=corrected_imagination_bootstrap,
             feature_cache=feature_cache,
             task_id=rollout_task_id,
+            replay_task_id=replay_task_id,
         )
 
         statistics_returns = (
