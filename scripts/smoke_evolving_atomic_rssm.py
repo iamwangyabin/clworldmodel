@@ -48,10 +48,12 @@ from run_evolving_atomic_rssm import (  # noqa: E402
     MECHANISM_PARAMETERIZATIONS,
     PREDICTION_HEAD_PROFILES,
     PRIVATE_MLP_BEHAVIOR,
+    PRIVATE_MLP_AUTOROUTE_BEHAVIOR,
     PRIVATE_PREDICTION_HEADS_PROFILE,
     SHARED_DISTILLED_HEADS_PROFILE,
     SHARED_DOWN_PARAMETERIZATION,
     SHARED_FASTKAN_STABLE_BEHAVIOR,
+    SHARED_FASTKAN_AUTOROUTE_BEHAVIOR,
     _resolved_config,
 )
 from run_evolving_atomic_lora_shared_heads import (  # noqa: E402
@@ -63,7 +65,11 @@ LEGACY_METHOD_PROFILE = "legacy"
 ATOMIC_LORA_SHARED_HEADS_PROFILE = "atomic_lora_shared_heads"
 ADAPTIVE_QFP_COMPRESSION_PROFILE = "adaptive_qfp_compression"
 ADAPTIVE_QFP_AC_COMPRESSION_PROFILE = "adaptive_qfp_ac_compression"
+FASTKAN_AUTOROUTE_PROFILE = "fastkan_autoroute"
+D_AUTOROUTE_PROFILE = "d_autoroute"
 METHOD_PROFILES = (
+    D_AUTOROUTE_PROFILE,
+    FASTKAN_AUTOROUTE_PROFILE,
     LEGACY_METHOD_PROFILE,
     ATOMIC_LORA_SHARED_HEADS_PROFILE,
     ADAPTIVE_QFP_COMPRESSION_PROFILE,
@@ -139,6 +145,8 @@ def _config(
             )
         return Config.from_dict(_atomic_lora_shared_heads_config(source))
     if method_profile in {
+        D_AUTOROUTE_PROFILE,
+        FASTKAN_AUTOROUTE_PROFILE,
         ADAPTIVE_QFP_COMPRESSION_PROFILE,
         ADAPTIVE_QFP_AC_COMPRESSION_PROFILE,
     }:
@@ -152,6 +160,12 @@ def _config(
                 "The adaptive-compression smoke fixes all legacy profile selectors"
             )
         adaptive_behavior = (
+            PRIVATE_MLP_AUTOROUTE_BEHAVIOR
+            if method_profile == D_AUTOROUTE_PROFILE
+            else
+            SHARED_FASTKAN_AUTOROUTE_BEHAVIOR
+            if method_profile == FASTKAN_AUTOROUTE_PROFILE
+            else
             ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
             if method_profile == ADAPTIVE_QFP_AC_COMPRESSION_PROFILE
             else PRIVATE_MLP_BEHAVIOR
@@ -396,6 +410,38 @@ def main() -> int:
             if task_id == 0
             else (_ for _ in ()).throw(ValueError("Smoke has only old task 0"))
         )
+    routing_smoke = None
+    if config.uses_reconstruction_task_inference:
+        from clworldmodel.routing import EpisodeReconstructionRouter
+        from generate_trajectory import _routed_policy_step
+
+        router = EpisodeReconstructionRouter((0, 1))
+        with train._preserve_training_rng_state():
+            routing_aco = shared_aco
+            routing_bank = None
+            if config.task_private_actor_critic:
+                from ac import build_actor_critic_opt
+                from clworldmodel.continual import ActorCriticBank
+
+                routing_bank = ActorCriticBank()
+                for task in range(2):
+                    routing_bank.ensure(task, lambda _: build_actor_critic_opt(
+                        world_model, lr=config.ac_lr,
+                        **train._actor_critic_constructor_kwargs(config),
+                    ))
+            routing_policy = train._autorouted_behavior(config, routing_aco, routing_bank, 2)
+            z, h = world_model.rssm.initial_state(2)
+            previous = torch.nn.functional.one_hot(
+                torch.zeros(2, dtype=torch.long, device=device), config.action_space
+            )
+            _, _, actions = _routed_policy_step(
+                world_model, routing_policy, router,
+                torch.zeros(2, 3, 64, 64, device=device), z, h, previous,
+                torch.ones(2, 1, device=device), stochastic=False,
+            )
+        if actions.shape != (2,) or len(router.events) != 2:
+            raise RuntimeError("First-frame autoroute smoke did not cover both workers")
+        routing_smoke = {"events": router.events, "accuracy_claimed": False}
     old_private = tuple(world_model.private_parameters(0))
 
     metrics, diagnostics, gradient_norm = train._evolving_world_model_update(
@@ -694,6 +740,7 @@ def main() -> int:
             [0, 1] if behavior_metrics is not None else None
         ),
         "shared_behavior_metrics": behavior_metrics,
+        "first_frame_autoroute_smoke": routing_smoke,
         "adaptive_compression_smoke": adaptive_compression_smoke,
         "adaptive_behavior_compression_smoke": (
             adaptive_behavior_compression_smoke

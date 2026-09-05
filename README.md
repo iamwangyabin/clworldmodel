@@ -646,6 +646,45 @@ compression is measured rather than promised. The extra 6,000 behavior
 compression updates and 480 selector rollouts are explicit. See
 `docs/protocols/evolving_core_adaptive_qfp_ac_compression_v1_atari.md`.
 
+**D-AutoKAN (方案 F)** is a separate D-derived profile: it keeps adaptive Q/F/P
+and shared prediction heads, uses one fixed-size FastKAN StableTargets
+Actor-Critic, and selects each episode's route from first-frame reconstruction
+MSE. Training retains task labels; interaction and evaluation do not receive
+the environment's task ID. It is **not** fully task-agnostic training.
+
+```bash
+python scripts/run_evolving_atomic_rssm.py \
+  --task-order arrow-original-six \
+  --prediction-head-profile shared_distilled \
+  --adaptive-qfp-compression \
+  --behavior-profile shared_fastkan_autoroute \
+  --seed 0 --classification pilot --dry-run
+```
+
+The single behavior pair has `1,700,670` parameters instead of D's six-pair
+`10,295,910` bank; there is no task-wise AC growth. Compression now gates on
+every seen task's **auto-routed** raw return, explicitly increasing selection
+validation from 480 nominal to 1,680 exact episodes. First-frame probes also
+add inference compute. The new protocol uses explicit same-step resets and
+exact-episode evaluation, without redefining legacy D. No performance or
+recognition-accuracy result is claimed; see
+[`D-AutoKAN v1`](docs/protocols/evolving_core_fastkan_autoroute_v1_atari.md).
+
+**D-AutoRoute** has its own entry point and retains D's **independent MLP
+Actor-Critics**, without FastKAN, shared behavior, or AC compression:
+
+```bash
+python scripts/run_evolving_atomic_rssm_d_autoroute.py --seed 0 --dry-run
+```
+
+Each worker's first-frame reconstruction selects both its world-model path
+and its corresponding private Actor, locked until reset. Training/Replay still
+use true task labels; inference does not. Q/F/P compression checks every seen
+task's auto-routed return with the same 1,680 exact selector-episode budget as
+D-AutoKAN. AC parameters remain D's `10,295,910`; no new learned router
+parameters are added. Tests/dry runs are not Atari performance evidence. See
+[`D-AutoRoute v1`](docs/protocols/evolving_core_d_autoroute_v1_atari.md).
+
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control
 and tests 120, 150, 180, and 240 MsPacman epochs on the spare GPUs:

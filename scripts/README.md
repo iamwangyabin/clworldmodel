@@ -142,6 +142,10 @@ python scripts/run_moe_arrow_atari.py --method dino-convbank ...
 
 ## Shared Support
 
+- `run_evolving_atomic_rssm_d_autoroute.py`: independent D-AutoRoute entry point;
+  fixes D's private MLP Actor-Critics and adaptive Q/F/P, adding label-free
+  first-frame inference and all-seen return gates. It delegates to the shared
+  launcher/trainer rather than copying them. Start with `--dry-run`.
 - `artifact_io.py`: dependency-free checksums and atomic artifact writers used
   by audits and post-hoc probes.
 - `git_provenance.py`: clean-commit and upstream-sync checks used by training

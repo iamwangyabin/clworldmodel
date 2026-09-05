@@ -38,6 +38,8 @@ ContinualMethod = Literal[
     "evolving_atomic_rssm_arrow",
     "evolving_atomic_rssm_shared_heads_arrow",
     "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+    "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+    "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
     "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
     "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
     "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -278,6 +280,9 @@ class Config(Serialisable):
     compute_dtype: ComputeDType = "float32"
     data_parallel_world_size: DataParallelWorldSize = 1
     evaluation_seed_protocol: EvaluationSeedProtocol = "advancing"
+    task_route_inference: Literal["oracle", "first_frame_reconstruction"] = "oracle"
+    evaluation_episode_count_mode: Literal["legacy", "exact"] = "legacy"
+    evaluation_max_agent_decisions_per_episode: int = 32768
     evaluation_task_seed_offset: int = 0
     independent_expert_original_task_index: Optional[int] = None
 
@@ -518,6 +523,8 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
             "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -542,6 +549,35 @@ class Config(Serialisable):
             self.continual_method == "cnn_mechanism_bank_arrow"
         )
         is_rec_rssm = self.continual_method == "rec_rssm_arrow"
+        is_evolving_autoroute = self.uses_reconstruction_task_inference
+        uses_evolving_fastkan = self.continual_method in {
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
+            "evolving_atomic_rssm_shared_fastkan_arrow",
+        }
+        expected_inference = (
+            "first_frame_reconstruction" if is_evolving_autoroute else "oracle"
+        )
+        expected_episode_mode = "exact" if is_evolving_autoroute else "legacy"
+        if self.task_route_inference != expected_inference:
+            raise ValueError("Task route inference must match the separately named protocol")
+        if self.evaluation_episode_count_mode != expected_episode_mode:
+            raise ValueError("Evaluation episode counting must match the named protocol")
+        if (
+            type(self.evaluation_max_agent_decisions_per_episode) is not int
+            or self.evaluation_max_agent_decisions_per_episode != 32768
+        ):
+            raise ValueError("The exact evaluation episode safety cap is fixed at 32768 decisions")
+        if is_evolving_autoroute and (
+            self.evolving_task0_profile != "fixed_v1" or len(self.esc.env_configs) != 6
+            or self.epochs != 540 or self.esc.kwargs.get("swap_sched") != 90
+            or tuple(task.name for task in self.esc.env_configs) != (
+                "ALE/MsPacman-v5", "ALE/Boxing-v5", "ALE/CrazyClimber-v5",
+                "ALE/Frostbite-v5", "ALE/Seaquest-v5", "ALE/Enduro-v5",
+            )
+        ):
+            raise ValueError(
+                "Autoroute requires the original-six fixed_v1 540-epoch protocol"
+            )
         is_evolving_shared_fastkan = (
             self.continual_method
             == "evolving_atomic_rssm_shared_fastkan_arrow"
@@ -550,7 +586,7 @@ class Config(Serialisable):
             self.continual_method
             == "evolving_atomic_rssm_shared_heads_arrow"
         )
-        is_evolving_adaptive_compression_shared_heads = (
+        is_evolving_adaptive_compression_shared_heads = is_evolving_autoroute or (
             self.continual_method
             == "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
         )
@@ -577,6 +613,8 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
             "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -898,14 +936,14 @@ class Config(Serialisable):
                     0.1 if uses_evolving_shared_heads else 0.0
                 ),
                 "task_private_actor_critic": not (
-                    is_evolving_shared_fastkan
+                    uses_evolving_fastkan
                     or is_evolving_adaptive_qfp_ac_compression_shared_heads
                 ),
                 "task_atomic_routes": True,
-                "ac_lr": 4e-5 if is_evolving_shared_fastkan else 1e-4,
+                "ac_lr": 4e-5 if uses_evolving_fastkan else 1e-4,
             }
             if (
-                is_evolving_shared_fastkan
+                uses_evolving_fastkan
                 or is_evolving_adaptive_qfp_ac_compression_shared_heads
             ):
                 expected_evolving[
@@ -1625,7 +1663,7 @@ class Config(Serialisable):
                         "CNN-MechanismBank methods require persistent actor-critics"
                     )
                 expected_actor_network = (
-                    "fast_kan_ac_stable" if is_evolving_shared_fastkan else "mlp"
+                    "fast_kan_ac_stable" if uses_evolving_fastkan else "mlp"
                 )
                 if self.actor_network != expected_actor_network:
                     raise ValueError(
@@ -2336,6 +2374,15 @@ class Config(Serialisable):
         return data
 
     @property
+    def uses_reconstruction_task_inference(self) -> bool:
+        """Task-aware training, label-free action selection; not full task agnosticism."""
+
+        return self.continual_method in {
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
+        }
+
+    @property
     def uses_task_experts(self) -> bool:
         return self.continual_method in {
             "moe_arrow",
@@ -2347,6 +2394,8 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
             "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -2392,6 +2441,8 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
             "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -2406,6 +2457,7 @@ class Config(Serialisable):
     @property
     def uses_shared_actor(self) -> bool:
         return self.continual_method in {
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
             "cnn_compact_shared_actor_arrow",
             "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
@@ -2416,6 +2468,7 @@ class Config(Serialisable):
         """Whether one shared actor-critic rehearses task-routed replay."""
 
         return self.continual_method in {
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
             "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_shared_fastkan_arrow",
         }
@@ -2435,6 +2488,8 @@ class Config(Serialisable):
             in {
                 "evolving_atomic_rssm_shared_heads_arrow",
                 "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+                "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+                "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
                 "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
                 "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
                 "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -2447,6 +2502,8 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
             "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -2461,6 +2518,8 @@ class Config(Serialisable):
             "evolving_atomic_rssm_arrow",
             "evolving_atomic_rssm_shared_heads_arrow",
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
             "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
             "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
             "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -2473,6 +2532,8 @@ class Config(Serialisable):
 
         return self.continual_method in {
             "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+            "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
             "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
         }
 

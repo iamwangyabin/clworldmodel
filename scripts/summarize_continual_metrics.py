@@ -215,6 +215,8 @@ def _policy(config: dict[str, Any], final_path: Path) -> str:
         policy = final.get("policy")
         if isinstance(policy, str):
             return policy
+    if config.get("task_route_inference") == "first_frame_reconstruction":
+        return "first_frame_reconstruction_episode_lock_argmax_latent_mode"
     task_expert_methods = {
         "moe_arrow",
         "cnn_fullbank_arrow",
@@ -225,6 +227,8 @@ def _policy(config: dict[str, Any], final_path: Path) -> str:
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
         "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -319,6 +323,12 @@ def _budget_signature(
             )
         ),
         "world_model_batch_time": int(config["mb_t_size"]),
+        "task_route_inference": config.get("task_route_inference", "oracle"),
+        "evaluation_episode_count_mode": config.get("evaluation_episode_count_mode", "legacy"),
+        "adaptive_compression_validation_scope": declared_budgets.get(
+            "adaptive_compression_validation_scope", "current_task_oracle"
+            if adaptive_compression_updates else None,
+        ),
         "world_model_batch_sequences": int(config["mb_n_size"]),
         "replay_sequence_slots": replay_sequence_slots,
         "replay_sequence_length": sequence_length,

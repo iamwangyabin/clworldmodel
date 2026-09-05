@@ -279,6 +279,29 @@ def _stage_elapsed(start: float, enabled: bool) -> float:
     return _stage_clock(True) - start
 
 
+def _autorouted_behavior(
+    config: Config,
+    aco: Optional[ActorCriticOpt],
+    actor_critic_bank,
+    eligible_task_count: Optional[int],
+) -> torch.nn.Module:
+    """Expose acquired policies only; never choose one from an environment label."""
+    if eligible_task_count is None or not 1 <= eligible_task_count <= config.rssm_num_experts:
+        raise ValueError("Declare acquired route count explicitly; never infer it from evaluation labels")
+    if config.task_private_actor_critic:
+        from clworldmodel.routing import RoutedActorBank
+
+        if actor_critic_bank is None:
+            raise ValueError("Private auto-routed behavior requires the acquired Actor-Critic bank")
+        return RoutedActorBank({
+            task: actor_critic_bank.get(task).ac.actor
+            for task in range(eligible_task_count)
+        })
+    if aco is None or actor_critic_bank is not None:
+        raise ValueError("Shared auto-routed behavior requires exactly one shared Actor-Critic")
+    return aco.ac
+
+
 def _evaluate_policy_tasks(
     config: Config,
     wm: WorldModel,
@@ -287,11 +310,41 @@ def _evaluate_policy_tasks(
     task_seeds: Sequence[int],
     actor_critic_bank=None,
     distributed_context=None,
+    eligible_task_count: Optional[int] = None,
+    routing_diagnostics: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[list[float], list[float]]:
     if len(task_seeds) != len(eval_funcs):
         raise ValueError(
             "Evaluation task functions and fixed task seeds must have equal length"
         )
+    if getattr(config, "uses_reconstruction_task_inference", False):
+        from clworldmodel.routing import routing_audit
+
+        if distributed_context is not None and distributed_context.enabled:
+            raise ValueError("The named autoroute pilot is single-device")
+        behavior = _autorouted_behavior(config, aco, actor_critic_bank, eligible_task_count)
+        means, stds = [], []
+        with _preserve_training_rng_state():
+            for audit_task_id, (env_fns, task_seed) in enumerate(zip(eval_funcs, task_seeds)):
+                diagnostic = {}
+                mean, std = evaluate(
+                    config.n_sync, wm=wm, ac=behavior, env_fns=env_fns,
+                    env_repeat=config.env_repeat, n_rollouts=16, seed=task_seed,
+                    deterministic_policy=True,
+                    eligible_route_ids=tuple(range(eligible_task_count)),
+                    max_agent_decisions_per_episode=config.evaluation_max_agent_decisions_per_episode,
+                    diagnostics=diagnostic,
+                )
+                diagnostic["audit"] = routing_audit(
+                    diagnostic["routing_events"], true_task_id=audit_task_id,
+                    task_count=config.rssm_num_experts,
+                )
+                diagnostic["true_task_is_eligible"] = audit_task_id < eligible_task_count
+                if routing_diagnostics is not None:
+                    routing_diagnostics.append(diagnostic)
+                means.append(mean)
+                stds.append(std)
+        return means, stds
     if distributed_context is not None and distributed_context.enabled:
         local_values = torch.zeros(
             len(eval_funcs), 2, dtype=torch.float64, device=distributed_context.device
@@ -361,6 +414,14 @@ def _evaluate_policy_tasks(
             means.append(mean)
             stds.append(std)
     return means, stds
+
+
+
+def _write_routing_diagnostic(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(data, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def _actor_critic_schedule_values(
@@ -732,6 +793,13 @@ def _save_evolving_resumable_checkpoint(
             "all other replay tensors and retention indices are embedded"
         ),
     }
+    if getattr(config, "uses_reconstruction_task_inference", False):
+        payload["inference_routing"] = {
+            "mode": config.task_route_inference,
+            "eligible_route_ids": list(range(current_task_id + 1)),
+            "episode_state_checkpointed": False,
+            "resume_semantics": "boundary checkpoint; collection starts with fresh environment resets",
+        }
     if getattr(config, "uses_adaptive_qfp_compression", False):
         world_model_layout = wm.rssm.adaptive_compression_layout()
         teacher_layout = boundary_teacher.rssm.adaptive_compression_layout()
@@ -886,8 +954,26 @@ def _restore_evolving_resumable_checkpoint(
         raise ValueError(
             f"Checkpoint is not resumable Evolving-Core schema v{expected_schema}"
         )
-    if payload.get("config") != config.to_dict():
+    checkpoint_config = payload.get("config")
+    if isinstance(checkpoint_config, Mapping) and not getattr(config, "uses_reconstruction_task_inference", False):
+        # Historical D/other checkpoints predate these opt-in, default-off fields.
+        checkpoint_config = dict(checkpoint_config)
+        for name, default in (
+            ("task_route_inference", "oracle"),
+            ("evaluation_episode_count_mode", "legacy"),
+            ("evaluation_max_agent_decisions_per_episode", 32768),
+        ):
+            if name in config.to_dict():
+                checkpoint_config.setdefault(name, default)
+    if checkpoint_config != config.to_dict():
         raise ValueError("Resolved config changed across Evolving-Core resume")
+    if getattr(config, "uses_reconstruction_task_inference", False):
+        routing = payload.get("inference_routing", {})
+        completed_id = int(payload["schedule"]["current_task_id"])
+        if (not 0 <= completed_id < config.rssm_num_experts
+                or routing.get("eligible_route_ids") != list(range(completed_id + 1))
+                or routing.get("mode") != config.task_route_inference):
+            raise ValueError("Checkpoint inference eligibility does not match acquisition state")
 
     wm.load_state_dict(payload["world_model"], strict=True)
     boundary_teacher.load_state_dict(payload["boundary_teacher"], strict=True)
@@ -3080,6 +3166,7 @@ def _consolidate_evolving_shared_core(
         evaluation_aco = actor_critic_bank.get(completed_task_id)
         evaluation_bank = actor_critic_bank
 
+    pre_routing, post_routing = [], []
     pre_scaled_mean, pre_scaled_std = _evaluate_policy_tasks(
         config,
         wm,
@@ -3087,6 +3174,7 @@ def _consolidate_evolving_shared_core(
         seen_eval_funcs,
         seen_validation_seeds,
         actor_critic_bank=evaluation_bank,
+        eligible_task_count=seen_count, routing_diagnostics=pre_routing,
     )
     pre_raw_mean, pre_raw_std = _raw_return_statistics(
         config.esc.env_configs[:seen_count], pre_scaled_mean, pre_scaled_std
@@ -3110,6 +3198,7 @@ def _consolidate_evolving_shared_core(
                 "scaled_std": pre_scaled_std,
                 "raw_mean": pre_raw_mean,
                 "raw_std": pre_raw_std,
+                "routing": pre_routing,
             },
             "selection_metric": (
                 "validation.raw_mean[completed_task_id]"
@@ -3170,6 +3259,7 @@ def _consolidate_evolving_shared_core(
             seen_eval_funcs,
             seen_validation_seeds,
             actor_critic_bank=evaluation_bank,
+            eligible_task_count=seen_count, routing_diagnostics=post_routing,
         )
         post_raw_mean, post_raw_std = _raw_return_statistics(
             config.esc.env_configs[:seen_count],
@@ -3240,6 +3330,9 @@ def _consolidate_evolving_shared_core(
                 "post_raw_mean": post_raw_mean,
                 "post_raw_std": post_raw_std,
                 "maximum_relative_drop": config.boundary_max_return_drop,
+                "pre_routing": pre_routing,
+                "attempted_post_routing": post_routing,
+                "selected_routing": pre_routing if rollback else post_routing,
             },
             "rollback": rollback,
             "rollback_reasons": rollback_reasons,
@@ -3391,36 +3484,77 @@ def _evaluate_adaptive_compression_task(
     task_id: int,
     eval_env_fns,
     validation_seed: int,
-) -> dict[str, float]:
+    eligible_task_count: Optional[int] = None,
+) -> dict[str, Any]:
     if (actor_critic_bank is None) == (aco is None):
         raise ValueError(
             "Adaptive Q/F/P evaluation requires exactly one behavior topology"
         )
-    task_aco = actor_critic_bank.get(task_id) if actor_critic_bank is not None else aco
-    task_aco.ac.set_task_route(task_id)
+    diagnostic = {}
+    inference_kwargs = {"task_id": task_id}
+    if getattr(config, "uses_reconstruction_task_inference", False):
+        behavior = _autorouted_behavior(config, aco, actor_critic_bank, eligible_task_count)
+        inference_kwargs = {
+            "eligible_route_ids": tuple(range(eligible_task_count)),
+            "max_agent_decisions_per_episode": config.evaluation_max_agent_decisions_per_episode,
+            "diagnostics": diagnostic,
+        }
+    else:
+        task_aco = actor_critic_bank.get(task_id) if actor_critic_bank is not None else aco
+        task_aco.ac.set_task_route(task_id)
+        behavior = task_aco.ac
     with _preserve_training_rng_state():
         scaled_mean, scaled_std = evaluate(
             config.n_sync,
             wm=wm,
-            ac=task_aco.ac,
+            ac=behavior,
             env_fns=eval_env_fns,
             env_repeat=config.env_repeat,
             n_rollouts=config.adaptive_compression_rollouts,
             seed=validation_seed,
-            task_id=task_id,
             deterministic_policy=True,
+            **inference_kwargs,
         )
     raw_mean, raw_std = _raw_return_statistics(
         [config.esc.env_configs[task_id]],
         [scaled_mean],
         [scaled_std],
     )
-    return {
+    result = {
         "scaled_mean": float(scaled_mean),
         "scaled_std": float(scaled_std),
         "raw_mean": raw_mean[0],
         "raw_std": raw_std[0],
     }
+    if diagnostic:
+        from clworldmodel.routing import routing_audit
+
+        diagnostic["audit"] = routing_audit(
+            diagnostic["routing_events"], true_task_id=task_id,
+            task_count=config.rssm_num_experts,
+        )
+        result["inference"] = diagnostic
+    return result
+
+
+def _adaptive_qfp_validation_gate(teacher, candidate, maximum_relative_drop):
+    """All-seen auto-routed gates cannot be replaced by a current-task average."""
+    teacher_rows = teacher.get("seen_task_validation", [teacher])
+    candidate_rows = candidate.get("seen_task_validation", [candidate])
+    if not teacher_rows or len(teacher_rows) != len(candidate_rows):
+        raise ValueError("Teacher and candidate validation task sets must match")
+    drops = []
+    passed = True
+    for before, after in zip(teacher_rows, candidate_rows):
+        if before.get("task_id") != after.get("task_id"):
+            raise ValueError("Validation task order must match")
+        accepted = _adaptive_compression_candidate_passes(
+            teacher_return=before["raw_mean"], candidate_return=after["raw_mean"],
+            maximum_relative_drop=maximum_relative_drop,
+        )
+        passed = passed and accepted
+        drops.append((before["raw_mean"] - after["raw_mean"]) / max(abs(before["raw_mean"]), 1.0))
+    return passed, drops
 
 
 def _compress_evolving_task_qfp(
@@ -3438,6 +3572,8 @@ def _compress_evolving_task_qfp(
     log_dir: Path,
     writer,
     fused_adam: bool,
+    seen_eval_env_fns=None,
+    seen_validation_seeds: Optional[Sequence[int]] = None,
 ) -> dict[str, Any]:
     """Train/evaluate fixed compact candidates and install the smallest pass.
 
@@ -3453,6 +3589,8 @@ def _compress_evolving_task_qfp(
     if config.continual_method not in {
         _ADAPTIVE_QFP_COMPRESSION_METHOD,
         _ADAPTIVE_QFP_AC_COMPRESSION_METHOD,
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
     }:
         raise ValueError("Adaptive Q/F/P compression requires its named method")
     if (actor_critic_bank is None) == (aco is None):
@@ -3463,6 +3601,34 @@ def _compress_evolving_task_qfp(
         raise ValueError("Completed task is outside the adaptive curriculum")
     if wm.rssm.task_mechanism_parameterization != "adaptive_dense_width":
         raise ValueError("World model is not an adaptive dense-width topology")
+
+    autoroute = getattr(config, "uses_reconstruction_task_inference", False)
+    if autoroute and (
+        seen_eval_env_fns is None or seen_validation_seeds is None
+        or len(seen_eval_env_fns) != completed_task_id + 1
+        or len(seen_validation_seeds) != completed_task_id + 1
+    ):
+        raise ValueError("Auto-routed compression must validate every seen task")
+
+    def evaluate_condition(model):
+        if not autoroute:
+            return _evaluate_adaptive_compression_task(
+                config=config, wm=model, actor_critic_bank=actor_critic_bank, aco=aco,
+                task_id=completed_task_id, eval_env_fns=eval_env_fns,
+                validation_seed=validation_seed,
+            )
+        rows = []
+        for audit_id, (functions, seed) in enumerate(zip(seen_eval_env_fns, seen_validation_seeds)):
+            row = _evaluate_adaptive_compression_task(
+                config=config, wm=model, actor_critic_bank=actor_critic_bank,
+                aco=aco, task_id=audit_id,
+                eval_env_fns=functions, validation_seed=seed,
+                eligible_task_count=completed_task_id + 1,
+            )
+            rows.append({"task_id": audit_id, **row})
+        result = dict(rows[completed_task_id])
+        result["seen_task_validation"] = rows
+        return result
 
     was_training = wm.training
     dense_teacher = copy.deepcopy(wm).eval()
@@ -3503,15 +3669,7 @@ def _compress_evolving_task_qfp(
         # fully reflected in counters and artifacts instead.
         with _preserve_training_rng_state():
             wm.eval()
-            dense_evaluation = _evaluate_adaptive_compression_task(
-                config=config,
-                wm=dense_teacher,
-                actor_critic_bank=actor_critic_bank,
-                aco=aco,
-                task_id=completed_task_id,
-                eval_env_fns=eval_env_fns,
-                validation_seed=validation_seed,
-            )
+            dense_evaluation = evaluate_condition(dense_teacher)
             candidate_python_state = random.getstate()
             candidate_numpy_state = np.random.get_state()
             candidate_torch_state = torch.random.get_rng_state()
@@ -3588,24 +3746,12 @@ def _compress_evolving_task_qfp(
                     optimizer_updates += 1
                     losses.append(float(loss.detach().float().cpu()))
                 wm.eval()
-                evaluation = _evaluate_adaptive_compression_task(
-                    config=config,
-                    wm=wm,
-                    actor_critic_bank=actor_critic_bank,
-                    aco=aco,
-                    task_id=completed_task_id,
-                    eval_env_fns=eval_env_fns,
-                    validation_seed=validation_seed,
-                )
+                evaluation = evaluate_condition(wm)
                 relative_drop = (
                     dense_evaluation["raw_mean"] - evaluation["raw_mean"]
                 ) / max(abs(dense_evaluation["raw_mean"]), 1.0)
-                passed = _adaptive_compression_candidate_passes(
-                    teacher_return=dense_evaluation["raw_mean"],
-                    candidate_return=evaluation["raw_mean"],
-                    maximum_relative_drop=(
-                        config.adaptive_compression_max_return_drop
-                    ),
+                passed, task_drops = _adaptive_qfp_validation_gate(
+                    dense_evaluation, evaluation, config.adaptive_compression_max_return_drop,
                 )
                 candidate_record = {
                     "width_fraction": float(fraction),
@@ -3616,6 +3762,7 @@ def _compress_evolving_task_qfp(
                     "distillation_loss_last": losses[-1],
                     "validation": evaluation,
                     "relative_raw_return_drop": relative_drop,
+                    "per_validation_task_relative_raw_return_drop": task_drops,
                     "passed": passed,
                     "world_model_parameters": sum(
                         parameter.numel() for parameter in wm.parameters()
@@ -3691,6 +3838,8 @@ def _compress_evolving_task_qfp(
             ),
             "seed_cohort": "fixed_pruning_validation",
             "validation_seed": validation_seed,
+            "all_seen_validation_seeds": list(seen_validation_seeds) if autoroute else None,
+            "validation_policy": "auto_routed_all_seen" if autoroute else "oracle_current_task",
             "rollouts_per_evaluation": config.adaptive_compression_rollouts,
             "dense_teacher_validation": dense_evaluation,
             "maximum_relative_raw_return_drop": (
@@ -4339,9 +4488,14 @@ def _save_task_bank_evaluation_snapshot(
     raw_means: Sequence[float],
     raw_stds: Sequence[float],
     cohort: str,
+    eligible_task_count: Optional[int] = None,
 ) -> Path:
     """Save the exact task-bank weights evaluated by a fixed seed cohort."""
     uses_shared_actor = config.uses_shared_actor
+    if getattr(config, "uses_reconstruction_task_inference", False) and (
+        eligible_task_count is None or not 1 <= eligible_task_count <= config.rssm_num_experts
+    ):
+        raise ValueError("Auto-routed inference snapshots must persist acquired route eligibility")
     if uses_shared_actor:
         if actor_critic_bank is not None or aco is None:
             raise ValueError(
@@ -4405,6 +4559,12 @@ def _save_task_bank_evaluation_snapshot(
             else "per_task_actor_critic_bank"
         ),
     }
+    if getattr(config, "uses_reconstruction_task_inference", False):
+        payload["inference_routing"] = {
+            "mode": config.task_route_inference,
+            "eligible_route_ids": list(range(eligible_task_count)),
+            "task_identity_input": False,
+        }
     if uses_shared_actor:
         payload["actor_critic_state_dict"] = _cpu_state_dict(aco.ac)
     else:
@@ -4528,6 +4688,12 @@ def _save_task_bank_boundary_snapshot(
             else "per_task_actor_critic_bank"
         ),
     }
+    if getattr(config, "uses_reconstruction_task_inference", False):
+        payload["inference_routing"] = {
+            "mode": config.task_route_inference,
+            "eligible_route_ids": list(range(task_id + 1)),
+            "task_identity_input": False,
+        }
     if uses_shared_actor:
         payload["actor_critic_state_dict"] = _cpu_state_dict(completed_actor.ac)
     else:
@@ -4861,6 +5027,8 @@ if __name__ == "__main__":
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
         "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -5062,6 +5230,8 @@ if __name__ == "__main__":
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
         "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -5418,6 +5588,8 @@ if __name__ == "__main__":
         "evolving_atomic_rssm_arrow",
         "evolving_atomic_rssm_shared_heads_arrow",
         "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow",
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow",
         "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
         "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
         "evolving_atomic_rssm_learned_base_adapters_arrow",
@@ -6117,20 +6289,43 @@ if __name__ == "__main__":
                 if random_policy and config.pretrain_enabled
                 else 1
             ):
+                collection_routing = {}
+                collection_behavior = None if random_policy else (
+                    _autorouted_behavior(config, aco, actor_critic_bank, current_task_id + 1)
+                    if config.uses_reconstruction_task_inference else aco.ac
+                )
                 _acts, _obss, _rews, _conts, _resets = reinterpret_nt_to_t_n(
                     *generate_trajectories(
                         config.n_sync * config.gen_seq_len,
                         config.n_sync,
                         wm=wm,
-                        ac=None if random_policy else aco.ac,
+                        ac=collection_behavior,
                         env_fns=envs.funcs(),
                         env_repeat=config.env_repeat,
                         seed=_next_environment_seed(collection_environment_seed_rng),
-                        task_id=current_task_id,
+                        task_id=None if config.uses_reconstruction_task_inference else current_task_id,
+                        eligible_route_ids=(tuple(range(current_task_id + 1))
+                                            if config.uses_reconstruction_task_inference else None),
+                        routing_diagnostics=collection_routing,
+
                     ),
                     config.data_t,
                     config.data_n,
                 )
+                if config.uses_reconstruction_task_inference:
+                    from clworldmodel.routing import routing_audit
+
+                    collection_routing["audit"] = routing_audit(
+                        collection_routing["routing_events"], true_task_id=current_task_id,
+                        task_count=config.rssm_num_experts,
+                    )
+                    collection_routing["epoch"] = epoch
+                    collection_routing["world_model_updates"] = global_step
+                    collection_routing["replay_label_source"] = "training scheduler, never inferred route"
+                    _write_routing_diagnostic(
+                        log_dir / "task_routing" / f"collection_epoch_{epoch:04d}_batch_{_:02d}.json",
+                        collection_routing,
+                    )
                 frozen_features = None
                 if feature_cache is not None and feature_cache.requires_recording:
                     encoder = wm.rssm.image_embedder
@@ -6222,6 +6417,7 @@ if __name__ == "__main__":
                     for _ in envs.eval_funcs()
                 )
             )
+            periodic_routing = []
             eval_results_mean, eval_results_std = _evaluate_policy_tasks(
                 config,
                 wm,
@@ -6230,7 +6426,15 @@ if __name__ == "__main__":
                 periodic_task_seeds,
                 actor_critic_bank=actor_critic_bank,
                 distributed_context=distributed_context,
+                eligible_task_count=current_task_id + 1,
+                routing_diagnostics=periodic_routing,
             )
+            if config.uses_reconstruction_task_inference:
+                _write_routing_diagnostic(
+                    log_dir / "task_routing" / f"periodic_epoch_{epoch:04d}.json",
+                    {"epoch": epoch, "world_model_updates": global_step,
+                     "evaluation_transitions_enter_replay": False, "tasks": periodic_routing},
+                )
             eval_raw_mean, eval_raw_std = _raw_return_statistics(
                 config.esc.env_configs, eval_results_mean, eval_results_std
             )
@@ -6277,6 +6481,7 @@ if __name__ == "__main__":
                         raw_means=eval_raw_mean,
                         raw_stds=eval_raw_std,
                         cohort="periodic_validation",
+                        eligible_task_count=current_task_id + 1,
                     )
                     seen_task_count = min(
                         len(eval_raw_mean),
@@ -7258,6 +7463,8 @@ if __name__ == "__main__":
                     json.dumps(failure, indent=2) + "\n", encoding="utf-8"
                 )
                 os.replace(temporary_failure, failure_path)
+                if config.uses_reconstruction_task_inference:
+                    raise
                 print(
                     "Evolving-Core consolidation failed after safe rollback; "
                     f"continuing from completed task state: {type(exc).__name__}: {exc}"
@@ -7272,7 +7479,7 @@ if __name__ == "__main__":
                         actor_critic_bank=actor_critic_bank,
                         aco=(
                             aco
-                            if config.uses_adaptive_behavior_compression
+                            if config.uses_replay_rehearsed_shared_behavior
                             else None
                         ),
                         completed_task_id=completed_task_id,
@@ -7285,6 +7492,8 @@ if __name__ == "__main__":
                         log_dir=log_dir,
                         writer=writer,
                         fused_adam=args.fused_adam,
+                        seen_eval_env_fns=envs.eval_funcs()[:completed_task_id + 1],
+                        seen_validation_seeds=compression_validation_task_seeds[:completed_task_id + 1],
                     )
                 except Exception as exc:
                     wm.load_state_dict(compression_dense_state, strict=True)
@@ -7660,6 +7869,7 @@ if __name__ == "__main__":
                 for _ in eval_funcs
             )
         )
+        final_routing = []
         final_scaled_means, final_scaled_stds = _evaluate_policy_tasks(
             config,
             wm,
@@ -7668,6 +7878,8 @@ if __name__ == "__main__":
             final_eval_task_seeds,
             actor_critic_bank=actor_critic_bank,
             distributed_context=distributed_context,
+            eligible_task_count=len(eval_funcs),
+            routing_diagnostics=final_routing,
         )
         final_raw_means, final_raw_stds = _raw_return_statistics(
             task_configs, final_scaled_means, final_scaled_stds
@@ -7716,6 +7928,14 @@ if __name__ == "__main__":
                 )
             ],
         }
+        if config.uses_reconstruction_task_inference:
+            final_evaluation.update({
+                "policy": "first_frame_reconstruction_episode_lock_argmax_latent_mode",
+                "task_identity_exposed_during_inference": False,
+                "task_aware_training": True,
+                "eligible_route_ids": list(range(len(eval_funcs))),
+                "episode_count_mode": "exact", "routing": final_routing,
+            })
         if distributed_context.is_primary:
             final_evaluation_path = log_dir / "final_evaluation.json"
             temporary_final_evaluation_path = final_evaluation_path.with_suffix(

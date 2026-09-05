@@ -37,11 +37,15 @@ from summarize_continual_metrics import build_run_report
 
 FORMAL_TASK0_PROFILE = "fixed_v2"
 PRIVATE_MLP_BEHAVIOR = "private_mlp"
+PRIVATE_MLP_AUTOROUTE_BEHAVIOR = "private_mlp_autoroute"
 SHARED_FASTKAN_STABLE_BEHAVIOR = "shared_fastkan_stable"
+SHARED_FASTKAN_AUTOROUTE_BEHAVIOR = "shared_fastkan_autoroute"
 ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR = "shared_adaptive_residual_mlp"
 BEHAVIOR_PROFILES = (
     PRIVATE_MLP_BEHAVIOR,
+    PRIVATE_MLP_AUTOROUTE_BEHAVIOR,
     SHARED_FASTKAN_STABLE_BEHAVIOR,
+    SHARED_FASTKAN_AUTOROUTE_BEHAVIOR,
     ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
 )
 PRIVATE_PREDICTION_HEADS_PROFILE = "private"
@@ -97,6 +101,22 @@ ADAPTIVE_QFP_AC_COMPRESSION_PROTOCOL = (
 ADAPTIVE_QFP_AC_COMPRESSION_METHOD = (
     "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow"
 )
+FASTKAN_AUTOROUTE_METHOD = (
+    "evolving_atomic_rssm_adaptive_compression_shared_heads_fastkan_autoroute_arrow"
+)
+FASTKAN_AUTOROUTE_PROTOCOL = (
+    "Evolving-Core-DenseAcquire-AdaptiveQFP-SharedHeads-SharedFastKAN-"
+    "FirstFrameRouter-v1-OriginalSix-Atari-TaskAwareTraining-TaskIDFreeInference-Pilot"
+)
+D_AUTOROUTE_METHOD = (
+    "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"
+)
+D_AUTOROUTE_PROTOCOL = (
+    "Evolving-Core-DenseAcquire-AdaptiveQFP-SharedHeads-PrivateMLPAC-"
+    "FirstFrameRouter-v1-OriginalSix-Atari-TaskAwareTraining-TaskIDFreeInference-Pilot"
+)
+AUTOROUTE_METHODS = (D_AUTOROUTE_METHOD, FASTKAN_AUTOROUTE_METHOD)
+AUTOROUTE_BEHAVIORS = (PRIVATE_MLP_AUTOROUTE_BEHAVIOR, SHARED_FASTKAN_AUTOROUTE_BEHAVIOR)
 ADAPTIVE_QFP_WIDTH_FRACTIONS = (0.75, 0.5, 0.25, 0.125)
 ADAPTIVE_QFP_STEPS_PER_CANDIDATE = 250
 ADAPTIVE_QFP_LEARNING_RATE = 2e-4
@@ -243,17 +263,25 @@ def _protocol_for_task_order(
             )
         if behavior_profile not in {
             PRIVATE_MLP_BEHAVIOR,
+            PRIVATE_MLP_AUTOROUTE_BEHAVIOR,
             ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
+            SHARED_FASTKAN_AUTOROUTE_BEHAVIOR,
         }:
             raise ValueError(
-                "Adaptive Q/F/P compression supports private MLP behavior or "
-                "the separately named adaptive shared-residual MLP behavior"
+                "Adaptive Q/F/P compression supports private MLP, adaptive "
+                "shared-residual MLP, or the named shared FastKAN autoroute profile"
             )
+        if behavior_profile == SHARED_FASTKAN_AUTOROUTE_BEHAVIOR:
+            return FASTKAN_AUTOROUTE_PROTOCOL
+        if behavior_profile == PRIVATE_MLP_AUTOROUTE_BEHAVIOR:
+            return D_AUTOROUTE_PROTOCOL
         return (
             ADAPTIVE_QFP_AC_COMPRESSION_PROTOCOL
             if behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
             else ADAPTIVE_QFP_COMPRESSION_PROTOCOL
         )
+    if behavior_profile in AUTOROUTE_BEHAVIORS:
+        raise ValueError("Autoroute requires adaptive Q/F/P compression")
     if behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR:
         raise ValueError(
             "Adaptive shared-residual MLP behavior requires adaptive Q/F/P "
@@ -552,6 +580,8 @@ def _parser() -> argparse.ArgumentParser:
         default=PRIVATE_MLP_BEHAVIOR,
         help=(
             "private_mlp exactly reproduces Evolving-Core v1/v2 behavior banks; "
+            "private_mlp_autoroute preserves D's private MLPs and adds first-frame routing; "
+            "shared_fastkan_autoroute selects D + shared FastKAN + first-frame routing; "
             "shared_fastkan_stable selects the separately named shared-frozen-"
             "down world model plus shared FastKAN Actor/Critic with replay rehearsal; "
             "shared_adaptive_residual_mlp stores one shared MLP Actor/Critic base "
@@ -598,7 +628,9 @@ def _resolved_config(
             )
         if behavior_profile not in {
             PRIVATE_MLP_BEHAVIOR,
+            PRIVATE_MLP_AUTOROUTE_BEHAVIOR,
             ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
+            SHARED_FASTKAN_AUTOROUTE_BEHAVIOR,
         }:
             raise ValueError(
                 "Adaptive Q/F/P compression supports private MLP Actor-Critics "
@@ -619,11 +651,14 @@ def _resolved_config(
     if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
         if behavior_profile not in {
             PRIVATE_MLP_BEHAVIOR,
+            PRIVATE_MLP_AUTOROUTE_BEHAVIOR,
             ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
+            SHARED_FASTKAN_AUTOROUTE_BEHAVIOR,
         }:
             raise ValueError(
-                "Shared distilled prediction heads support the private MLP bank "
-                "or the named adaptive shared-residual MLP Actor-Critic"
+                "Shared distilled prediction heads support the private MLP Actor-Critic "
+                "bank or a separately named adaptive shared-residual MLP / "
+                "shared FastKAN autoroute Actor-Critic"
             )
         if (
             mechanism_profile != DEFAULT_MECHANISM_PROFILE
@@ -661,6 +696,8 @@ def _resolved_config(
                 "Adaptive Q/F/P + Actor-Critic compression v1 is fixed to the "
                 "ARROW original-six order"
             )
+    if behavior_profile in AUTOROUTE_BEHAVIORS and not adaptive_qfp_compression:
+        raise ValueError("Autoroute requires adaptive Q/F/P compression")
     config = copy.deepcopy(source)
     by_name = {
         task["name"]: task for task in config["esc"]["env_configs"]
@@ -848,6 +885,30 @@ def _resolved_config(
                 ),
             }
         )
+    if behavior_profile == SHARED_FASTKAN_AUTOROUTE_BEHAVIOR:
+        config.update(FASTKAN_AC_STABLE_CONFIG_OVERRIDES)
+        config.update({
+            "continual_method": FASTKAN_AUTOROUTE_METHOD,
+            "task_private_actor_critic": False,
+            "fresh_ac": False,
+            "evolving_shared_behavior_current_task_fraction": 0.75,
+            "shared_actor_imagination_distillation": False,
+            "shared_actor_distill_scale": 0.0,
+            "shared_actor_distill_interval": 1,
+            "shared_actor_distill_n_sync": 1,
+            "shared_actor_distill_burnin_steps": 0,
+            "shared_actor_distill_steps": 1,
+            "task_route_inference": "first_frame_reconstruction",
+            "evaluation_episode_count_mode": "exact",
+            "evaluation_max_agent_decisions_per_episode": 32768,
+        })
+    if behavior_profile == PRIVATE_MLP_AUTOROUTE_BEHAVIOR:
+        config.update({
+            "continual_method": D_AUTOROUTE_METHOD,
+            "task_route_inference": "first_frame_reconstruction",
+            "evaluation_episode_count_mode": "exact",
+            "evaluation_max_agent_decisions_per_episode": 32768,
+        })
     for replay_config in config["replay_buffers"]:
         replay_config["rb_device"] = "cpu"
     return config
@@ -948,8 +1009,9 @@ def _parameter_manifest(config: dict) -> dict:
         )
     )
     shared_fastkan = (
-        config["continual_method"]
-        == "evolving_atomic_rssm_shared_fastkan_arrow"
+        config["continual_method"] in {
+            "evolving_atomic_rssm_shared_fastkan_arrow", FASTKAN_AUTOROUTE_METHOD
+        }
     )
     adaptive_behavior = (
         config["continual_method"] == ADAPTIVE_QFP_AC_COMPRESSION_METHOD
@@ -1044,6 +1106,7 @@ def _parameter_manifest(config: dict) -> dict:
             else "per_task_private_mlp"
         ),
         "behavior_parameters": behavior_parameters,
+        "learned_router_parameters": 0,
         "online_parameters": online_parameters,
         "fp32_parameter_bytes": online_parameters * 4,
         "per_task_world_model_additions": per_task_world_model_additions,
@@ -1130,7 +1193,11 @@ def _parameter_manifest(config: dict) -> dict:
             "maximum_final_behavior_parameters": behavior_parameters,
             "maximum_acquisition_behavior_parameters": behavior_parameters,
             "dense_fallback_retained_when_no_candidate_passes": True,
-            "selection_metric": "current-task raw episodic return",
+            "selection_metric": (
+                "every seen task: auto-routed raw episodic return"
+                if config["continual_method"] in AUTOROUTE_METHODS
+                else "current-task raw episodic return"
+            ),
             "final_heldout_cohort_used_for_selection": False,
             "full_dense_behavior_teacher_persistent": False,
         }
@@ -1202,7 +1269,11 @@ def _parameter_manifest(config: dict) -> dict:
             "maximum_final_online_parameters": online_parameters,
             "maximum_acquisition_online_parameters": online_parameters,
             "dense_fallback_retained_when_no_candidate_passes": True,
-            "selection_metric": "current-task raw episodic return",
+            "selection_metric": (
+                "every seen task: auto-routed raw episodic return"
+                if config["continual_method"] in AUTOROUTE_METHODS
+                else "current-task raw episodic return"
+            ),
             "final_heldout_cohort_used_for_selection": False,
             "full_dense_teacher_persistent": False,
         }
@@ -1236,6 +1307,8 @@ def _budget_manifest(config: dict) -> dict:
     )
     adaptive_compression = config.get("continual_method") in {
         ADAPTIVE_QFP_COMPRESSION_METHOD,
+        D_AUTOROUTE_METHOD,
+        FASTKAN_AUTOROUTE_METHOD,
         ADAPTIVE_QFP_AC_COMPRESSION_METHOD,
     }
     adaptive_behavior_compression = (
@@ -1285,12 +1358,21 @@ def _budget_manifest(config: dict) -> dict:
         "adaptive_compression_world_model_updates": adaptive_compression_updates,
         "adaptive_compression_sequences": adaptive_compression_sequences,
         "adaptive_compression_validation_rollouts": (
-            task_count
+            (sum(range(1, task_count + 1))
+             if config.get("continual_method") in AUTOROUTE_METHODS else task_count)
             * (1 + len(config.get("adaptive_compression_width_fractions", ())))
             * int(config.get("adaptive_compression_rollouts", 0))
             if adaptive_compression
             else 0
         ),
+        "adaptive_compression_validation_scope": (
+            "all_seen_tasks_auto_routed"
+            if config.get("continual_method") in AUTOROUTE_METHODS
+            else "current_task_oracle"
+            if adaptive_compression else None
+        ),
+        "inference_router_adds_compute": config.get("continual_method") in AUTOROUTE_METHODS,
+        "evaluation_episode_count_mode": config.get("evaluation_episode_count_mode", "legacy"),
         "adaptive_behavior_compression_updates": (
             adaptive_behavior_compression_updates
         ),
@@ -1368,8 +1450,8 @@ def _budget_manifest(config: dict) -> dict:
     }
 
 
-def main() -> int:
-    args = _parser().parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
     if args.cpu_threads < 1:
         raise ValueError("--cpu-threads must be positive")
     project_git = (
@@ -1460,6 +1542,14 @@ def main() -> int:
     launch = {
         "schema_version": 1,
         "method": (
+            "D-AutoRoute: Dense Acquire + Adaptive Q/F/P + Shared Heads + "
+            "Private MLP Actor-Critics + First-Frame Reconstruction Routing"
+            if args.behavior_profile == PRIVATE_MLP_AUTOROUTE_BEHAVIOR
+            else
+            "D-AutoKAN: Dense Acquire + Adaptive Q/F/P + Shared Heads + "
+            "Shared FastKAN + First-Frame Reconstruction Routing"
+            if args.behavior_profile == SHARED_FASTKAN_AUTOROUTE_BEHAVIOR
+            else
             "Evolving-Core Dense Acquire + Return-Gated Adaptive Q/F/P and "
             "Shared-Base Task-Residual MLP Actor-Critic Compression + Shared "
             "Distilled Prediction Heads"
@@ -1496,6 +1586,18 @@ def main() -> int:
         "task_order": list(TASK_ORDERS[args.task_order]),
         "task_identity_exposed_to_agent": True,
         "task_agnostic_claimed": False,
+        "task_identity_exposed_during_training": True,
+        "task_identity_exposed_during_action_selection": (
+            args.behavior_profile not in AUTOROUTE_BEHAVIORS
+        ),
+        "inference_routing": {
+            "mode": config.get("task_route_inference", "oracle"),
+            "eligible_routes": "acquired slots plus currently acquiring slot; never future slots",
+            "episode_lock": args.behavior_profile in AUTOROUTE_BEHAVIORS,
+            "learned_router_parameters": 0,
+            "evaluation_episode_count_mode": config.get("evaluation_episode_count_mode", "legacy"),
+            "extra_inference_compute": "one RSSM posterior plus decoder per eligible route at episode start",
+        },
         "from_scratch": True,
         "behavior_profile": args.behavior_profile,
         "prediction_head_profile": args.prediction_head_profile,
@@ -1511,6 +1613,10 @@ def main() -> int:
             else "CNN plus posterior/recurrent/prior RSSM; always plastic"
         ),
         "private_state": (
+            "per-task projector and adaptive Q/F/P atoms/routes only; "
+            "one shared FastKAN Actor-Critic, no private behavior or decoder bank"
+            if args.behavior_profile == SHARED_FASTKAN_AUTOROUTE_BEHAVIOR
+            else
             "per-task projector, physically width-adaptive Dense Q/F/P atoms, "
             "Q/F/P routes, and physically width-adaptive Actor/Critic residuals; "
             "decoder/reward/continue and Actor/Critic MLP bases are shared"
@@ -1593,7 +1699,7 @@ def main() -> int:
                 "old_task_selection": "uniform over completed task routes",
                 "extra_optimizer_updates": 0,
             }
-            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
+            if args.behavior_profile in {SHARED_FASTKAN_STABLE_BEHAVIOR, SHARED_FASTKAN_AUTOROUTE_BEHAVIOR}
             else {
                 "actor_critic": "one independent MLP pair per task",
                 "stable_targets": False,
@@ -1631,6 +1737,11 @@ def main() -> int:
                     "adaptive_compression_max_return_drop"
                 ],
                 "selection": "smallest passing candidate after evaluating all candidates",
+                "validation_scope": (
+                    "every seen task under automatic routing"
+                    if args.behavior_profile in AUTOROUTE_BEHAVIORS
+                    else "completed task with oracle routing"
+                ),
                 "fallback": "retain full Dense Q/F/P when no candidate passes",
                 "candidate_replay": "completed-task LTDM only",
                 "selection_cohort": "dedicated fixed pruning validation",
@@ -1705,6 +1816,7 @@ def main() -> int:
     ]
     if args.behavior_profile in {
         SHARED_FASTKAN_STABLE_BEHAVIOR,
+        SHARED_FASTKAN_AUTOROUTE_BEHAVIOR,
         ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
     }:
         required.append("shared_behavior_replay_accounting.json")

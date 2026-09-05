@@ -668,6 +668,45 @@ documented here, covered by focused parity tests, and followed by regenerating
     exact storage/compute accounting, deviations, launcher, and focused tests
     are documented outside this vendor directory.
 
+62. Add the separately named D-AutoKAN original-six pilot, preserving D's
+    adaptive Dense Q/F/P and shared prediction heads while replacing the private
+    behavior bank with the existing single FastKAN StableTargets pair. Task
+    labels remain on training/Replay paths; interaction and evaluation instead
+    use project-owned first-frame reconstruction MSE selection over the acquired
+    route registry, with independent per-worker episode locks and grouped RSSM
+    inference. No private decoders, behavior adapters, or learned router are
+    added. The new profile alone specifies same-step vector autoreset/reset
+    no-op actions and exact independently seeded episode evaluation; legacy D's
+    evaluator and policy semantics are retained. Collector vector resources are
+    now closed in a `finally` block for all profiles. Every compression candidate
+    must preserve auto-routed raw return on every seen task, with 1,680 rather
+    than 480 nominal selector episodes explicitly budgeted. New artifacts retain
+    route scores, margins, confusion, episode returns/lengths, and acquired route
+    metadata; checkpoint loading validates eligibility and accepts absent new
+    default-off inference fields in historical old-method checkpoints. New-method
+    consolidation failures abort after rollback. Config, fixed-tensor inference,
+    mocked collection/evaluation, parameter counts, physical compaction/reload,
+    and raw-return gates have focused coverage. No training run or Atari accuracy
+    claim is attached to this integration. See the project D-AutoKAN v1 protocol.
+
+63. Add D-AutoRoute as a separate original-six method, with the standalone
+    project launcher `scripts/run_evolving_atomic_rssm_d_autoroute.py`. Preserve
+    D's independent MLP Actor/Critic bank, task-labelled training and Q/F/P
+    learning/compression, without shared behavior or AC compression. Generalize
+    the opt-in reconstruction policy adapter to a temporary project-owned
+    private-Actor view: each worker uses the Actor corresponding to its inferred
+    RSSM route, never the current scheduler Actor or true evaluation label.
+    Acquired eligibility is identical for every evaluated task and excludes
+    future slots. Existing exact evaluation/mode/RNG restoration, same-step
+    autoreset, all-seen compression gates and eligibility checkpoint metadata
+    now serve either private D-AutoRoute or shared D-AutoKAN behavior. Old D and
+    F settings remain separate. New tests cover per-worker private policy
+    identity, ownership, mock collection/evaluation, strict compact private-bank
+    checkpoint reload, config isolation, manifests and standalone dry runs.
+    World-model/AC update counts and parameter bounds stay D's; 1,680 exact
+    selector episodes and route probes are explicitly additional to legacy D.
+    No training, CUDA smoke or performance claim accompanies this change.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from
