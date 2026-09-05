@@ -1098,6 +1098,8 @@ def train_ac_from_wm(
         "return_mean",
         "return_scale",
         "gradient_norm",
+        "imagined_reward_mean",
+        "imagined_reward_positive_fraction",
     )
     metric_sums = torch.zeros(
         len(metric_names),
@@ -1131,7 +1133,7 @@ def train_ac_from_wm(
         target_value = None
         if use_slow_critic_targets:
             target_value = lambda state: ac.value(state, critic=aco.slow_critic)
-        states, actions, _, lam_returns, replay_value_batch = dream_rollout(
+        states, actions, imagined_rewards, lam_returns, replay_value_batch = dream_rollout(
             wm,
             ac,
             data,
@@ -1337,6 +1339,8 @@ def train_ac_from_wm(
             "return_mean": lam_returns_mean,
             "return_scale": torch.max(one, scale_ema),
             "gradient_norm": gradient_norm,
+            "imagined_reward_mean": imagined_rewards.mean(),
+            "imagined_reward_positive_fraction": (imagined_rewards > 0).float().mean(),
         }
         step_metric_values = torch.stack(
             tuple(value.detach().float() for value in step_metrics.values())

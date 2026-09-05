@@ -8,7 +8,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 import torch.distributions as td
-from gymnasium.vector import AsyncVectorEnv
+from gymnasium.vector import AsyncVectorEnv, AutoresetMode
 from gymnasium.wrappers import AtariPreprocessing
 from tqdm import tqdm
 
@@ -207,6 +207,7 @@ def evaluate(
     task_id: Optional[int] = None,
     deterministic_policy: bool = False,
     action_space: int = 18,
+    autoreset_mode: str = "legacy_next_step",
 ) -> tuple[float, float]:
     _, _, rews, conts, resets = generate_trajectories(
         n_rollouts * 2**13 // n_sync,
@@ -221,6 +222,7 @@ def evaluate(
         task_id=task_id,
         deterministic_policy=deterministic_policy,
         action_space=action_space,
+        autoreset_mode=autoreset_mode,
     )
     terms = torch.where(conts == 0)[0]
     starts = torch.where(resets == 1)[0]
@@ -253,6 +255,8 @@ def generate_trajectories(
     task_id: Optional[int] = None,
     deterministic_policy: bool = False,
     action_space: int = 18,
+    autoreset_mode: str = "legacy_next_step",
+    diagnostics: Optional[dict[str, Any]] = None,
 ) -> tuple[ActionT, Optional[ImageT], RewardT, ContT, ResetT]:
     # Returns [ X ... ] packed as [ N*T ... ] (sort of)
     # To change to [ T N ... ], do reshape and swapaxes
@@ -289,12 +293,27 @@ def generate_trajectories(
     ]
     if action_space < 1:
         raise ValueError("action_space must be positive")
+    modes = {
+        "legacy_next_step": AutoresetMode.NEXT_STEP,
+        "same_step": AutoresetMode.SAME_STEP,
+    }
+    if autoreset_mode not in modes:
+        raise ValueError(f"Unsupported collector autoreset mode: {autoreset_mode!r}")
     env = AsyncVectorEnv(
         [
             partial(_make_visual_env, env_fn, env_repeat, action_seed)
             for env_fn, action_seed in zip(source_env_fns, action_seeds)
-        ]
+        ],
+        autoreset_mode=modes[autoreset_mode],
     )
+    # Diagnostics do not sample RNGs or feed information back to the policy.
+    episode_returns = np.zeros(n_sync, dtype=np.float64)
+    completed_returns: list[float] = []
+    actual_actions = 0
+    positive_reward_events = 0
+    raw_reward_sum = 0.0
+    ignored_reset_actions = 0
+    action_counts = np.zeros(action_space, dtype=np.int64)
     if (
         not isinstance(env.single_action_space, gym.spaces.Discrete)
         or env.single_action_space.n != action_space
@@ -366,8 +385,23 @@ def generate_trajectories(
                 act_t = torch.nn.functional.one_hot(act, action_space)
                 act = act.cpu().numpy()
 
+            executed = (
+                ~reset
+                if autoreset_mode == "legacy_next_step"
+                else np.ones(n_sync, dtype=bool)
+            )
             obs, rew, term, trunc, _ = env.step(act)
             reset = term | trunc
+            if diagnostics is not None:
+                actual_actions += int(executed.sum())
+                ignored_reset_actions += int((~executed).sum())
+                action_counts += np.bincount(act[executed], minlength=action_space)
+                positive_reward_events += int((rew > 0).sum())
+                raw_reward_sum += float(rew.sum())
+                episode_returns += rew
+                for worker in np.flatnonzero(reset):
+                    completed_returns.append(float(episode_returns[worker]))
+                    episode_returns[worker] = 0.0
             # When there is an episode termination (`reset`):
             # `obs` is of the new episode
             # `rew` is of the previous episode
@@ -386,6 +420,23 @@ def generate_trajectories(
                     n_terminals += 1
 
             progbar.update(n_samples - _n_samples)
+
+    env.close()
+    if diagnostics is not None:
+        diagnostics.update(
+            autoreset_mode=autoreset_mode,
+            stored_rows=n_samples,
+            initial_reset_rows=n_sync,
+            actual_environment_actions=actual_actions,
+            ignored_reset_actions=ignored_reset_actions,
+            positive_reward_events=positive_reward_events,
+            observed_reward_sum=raw_reward_sum,
+            completed_episodes=len(completed_returns),
+            completed_positive_return_episodes=sum(value > 0 for value in completed_returns),
+            completed_episode_return_sum=sum(completed_returns),
+            completed_episode_returns=completed_returns,
+            executed_action_counts=action_counts.tolist(),
+        )
 
     acts = [np.stack(e) for e in acts]
     obss = [np.stack(e) for e in obss] if not no_images else None

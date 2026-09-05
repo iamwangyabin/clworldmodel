@@ -50,6 +50,39 @@ def masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     return torch.where(mask, values, 0).sum() / mask.sum()
 
 
+@torch.no_grad()
+def reward_learning_diagnostics(
+    prediction_symlog: torch.Tensor, rewards: torch.Tensor
+) -> dict[str, torch.Tensor]:
+    """Observe sparse reward learning without changing losses or sampling.
+
+    Conditional means use zero when the subset is empty; always inspect the
+    positive fraction/count before interpreting such a mean as model accuracy.
+    """
+    prediction = symexp(prediction_symlog)
+    positive = rewards > 0
+    zero = rewards == 0
+    positive_count = positive.sum().clamp_min(1)
+    zero_count = zero.sum().clamp_min(1)
+    return {
+        "LearningAudit/replay_positive_reward_fraction": positive.float().mean(),
+        "LearningAudit/replay_reward_mean": rewards.float().mean(),
+        "LearningAudit/predicted_reward_mean": prediction.mean(),
+        "LearningAudit/positive_reward_prediction_mean": torch.where(
+            positive, prediction, 0
+        ).sum() / positive_count,
+        "LearningAudit/positive_reward_target_mean": torch.where(
+            positive, rewards.float(), 0
+        ).sum() / positive_count,
+        "LearningAudit/positive_reward_absolute_error": torch.where(
+            positive, (prediction - rewards.float()).abs(), 0
+        ).sum() / positive_count,
+        "LearningAudit/zero_reward_absolute_error": torch.where(
+            zero, prediction.abs(), 0
+        ).sum() / zero_count,
+    }
+
+
 def symlog(x: torch.Tensor) -> torch.Tensor:
     with _full_precision_context(x.device):
         x = x.float()
@@ -1307,6 +1340,7 @@ class WorldModel(nn.Module):
                 "Loss/cont": conts_loss,
                 "Metric/neg_cont_mean": masked_mean(conts_pred, conts == 0),
                 "Metric/low_kl": low_kl.float().mean(),
+                **reward_learning_diagnostics(rews_pred, rews),
             }
             if self.observation_objective == "reconstruction":
                 metrics["Metric/low_kl_recon_loss"] = masked_mean(

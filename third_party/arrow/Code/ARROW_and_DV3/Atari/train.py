@@ -60,6 +60,20 @@ class _NoOpWriter:
         return None
 
 
+def _reward_learning_epoch_summary(totals: Sequence[float]) -> dict[str, Any]:
+    """Summarize all sampled reward targets, not a once-per-epoch minibatch."""
+    samples, positive, zero, prediction, target, positive_error, zero_error = totals
+    return {
+        "sampled_reward_targets": int(samples),
+        "sampled_positive_reward_targets": int(positive),
+        "sampled_zero_reward_targets": int(zero),
+        "positive_reward_prediction_mean": prediction / positive if positive else None,
+        "positive_reward_target_mean": target / positive if positive else None,
+        "positive_reward_absolute_error": positive_error / positive if positive else None,
+        "zero_reward_absolute_error": zero_error / zero if zero else None,
+    }
+
+
 def _autocast_context(device: torch.device, compute_dtype: str):
     if compute_dtype == "float32":
         return nullcontext()
@@ -298,6 +312,7 @@ def _evaluate_policy_tasks(
                     n_rollouts=16,
                     seed=task_seed,
                     action_space=config.action_space,
+                    autoreset_mode=getattr(config, "collection_autoreset_mode", "legacy_next_step"),
                     **evaluation_kwargs,
                 )
                 local_values[task_id] = torch.tensor(
@@ -335,6 +350,7 @@ def _evaluate_policy_tasks(
                 n_rollouts=16,
                 seed=task_seed,
                 action_space=config.action_space,
+                autoreset_mode=getattr(config, "collection_autoreset_mode", "legacy_next_step"),
                 **evaluation_kwargs,
             )
             means.append(mean)
@@ -5469,6 +5485,7 @@ if __name__ == "__main__":
                 if random_policy and config.pretrain_enabled
                 else 1
             ):
+                collection_diagnostics = {} if config.learning_diagnostics else None
                 _acts, _obss, _rews, _conts, _resets = reinterpret_nt_to_t_n(
                     *generate_trajectories(
                         config.n_sync * config.gen_seq_len,
@@ -5480,6 +5497,8 @@ if __name__ == "__main__":
                         seed=_next_environment_seed(collection_environment_seed_rng),
                         task_id=current_task_id,
                         action_space=config.action_space,
+                        autoreset_mode=config.collection_autoreset_mode,
+                        diagnostics=collection_diagnostics,
                     ),
                     config.data_t,
                     config.data_n,
@@ -5531,11 +5550,35 @@ if __name__ == "__main__":
                 if feature_cache is not None and feature_cache.requires_recording:
                     feature_cache.record(write_slots, frozen_features)
                 print(f"{replay.n_valid=}")
+                stored_rows = _acts.shape[0] * _acts.shape[1]
                 num_new_env_steps = (
-                    _acts.shape[0] * _acts.shape[1] * config.env_repeat
+                    collection_diagnostics["actual_environment_actions"] * config.env_repeat
+                    if collection_diagnostics is not None
+                    else stored_rows * config.env_repeat
                 )
                 total_env_steps += num_new_env_steps
                 writer.add_scalar("Sample/total_env_steps", total_env_steps, global_step)
+                if collection_diagnostics is not None:
+                    collection_diagnostics.update(
+                        schema_version="collection-learning-diagnostic-v1",
+                        collection_epoch_index=epoch,
+                        actual_training_environment_actions_total=total_env_steps // config.env_repeat,
+                        training_raw_environment_frames_total=total_env_steps,
+                        world_model_updates=global_step,
+                        evaluation_transitions_included=False,
+                    )
+                    with (log_dir / "collection_diagnostics.jsonl").open(
+                        "a", encoding="utf-8"
+                    ) as diagnostic_file:
+                        diagnostic_file.write(json.dumps(collection_diagnostics) + "\n")
+                    for name in (
+                        "actual_environment_actions", "positive_reward_events",
+                        "completed_episodes", "completed_positive_return_episodes",
+                        "observed_reward_sum", "ignored_reset_actions",
+                    ):
+                        writer.add_scalar(
+                            f"LearningAudit/{name}", collection_diagnostics[name], global_step
+                        )
 
             rews_eps_mean = _rews.sum().item() / _resets.sum().item()
             writer.add_scalar("Perf/rews_eps_mean", rews_eps_mean, global_step)
@@ -5724,6 +5767,10 @@ if __name__ == "__main__":
             desc=f"Epoch {epoch + 1}/{config.epochs}",
             disable = True,
         )
+        reward_diagnostic_totals = (
+            torch.zeros(7, dtype=torch.float64, device=device)
+            if config.learning_diagnostics else None
+        )
         for update_index in progbar:
             update_task_id = (
                 world_model_task_schedule[update_index]
@@ -5837,6 +5884,20 @@ if __name__ == "__main__":
                     **world_model_loss_kwargs,
                 )
 
+            if reward_diagnostic_totals is not None:
+                with torch.no_grad():
+                    positive_count = (mb_rews > 0).sum()
+                    zero_count = (mb_rews == 0).sum()
+                    reward_diagnostic_totals.add_(torch.stack((
+                        mb_rews.new_tensor(mb_rews.numel()),
+                        positive_count,
+                        zero_count,
+                        metrics["LearningAudit/positive_reward_prediction_mean"] * positive_count,
+                        metrics["LearningAudit/positive_reward_target_mean"] * positive_count,
+                        metrics["LearningAudit/positive_reward_absolute_error"] * positive_count,
+                        metrics["LearningAudit/zero_reward_absolute_error"] * zero_count,
+                    )).to(torch.float64))
+
             protected_values = None
             if shared_core_frozen and capture_kan_parameter_values is not None:
                 protected_values = capture_kan_parameter_values(wm)
@@ -5907,6 +5968,25 @@ if __name__ == "__main__":
                             global_step,
                         )
             global_step += 1
+
+        if reward_diagnostic_totals is not None:
+            if distributed_context.enabled:
+                torch.distributed.all_reduce(reward_diagnostic_totals)
+            if distributed_context.is_primary:
+                reward_diagnostic_record = _reward_learning_epoch_summary(
+                    reward_diagnostic_totals.cpu().tolist()
+                )
+                reward_diagnostic_record.update(
+                    schema_version="world-model-reward-diagnostic-v1",
+                    collection_epoch_index=epoch,
+                    actual_training_environment_actions_total=total_env_steps // config.env_repeat,
+                    world_model_updates=global_step,
+                    evaluation_transitions_included=False,
+                )
+                with (log_dir / "world_model_diagnostics.jsonl").open(
+                    "a", encoding="utf-8"
+                ) as diagnostic_file:
+                    diagnostic_file.write(json.dumps(reward_diagnostic_record) + "\n")
 
         world_model_seconds = _stage_elapsed(world_model_started, profile_stages)
         actor_started = _stage_clock(profile_stages)

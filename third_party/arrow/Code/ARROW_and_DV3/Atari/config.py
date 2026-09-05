@@ -298,6 +298,8 @@ class Config(Serialisable):
     evaluation_seed_protocol: EvaluationSeedProtocol = "advancing"
     evaluation_task_seed_offset: int = 0
     deterministic_evaluation: bool = False
+    collection_autoreset_mode: str = "legacy_next_step"
+    learning_diagnostics: bool = False
     independent_expert_original_task_index: Optional[int] = None
 
     actor_network: ActorNetwork = "mlp"
@@ -1122,6 +1124,12 @@ class Config(Serialisable):
             )
         if not isinstance(self.deterministic_evaluation, bool):
             raise ValueError("deterministic_evaluation must be a boolean")
+        if self.collection_autoreset_mode not in {"legacy_next_step", "same_step"}:
+            raise ValueError("collection_autoreset_mode must be legacy_next_step or same_step")
+        if not isinstance(self.learning_diagnostics, bool):
+            raise ValueError("learning_diagnostics must be a boolean")
+        if self.learning_diagnostics and self.uses_task_experts:
+            raise ValueError("learning_diagnostics currently supports task-agnostic training only")
         if self.evaluation_task_seed_offset < 0:
             raise ValueError("evaluation_task_seed_offset must be non-negative")
         if (

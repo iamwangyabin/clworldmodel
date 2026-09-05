@@ -654,6 +654,25 @@ documented here, covered by focused parity tests, and followed by regenerating
     evaluation, raw-metric persistence, seed mapping, exact interaction/update
     accounting, replay allocation, and byte parity.
 
+62. Add the separately named, task-agnostic
+    `ARROW-50-MiniGrid-DoorKey-AutoresetAudit-v1` first-task diagnostic. The
+    collector now explicitly selects Gymnasium 1.1.1 autoreset mode; default
+    `legacy_next_step` preserves the old stream, while opt-in `same_step`
+    aligns observations with ARROW's existing reset flags in collection and
+    evaluation. Legacy terminal-observation omission, reward-row assignment,
+    timeout handling and all model/actor objectives remain unchanged. Optional
+    raw collection diagnostics count executed versus ignored actions and
+    complete-episode rewards; diagnostic training counters exclude initial
+    reset rows and ignored actions. Reward diagnostics aggregate every sampled
+    minibatch per epoch and distinguish missing positive targets from measured
+    zero error; actor metrics include already computed imagined rewards. They
+    add no model passes, RNG draws, optimizer updates, or policy inputs.
+    Deterministic synthetic fixtures preserve both legacy and corrected traces,
+    check metric/RNG non-interference, schema defaults, evaluation forwarding,
+    raw reward statistics, and exact pilot row/action/update/replay budgets.
+    See `docs/protocols/arrow_minigrid_learning_audit.md`. The confirmed mismatch
+    is not yet proof that its repair restores published learning performance.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

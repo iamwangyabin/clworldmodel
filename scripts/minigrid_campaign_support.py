@@ -204,7 +204,7 @@ def _physical_gpu_info() -> dict[str, Any]:
 
 def _single_visible_gpu(environment: dict[str, str], *, dry_run: bool) -> str | None:
     value = environment.get("CUDA_VISIBLE_DEVICES")
-    if dry_run and value is None:
+    if dry_run and not value:
         return None
     if value is None or len([item for item in value.split(",") if item.strip()]) != 1:
         raise RuntimeError(
@@ -213,13 +213,23 @@ def _single_visible_gpu(environment: dict[str, str], *, dry_run: bool) -> str | 
     return value
 
 
-def _interaction_and_update_budgets(config: dict[str, Any]) -> dict[str, Any]:
+def _interaction_and_update_budgets(
+    config: dict[str, Any],
+    task_interactions: Sequence[int] = TASK_INTERACTIONS,
+    task_epochs: Sequence[int] = TASK_EPOCHS,
+) -> dict[str, Any]:
     regular_collection = int(config["n_sync"]) * int(config["gen_seq_len"])
     first_collection = regular_collection * int(config["pretrain_data_multiplier"])
     total_collections = first_collection + regular_collection * (int(config["epochs"]) - 1)
-    if total_collections != sum(TASK_INTERACTIONS):
+    if sum(task_epochs) != int(config["epochs"]):
+        raise ValueError("Task epochs must sum to the configured training epochs")
+    expected_by_task = [regular_collection * count for count in task_epochs]
+    expected_by_task[0] += first_collection - regular_collection
+    if list(task_interactions) != expected_by_task:
+        raise ValueError("Declared per-task collection budgets do not match the schedule")
+    if total_collections != sum(task_interactions):
         raise RuntimeError(
-            f"Formal interaction budget changed: {total_collections} != {sum(TASK_INTERACTIONS)}"
+            f"MiniGrid collection budget changed: {total_collections} != {sum(task_interactions)}"
         )
     world_model_updates = int(config["pretrain_steps"]) + int(
         config["steps_per_batch"]
@@ -232,9 +242,12 @@ def _interaction_and_update_budgets(config: dict[str, Any]) -> dict[str, Any]:
         "evaluation_interactions_included": False,
         "world_model_updates": world_model_updates,
         "actor_critic_updates": actor_critic_updates,
-        "per_task_environment_decisions": list(TASK_INTERACTIONS),
-        "per_task_world_model_updates": [45_750, 45_750, 45_750],
-        "per_task_actor_critic_updates": [36_309, 36_750, 36_750],
+        "per_task_environment_decisions": list(task_interactions),
+        "per_task_world_model_updates": [
+            int(config["pretrain_steps"]) + int(config["steps_per_batch"]) * (task_epochs[0] - 1),
+            *[int(config["steps_per_batch"]) * count for count in task_epochs[1:]],
+        ],
+        "per_task_actor_critic_updates": [int(config["ac_train_steps"]) * count for count in task_epochs],
         "regular_environment_decisions_per_epoch": regular_collection,
         "initial_random_prefill_decisions": first_collection,
     }
@@ -250,6 +263,12 @@ def launch_formal(
     replay: dict[str, Any],
     method_semantics: dict[str, Any],
     command_options: Sequence[str] = (),
+    protocol: str = PROTOCOL,
+    evidence_level: str = "official-candidate",
+    claim_scope: str = "matched-five-seed-MiniGrid-comparison-after-aggregation",
+    task_names: Sequence[str] = TASKS,
+    task_epochs: Sequence[int] = TASK_EPOCHS,
+    task_interactions: Sequence[int] = TASK_INTERACTIONS,
 ) -> int:
     python = args.python.expanduser().resolve()
     output_dir = (
@@ -257,6 +276,9 @@ def launch_formal(
         if args.output_dir is not None
         else ROOT / "runs" / f"{output_stem}_s{args.seed_index}"
     )
+    if not args.dry_run:
+        # Fetch before checking; stale remote-tracking refs are not launch proof.
+        subprocess.run(["git", "fetch", "--prune"], cwd=ROOT, check=True)
     project_git = (
         git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
     )
@@ -289,14 +311,36 @@ def launch_formal(
     if args.profile_stages:
         command.append("--profile-stages")
 
-    budgets = _interaction_and_update_budgets(config)
+    budgets = _interaction_and_update_budgets(config, task_interactions, task_epochs)
+    if config.get("learning_diagnostics", False):
+        nominal = budgets["environment_decisions"]
+        initial_rows = nominal // config["gen_seq_len"]
+        budgets = {
+            "nominal_stored_rows": nominal,
+            "initial_reset_rows": initial_rows,
+            "actual_environment_actions": (
+                nominal - initial_rows
+                if config["collection_autoreset_mode"] == "same_step"
+                else None
+            ),
+            "raw_environment_frames": (
+                (nominal - initial_rows) * config["env_repeat"]
+                if config["collection_autoreset_mode"] == "same_step"
+                else None
+            ),
+            "legacy_next_step_actual_count_source": "collection_diagnostics.jsonl",
+            "world_model_updates": budgets["world_model_updates"],
+            "actor_critic_updates": budgets["actor_critic_updates"],
+            "evaluation_interactions_included": False,
+            "counter_semantics": "Diagnostic train/evaluation counters count executed environment actions; initial reset rows and ignored NEXT_STEP actions are excluded. Stored rows are reported separately.",
+        }
     launch = {
         "schema_version": 1,
-        "artifact_kind": "formal_training_launch",
+        "artifact_kind": "diagnostic_training_launch" if evidence_level != "official-candidate" else "formal_training_launch",
         "method": method,
-        "protocol": PROTOCOL,
-        "evidence_level": "official-candidate",
-        "claim_scope": "matched-five-seed-MiniGrid-comparison-after-aggregation",
+        "protocol": protocol,
+        "evidence_level": evidence_level,
+        "claim_scope": claim_scope,
         "started_at_utc": None,
         "project_git": project_git,
         "upstream_arrow_commit": ARROW_UPSTREAM_COMMIT,
@@ -327,9 +371,12 @@ def launch_formal(
         "task_schedule": {
             "type": "sequential",
             "task_identity_exposed_to_agent": False,
-            "tasks": list(TASKS),
-            "epochs_per_task": list(TASK_EPOCHS),
-            "environment_decisions_per_task": list(TASK_INTERACTIONS),
+            "tasks": list(task_names),
+            "epochs_per_task": list(task_epochs),
+            "environment_decisions_per_task": (
+                list(task_interactions) if not config.get("learning_diagnostics", False) else None
+            ),
+            "nominal_stored_rows_per_task": list(task_interactions),
             "initial_random_collection_only_at_run_start": True,
         },
         "budgets": budgets,
@@ -353,9 +400,15 @@ def launch_formal(
             "metric_schema_version": "raw-taskwise-evaluation-v1",
             "training_data_flow_separate": True,
             "enters_replay": False,
-            "periodic_every_regular_environment_decisions": 10_000,
+            "periodic_every_regular_environment_decisions": (
+                10 * config["n_sync"] * (config["gen_seq_len"] - 1)
+                if config.get("learning_diagnostics", False)
+                and config["collection_autoreset_mode"] == "same_step"
+                else None if config.get("learning_diagnostics", False) else 10_000
+            ),
+            "periodic_every_regular_collection_epochs": 10,
             "task_boundary_evaluation": True,
-            "future_tasks_evaluated": True,
+            "future_tasks_evaluated": len(task_names) > 1,
             "final_enabled": True,
             "rollouts_per_task": 16,
             "seed_protocol": "fixed_validation_heldout_final",

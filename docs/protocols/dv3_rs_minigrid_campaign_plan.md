@@ -1,5 +1,13 @@
 # ARROW-50 versus DV3-RS MiniGrid five-seed campaign
 
+> **2026-09-05 audit notice:** The completed v1 campaign has a confirmed
+> Gymnasium autoreset/collector mismatch; completion is not validated
+> reproduction. Its nominal “interaction” counts below actually count stored
+> rows, including initial resets and ignored NEXT_STEP calls. Keep these
+> historical definitions and raw artifacts intact. See the separately named
+> [first-task learning audit](arrow_minigrid_learning_audit.md) for the defect,
+> corrected counters, isolated repair, and limitations.
+
 ## Status and scope
 
 This is a direct formal comparison on the Continual-Dreamer three-task

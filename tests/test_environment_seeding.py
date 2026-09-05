@@ -336,14 +336,20 @@ class EnvironmentSeedingTests(unittest.TestCase):
     def test_seed_reaches_vector_reset_and_each_action_space(self) -> None:
         class FakeVectorEnv:
             reset_seed = None
+            selected_autoreset_mode = None
+            closed = False
             single_action_space = generate_trajectory.gym.spaces.Discrete(18)
 
-            def __init__(self, factories) -> None:
+            def __init__(self, factories, *, autoreset_mode) -> None:
                 self.factories = factories
+                type(self).selected_autoreset_mode = autoreset_mode
 
             def reset(self, *, seed=None):
                 type(self).reset_seed = seed
                 return np.zeros((2, 64, 64, 3), dtype=np.uint8), {}
+
+            def close(self):
+                type(self).closed = True
 
         expected_resets, expected_actions = (
             generate_trajectory._environment_worker_seeds(29, 2)
@@ -356,6 +362,11 @@ class EnvironmentSeedingTests(unittest.TestCase):
                 seed=29,
             )
         self.assertEqual(FakeVectorEnv.reset_seed, expected_resets)
+        self.assertEqual(
+            FakeVectorEnv.selected_autoreset_mode,
+            generate_trajectory.AutoresetMode.NEXT_STEP,
+        )
+        self.assertTrue(FakeVectorEnv.closed)
 
         class FakeActionSpace:
             seed_value = None
