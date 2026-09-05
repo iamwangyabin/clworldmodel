@@ -968,8 +968,9 @@ def _restore_evolving_resumable_checkpoint(
     checkpoint_config = payload.get("config")
     if isinstance(checkpoint_config, Mapping):
         checkpoint_config = copy.deepcopy(dict(checkpoint_config))
-        checkpoint_config.setdefault("benchmark", "atari")
-        checkpoint_config.setdefault("interaction_counter_mode", "legacy_trajectory_positions")
+        for name, default in (("benchmark", "atari"), ("interaction_counter_mode", "legacy_trajectory_positions")):
+            if name in config.to_dict():
+                checkpoint_config.setdefault(name, default)
         for task in checkpoint_config.get("esc", {}).get("env_configs", []):
             task.setdefault("adapter", "atari")
     if isinstance(checkpoint_config, Mapping) and not getattr(config, "uses_reconstruction_task_inference", False):
@@ -2703,7 +2704,10 @@ def _evolving_world_model_update(
     )
 
     memory_ids = tuple(range(current_task_id)) if eligible_memory_task_ids is None else eligible_memory_task_ids
-    if any(not 0 <= task < config.rssm_num_experts or task == current_task_id for task in memory_ids):
+    if any(task < 0 or task == current_task_id for task in memory_ids) or (
+        eligible_memory_task_ids is not None
+        and any(task >= config.rssm_num_experts for task in memory_ids)
+    ):
         raise ValueError("Memory eligibility must contain non-current acquired routes")
     if (memory_ids and memory_task_id not in memory_ids) or (not memory_ids and memory_task_id is not None):
         raise ValueError("memory_task_id must select a previously completed task")
