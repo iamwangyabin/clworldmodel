@@ -82,6 +82,21 @@ class CoinRunProtocolTests(unittest.TestCase):
         self.assertEqual(schedule.current_task_index(), 0)
         self.assertFalse(schedule.is_new_env())
 
+    def test_venv_python_symlink_survives_both_launcher_layers(self):
+        from run_evolving_atomic_rssm_d_autoroute_coinrun import main
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = root / "base_python"
+            base.write_text("fixture: never executed")
+            executable = root / "venv_python"
+            executable.symlink_to(base)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["--dry-run", "--python", str(executable)]), 0)
+            launch, _ = json.JSONDecoder().raw_decode(output.getvalue())
+            self.assertEqual(launch["command"][0], str(executable))
+            self.assertNotEqual(launch["command"][0], str(base))
+
     def test_entrypoint_composes_shared_launcher_and_reports_raw_metrics(self):
         from run_evolving_atomic_rssm_d_autoroute_coinrun import main
         output = io.StringIO()

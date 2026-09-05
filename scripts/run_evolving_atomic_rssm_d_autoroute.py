@@ -12,6 +12,7 @@ directory. Absolute paths and user-home paths are preserved.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -39,9 +40,11 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None, *, benchmark: str = "atari") -> int:
     args = _parser().parse_args(argv)
-    def resolved(path: Path) -> str:
+    def resolved(path: Path, *, follow_symlinks: bool = True) -> str:
         expanded = path.expanduser()
-        return str((expanded if expanded.is_absolute() else ROOT / expanded).resolve())
+        rooted = expanded if expanded.is_absolute() else ROOT / expanded
+        # A venv Python is often a symlink; dereferencing it discards the venv.
+        return str(rooted.resolve() if follow_symlinks else Path(os.path.abspath(rooted)))
 
     command = [
         "--benchmark", benchmark,
@@ -52,7 +55,7 @@ def main(argv: list[str] | None = None, *, benchmark: str = "atari") -> int:
         "--behavior-profile", PRIVATE_MLP_AUTOROUTE_BEHAVIOR,
         "--seed", str(args.seed),
         "--classification", args.classification,
-        "--python", resolved(args.python),
+        "--python", resolved(args.python, follow_symlinks=False),
         "--cpu-threads", str(args.cpu_threads),
     ]
     for name in ("output_dir", "replay_mmap_root"):

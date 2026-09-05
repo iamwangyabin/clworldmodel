@@ -1536,7 +1536,8 @@ def main(argv: list[str] | None = None) -> int:
         protocol = D_AUTOROUTE_COINRUN_PROTOCOL
     if args.task_order == "arrow-original-six" and args.classification != "pilot":
         raise ValueError("The original-six Evolving-Core campaign is pilot-only")
-    python = args.python.expanduser().resolve()
+    # Preserve the venv entry path: resolving its symlink selects the base environment.
+    python = Path(os.path.abspath(args.python.expanduser()))
     mechanism_output_suffix = (
         ""
         if args.mechanism_profile == DEFAULT_MECHANISM_PROFILE
