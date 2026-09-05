@@ -113,6 +113,25 @@ class MiniGridAdapterTests(unittest.TestCase):
                 finally:
                     env.close()
 
+    def test_released_source_doorkey_geometry_is_explicitly_8x8(self) -> None:
+        from clworldmodel.environments.minigrid import make_minigrid_environment
+
+        env = make_minigrid_environment(
+            "MiniGrid-DoorKey-9x9-v0",
+            doorkey_geometry="released_source_8x8",
+        )
+        try:
+            self.assertEqual(env.unwrapped.width, 8)
+            self.assertEqual(env.unwrapped.height, 8)
+        finally:
+            env.close()
+
+        with self.assertRaisesRegex(ValueError, "Unsupported DoorKey geometry"):
+            make_minigrid_environment(
+                "MiniGrid-DoorKey-9x9-v0",
+                doorkey_geometry="implicit",
+            )
+
     def test_vendored_config_dispatches_only_declared_minigrid_family(self) -> None:
         vendored = (
             ROOT / "third_party" / "arrow" / "Code" / "ARROW_and_DV3" / "Atari"

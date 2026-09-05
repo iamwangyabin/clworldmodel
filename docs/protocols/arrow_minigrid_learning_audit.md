@@ -30,6 +30,64 @@ therefore later-task forgetting alone cannot explain their poor performance.
 The old `Perf/rews_eps_mean` is a batch reward/reset-count proxy, not an exact
 completed-episode return or success rate.
 
+## Completed pilot result
+
+The seed-0 SAME_STEP pilot completed on 2026-09-05 at project commit
+`a9175dd1dbfe85b36d6ccd5d49f620b00e5c01bd`. It executed 747,000 training
+actions and completed 6,000 training episodes. Collection contained **zero**
+positive-reward events and zero positive-return episodes. Consequently all
+23,424,000 sampled reward targets were zero. The final fixed held-out
+evaluation return was `0.0 +/- 0.0` over 16 rollouts. Core losses remained
+finite and the process exited successfully.
+
+This is a negative acquisition result. It rules out the autoreset repair alone
+as a sufficient fix. Because no real positive reward entered replay, it does
+not diagnose reward-head fitting, reservoir retention, forgetting, or held-out
+evaluation as the primary failure in this run.
+
+## Post-run source-fidelity audit
+
+The comparison premise used to define the historical MiniGrid campaign was too
+strong. The following facts come from the published paper and the authors'
+released code at `77f05bcebc56ad2f9bc22f82f6d4d02e62da87f6`:
+
+- The paper's MiniGrid Figure 1 compares DreamerV2 and DreamerV2 +
+  Plan2Explore. It does not report the reservoir method named
+  Continual-Dreamer as a MiniGrid curve; that name and replay comparison are
+  introduced for the MiniHack experiments.
+- In Figure 1, median plain DreamerV2 DoorKey success remains at zero through
+  almost all of the first 0.75M-interaction task region and rises only after the
+  curriculum switches to the second task. DreamerV2 + Plan2Explore is the curve
+  that acquires DoorKey early during Task 1. Therefore zero at the end of a
+  standalone 0.75M no-Plan2Explore screen is not, by itself, inconsistent with
+  the published plot.
+- The released `MiniGrid-DoorKey-9x9-v0` registration supplies no constructor
+  arguments, while its vendored `DoorKeyEnv` defaults to `size=8`. The released
+  executable task is thus 8x8 despite the 9x9 name and paper label. The
+  historical project campaign instead deliberately constructed a literal 9x9
+  task.
+- The released plain-DreamerV2 command uses `--minlen=5`; the MiniGrid script
+  sets actor entropy to `3e-3`, uses one collection environment, trains every
+  ten actions, and resizes 56x56 images with nearest-neighbor interpolation.
+  The historical project route uses four collection workers, fixed 50-row
+  retention units, DreamerV3 entropy scale `3e-4`, a different update schedule,
+  and OpenCV area interpolation.
+- The released DreamerV2 time-limit wrapper keeps a timeout nonterminal for
+  model discount learning and preserves the final observation. The current
+  vendored ARROW collector treats timeout as a continuation terminal, drops the
+  final observation, and moves terminal reward to the preceding stored row.
+
+Accordingly, `ARROW-50-MiniGrid-DoorKey-AutoresetAudit-v1` is an informative
+ARROW/DreamerV3 diagnostic, but it is not a controlled reproduction of the
+paper's MiniGrid result. Re-running its other seeds would not resolve this
+protocol mismatch.
+
+The project adapter now names the two DoorKey interpretations explicitly:
+`paper_label_9x9` preserves all historical project results, while
+`released_source_8x8` exposes the authors' executable geometry for a new,
+separately named source-fidelity protocol. No existing config is silently
+changed.
+
 ## Isolated change and invariants
 
 Set `collection_autoreset_mode="same_step"` for both collection and evaluation.
@@ -121,7 +179,18 @@ fixtures, 11 environment-seeding/evaluation contracts, 5 formal-campaign
 config/dry-run contracts, and 4 uint8-replay parity tests. CUDA was hidden and
 the collector used synthetic vector fixtures; no real environment interaction
 or optimizer update occurred. This is not a GPU integration or learning result.
-The repair has not yet been launched as a training experiment.
+The environment-contract follow-up is deliberately separate from training. It
+uses a privileged shortest-path oracle only to verify that native actions 0-6,
+key pickup, door toggle, goal reward, pixel wrapping, and the 100-step limit
+work. It also measures a fixed-seed uniform-random baseline for both the
+released 8x8 and literal 9x9 geometries. The oracle score is never an agent
+score and never enters replay.
+
+```bash
+PYTHONPATH=src python scripts/audit_minigrid_doorkey_exploration.py \
+  --oracle-seeds 100 --random-episodes 6000 \
+  --output runs/diagnostics/doorkey_exploration_contract.json
+```
 
 Dry-run (no environment interaction or parameter update):
 

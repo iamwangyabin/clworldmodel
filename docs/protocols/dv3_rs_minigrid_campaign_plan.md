@@ -7,6 +7,14 @@
 > historical definitions and raw artifacts intact. See the separately named
 > [first-task learning audit](arrow_minigrid_learning_audit.md) for the defect,
 > corrected counters, isolated repair, and limitations.
+>
+> **2026-09-06 source audit:** The released authors' registration named
+> `DoorKey-9x9` actually instantiates its `DoorKeyEnv` default of size 8. This
+> frozen v1 campaign intentionally ran a literal size-9 reconstruction and is
+> therefore not source-code environment parity. The paper's MiniGrid figure
+> also reports DreamerV2/FIFO and DreamerV2 + Plan2Explore, not the reservoir
+> method named Continual-Dreamer. Do not rerun v1 under its old claim; use a new
+> named source-fidelity protocol.
 
 ## Status and scope
 
