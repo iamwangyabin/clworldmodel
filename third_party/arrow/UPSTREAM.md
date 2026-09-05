@@ -707,6 +707,29 @@ documented here, covered by focused parity tests, and followed by regenerating
     selector episodes and route probes are explicitly additional to legacy D.
     No training, CUDA smoke or performance claim accompanies this change.
 
+64. Compose the separately named D-AutoRoute CoinRun 541-epoch pilot using
+    the existing trainer/models instead of another benchmark fork. The typed
+    schema selects a project-owned, picklable prepared-environment factory;
+    the collector obtains action count and dummy previous action from the
+    factory (15 and native no-op 4 for Procgen). Existing Atari factories
+    retain AtariPreprocessing, 18 actions and dummy action 0. Reinterpretation
+    uses actual action/image dimensions. Native Procgen same-step autoreset
+    and constructor seeding are owned by the adapter, never by environment-name
+    conditionals in a model/trainer. A separately named actual-environment-step
+    counter excludes initial reset rows while replay capacity/collection length
+    stay fixed; old Atari counter semantics remain the explicit default.
+    The terminal revisit uses the schedule's acquired registry, not current
+    task ID plus one: all six routes remain eligible and the five non-current
+    LTDM routes retain the existing 12-current/4-memory protection. Task 0's
+    private policy/compact mechanisms resume; no seventh consolidation or
+    compression is run. Legacy single-pass scheduling takes identical RNG draws
+    and update paths. Checkpoint loading fills only new default-Atari metadata
+    for older same-protocol checkpoints. Analytic parameter ledgers use the
+    action dimension; CoinRun uses a raw-retention report, not Atari constants.
+    Fixed/mock tests and explicit real-environment/CUDA smokes cover adapter
+    parity, action/reset handling, reversed revisit IDs and compact old-route
+    protection. See the new CoinRun protocol for budgets and deviations.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

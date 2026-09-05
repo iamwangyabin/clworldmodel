@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 
 @torch.no_grad()
-def _routed_policy_step(wm, ac, router, obs, z, h, previous_action, reset, *, stochastic):
+def _routed_policy_step(wm, ac, router, obs, z, h, previous_action, reset, *, stochastic, dummy_previous_action=0):
     """Route each worker's RSSM and, when private, Actor by the same inferred ID.
 
     Candidate probes always start from zero state and a dummy no-op action. They
@@ -38,7 +38,7 @@ def _routed_policy_step(wm, ac, router, obs, z, h, previous_action, reset, *, st
     def reconstruct(route_id, frames):
         probe_z, probe_h = wm.rssm.initial_state(len(frames))
         probe_action = torch.zeros(len(frames), previous_action.shape[-1], device=z.device)
-        probe_action[:, 0] = 1
+        probe_action[:, dummy_previous_action] = 1
         _, probe_z, probe_h = wm.rssm(
             probe_z, probe_action, probe_h, frames,
             torch.ones(len(frames), 1, device=z.device),
@@ -51,7 +51,7 @@ def _routed_policy_step(wm, ac, router, obs, z, h, previous_action, reset, *, st
         previous_action = previous_action.clone()
         restarting = reset.bool().reshape(-1)
         previous_action[restarting] = 0
-        previous_action[restarting, 0] = 1
+        previous_action[restarting, dummy_previous_action] = 1
         next_z, next_h = None, None
         for route_id in route_ids.unique(sorted=True).tolist():
             rows = torch.where(route_ids == route_id)[0]
@@ -91,6 +91,7 @@ def _evaluate_routed_exact(
     if env_fns is None or len(env_fns) != n_sync:
         raise ValueError("Exact evaluation requires one homogeneous factory per worker")
     router = EpisodeReconstructionRouter(eligible_route_ids)
+    action_count, dummy_action = _collection_action_spec(env_fns, wm)
     reset_seeds, action_seeds = _environment_worker_seeds(seed, n_rollouts)
     workers = min(n_sync, n_rollouts)
     envs, observations = [], []
@@ -104,18 +105,19 @@ def _evaluate_routed_exact(
         wm.eval()
         ac.eval()
         for worker in range(workers):
-            env = _make_atari_env(env_fns[worker], env_repeat, action_seeds[worker])
+            env = _make_collection_env(env_fns[worker], env_repeat, action_seeds[worker])
             envs.append(env)
             observations.append(env.reset(seed=reset_seeds[worker])[0])
         z, h = wm.rssm.initial_state(workers)
         action_count = wm.a_dim
         previous_action = torch.zeros(workers, action_count, device=z.device)
-        previous_action[:, 0] = 1
+        previous_action[:, dummy_action] = 1
         reset = torch.ones(workers, 1, device=z.device)
         while len(records) < n_rollouts:
             obs = torch.from_numpy(np.stack(observations)).to(z.device).float().permute(0, 3, 1, 2) / 255
             z, h, action = _routed_policy_step(
                 wm, ac, router, obs, z, h, previous_action, reset, stochastic=False,
+                dummy_previous_action=dummy_action,
             )
             previous_action = torch.nn.functional.one_hot(action, action_count)
             reset.zero_()
@@ -202,6 +204,28 @@ def _make_atari_env(
     if action_seed is not None:
         env.action_space.seed(action_seed)
     return env
+
+
+def _make_collection_env(env_fn, env_repeat, action_seed):
+    from clworldmodel.environments import PreparedEnvironmentFactory
+    if isinstance(env_fn, PreparedEnvironmentFactory):
+        return env_fn.prepare(env_repeat, action_seed)
+    return _make_atari_env(env_fn, env_repeat, action_seed)
+
+
+def _collection_action_spec(env_fns, wm=None):
+    from clworldmodel.environments import PreparedEnvironmentFactory
+    specs = [(f.action_count, f.dummy_previous_action)
+             if isinstance(f, PreparedEnvironmentFactory) else (18, 0)
+             for f in env_fns]
+    if not specs or any(spec != specs[0] for spec in specs):
+        raise ValueError("Collection workers must have matching action semantics")
+    count, dummy = specs[0]
+    if count < 1 or not 0 <= dummy < count:
+        raise ValueError("Invalid action count or dummy previous action")
+    if wm is not None and hasattr(wm, "a_dim") and wm.a_dim != count:
+        raise ValueError("World-model action size does not match environment adapter")
+    return count, dummy
 
 
 class EnvironmentSchedule:
@@ -445,12 +469,13 @@ def generate_trajectories(
         env_fns[i] if env_fns is not None else default_env_fn
         for i in range(n_sync)
     ]
+    action_count, dummy_action = _collection_action_spec(source_env_fns, wm)
     # Gymnasium 1.1 defaults to NEXT_STEP. Only the new protocol explicitly
     # requests SAME_STEP, so the router sees a reset frame, not a terminal frame.
     vector_kwargs = {"autoreset_mode": "SameStep"} if router is not None else {}
     env = AsyncVectorEnv(
         [
-            partial(_make_atari_env, env_fn, env_repeat, action_seed)
+            partial(_make_collection_env, env_fn, env_repeat, action_seed)
             for env_fn, action_seed in zip(source_env_fns, action_seeds)
         ],
         **vector_kwargs,
@@ -471,7 +496,7 @@ def generate_trajectories(
                     n_samples += n_sync
                     obs, _ = env.reset(seed=reset_seeds)
                     for i in range(n_sync):
-                        acts[i].append(0)
+                        acts[i].append(dummy_action)
                         obss[i].append(obs[i])
                         rews[i].append(0)
                         conts[i].append(True)
@@ -481,26 +506,26 @@ def generate_trajectories(
 
                 n_samples += n_sync
                 if wm is None or ac is None:
-                    act = np.random.randint(0, 18, size=n_sync)
+                    act = np.random.randint(0, action_count, size=n_sync)
                 elif router is not None:
                     if z is None:
                         z, h = wm.rssm.initial_state(n_sync)
-                        act_t = torch.zeros(n_sync, 18, device=z.device)
-                        act_t[:, 0] = 1
+                        act_t = torch.zeros(n_sync, action_count, device=z.device)
+                        act_t[:, dummy_action] = 1
                     z, h, act = _routed_policy_step(
                         wm, ac, router,
                         torch.from_numpy(obs).float().permute(0, 3, 1, 2).to(z.device) / 255,
                         z, h, act_t,
                         torch.from_numpy(reset).float().unsqueeze(-1).to(z.device),
-                        stochastic=not deterministic_policy,
+                        stochastic=not deterministic_policy, dummy_previous_action=dummy_action,
                     )
-                    act_t = torch.nn.functional.one_hot(act, 18)
+                    act_t = torch.nn.functional.one_hot(act, action_count)
                     act = act.cpu().numpy()
                 else:
                     if z is None:
                         z, h = wm.rssm.initial_state(n_sync)
-                        act_t = torch.zeros(n_sync, 18, device=z.device)
-                        act_t[:, 0] = 1  # Previous move would have been all 0s
+                        act_t = torch.zeros(n_sync, action_count, device=z.device)
+                        act_t[:, dummy_action] = 1  # Previous move would have been all 0s
                     # Follow a stochastic policy
                     rssm_kwargs = {}
                     if task_id is not None:
@@ -528,7 +553,7 @@ def generate_trajectories(
                     else:
                         act_prob_dist = td.Categorical(logits=act_prob)
                         act = act_prob_dist.sample()
-                    act_t = torch.nn.functional.one_hot(act, 18)
+                    act_t = torch.nn.functional.one_hot(act, action_count)
                     act = act.cpu().numpy()
 
                 obs, rew, term, trunc, _ = env.step(act)
@@ -541,7 +566,7 @@ def generate_trajectories(
                 for i in range(n_sync):
                     # Reset observations have a dummy no-op previous action,
                     # matching the new router's zero-context posterior probes.
-                    acts[i].append(0 if router is not None and reset[i] else act[i])
+                    acts[i].append(dummy_action if router is not None and reset[i] else act[i])
                     obss[i].append(obs[i])
                     rews[i].append(rew[i])
                     conts[i].append(True)
@@ -558,6 +583,7 @@ def generate_trajectories(
         env.close()
     if routing_diagnostics is not None and router is not None:
         routing_diagnostics.update({
+            "environment_agent_decisions": max(0, n_samples - n_sync),
             "random_policy": wm is None or ac is None,
             "eligible_route_ids": list(eligible_route_ids),
             "routing_events": router.events,
@@ -569,7 +595,7 @@ def generate_trajectories(
     resets = [np.stack(e) for e in resets]
 
     return (
-        torch.nn.functional.one_hot(torch.from_numpy(np.concatenate(acts)[:n]).long(), 18).float(),
+        torch.nn.functional.one_hot(torch.from_numpy(np.concatenate(acts)[:n]).long(), action_count).float(),
         torch.from_numpy(np.concatenate(obss)[:n] / 255).float().permute(0, 3, 1, 2)
         if not no_images
         else None,
@@ -585,8 +611,8 @@ def reinterpret_nt_to_t_n(
     if t * n != acts.shape[0]:
         raise ValueError(f"Illegal reinterpret (acts.shape={acts.shape}[0] != {t * n})")
     return (
-        acts.reshape(n, t, 18).swapaxes(0, 1),
-        obss.reshape(n, t, 3, 64, 64).swapaxes(0, 1),
+        acts.reshape(n, t, acts.shape[-1]).swapaxes(0, 1),
+        obss.reshape(n, t, *obss.shape[1:]).swapaxes(0, 1),
         rews.reshape(n, t, 1).swapaxes(0, 1),
         conts.reshape(n, t, 1).swapaxes(0, 1),
         resets.reshape(n, t, 1).swapaxes(0, 1),

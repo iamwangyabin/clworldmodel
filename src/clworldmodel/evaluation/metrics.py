@@ -358,3 +358,31 @@ def median_iqr(values: Sequence[float]) -> dict[str, float]:
         "q25": quantile(0.25),
         "q75": quantile(0.75),
     }
+
+
+def raw_retention_metrics(
+    raw_returns: Sequence[Sequence[float]],
+    acquisition_rows: Sequence[int],
+    final_row: int,
+) -> dict[str, Any]:
+    """Return-unit retention, with an explicit final endpoint (including revisits).
+
+    Forgetting is acquisition return minus final return, not a clipped maximum;
+    negative values mean improvement. No Atari/random/single-task normalization
+    is applied. A caller must disclose unmatched evaluation seed cohorts.
+    """
+    scores = _matrix(raw_returns, name="raw_returns")
+    ends = _task_end_rows(acquisition_rows, row_count=len(scores), task_count=len(scores[0]))
+    if len(ends) != len(scores[0]) or not ends[-1] <= final_row < len(scores):
+        raise ValueError("Raw retention needs an acquisition row for every task and a later final row")
+    forgetting = [scores[end][task] - scores[final_row][task] for task, end in enumerate(ends)]
+    mean_forgetting = sum(forgetting) / len(forgetting)
+    return {
+        "metric_schema_version": "raw-retention-v1",
+        "final_average_raw_return": sum(scores[final_row]) / len(scores[final_row]),
+        "per_task_raw_forgetting": forgetting,
+        "mean_raw_forgetting": mean_forgetting,
+        "backward_transfer_raw": -mean_forgetting,
+        "final_evaluation_row": final_row,
+        "acquisition_rows": ends,
+    }

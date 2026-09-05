@@ -81,6 +81,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=20260829)
+    parser.add_argument("--benchmark", choices=("atari", "procgen_coinrun"), default="atari")
     parser.add_argument(
         "--method-profile",
         choices=METHOD_PROFILES,
@@ -131,7 +132,19 @@ def _config(
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
     prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
     method_profile: str = LEGACY_METHOD_PROFILE,
+    benchmark: str = "atari",
 ) -> Config:
+    if benchmark == "procgen_coinrun":
+        from run_evolving_atomic_rssm import _coinrun_source_config
+        if method_profile != D_AUTOROUTE_PROFILE:
+            raise ValueError("CoinRun smoke requires D-AutoRoute")
+        _, data = _coinrun_source_config(0)
+        return Config.from_dict(_resolved_config(
+            data, task_order="arrow-original-six", benchmark=benchmark,
+            behavior_profile=PRIVATE_MLP_AUTOROUTE_BEHAVIOR,
+            prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
+            adaptive_qfp_compression=True,
+        ))
     source = Config.from_file(_source_config()).to_dict()
     if method_profile == ATOMIC_LORA_SHARED_HEADS_PROFILE:
         if (
@@ -325,6 +338,8 @@ def _optimizer_step(optimizer: torch.optim.Optimizer) -> int:
 
 def main() -> int:
     args = _parser().parse_args()
+    from git_provenance import require_synced_training_git_state
+    provenance = require_synced_training_git_state(ROOT)
     device = torch.device(args.device)
     if device.type != "cuda" or not torch.cuda.is_available():
         raise RuntimeError("The Evolving-Core target smoke requires CUDA")
@@ -338,6 +353,7 @@ def main() -> int:
         args.behavior_profile,
         args.prediction_head_profile,
         args.method_profile,
+        args.benchmark,
     )
     world_model = _world_model(config, device)
     world_model.activate_task_expert(0)
@@ -438,6 +454,7 @@ def main() -> int:
                 world_model, routing_policy, router,
                 torch.zeros(2, 3, 64, 64, device=device), z, h, previous,
                 torch.ones(2, 1, device=device), stochastic=False,
+                dummy_previous_action=getattr(config.esc.env_configs[0].get_function(), "dummy_previous_action", 0),
             )
         if actions.shape != (2,) or len(router.events) != 2:
             raise RuntimeError("First-frame autoroute smoke did not cover both workers")
@@ -698,6 +715,8 @@ def main() -> int:
     result = {
         "schema_version": 1,
         "classification": "smoke",
+        "project_git": provenance,
+        "benchmark": args.benchmark,
         "synthetic_data": True,
         "environment_interaction": False,
         "device": str(device),
@@ -747,6 +766,35 @@ def main() -> int:
         ),
         "peak_cuda_memory_bytes": torch.cuda.max_memory_allocated(device),
     }
+    if args.benchmark == "procgen_coinrun":
+        # Exercise the terminal revisit's reversed current/memory IDs after an
+        # old route has physically compacted. No extra full-campaign updates.
+        world_model.activate_task_expert(0)
+        teacher = copy.deepcopy(world_model).eval().requires_grad_(False)
+        old = [(p, p.detach().clone()) for p in world_model.private_parameters(1)]
+        revisit_private = torch.optim.Adam(world_model.private_parameters(0), lr=config.task_private_lr, fused=True)
+        revisit, _, _ = train._evolving_world_model_update(
+            config=config, wm=world_model, boundary_teacher=teacher,
+            actor_critic_bank=routing_bank, replay_buffer=replay,
+            current_task_id=0, memory_task_id=1, eligible_memory_task_ids=(1,),
+            sequence_length=2, shared_optimizer=shared_optimizer,
+            private_optimizer=revisit_private, route_optimizer=None,
+        )
+        if any(not torch.equal(p, before) for p, before in old):
+            raise RuntimeError("Revisit changed old task-private weights")
+        routing_bank.activate(0)
+        _, _, ac_metrics = train.train_ac_from_wm(
+            world_model, replay, steps=1, n_sync=2, aco=routing_bank.get(0),
+            lr=config.ac_lr, task_id=0,
+            **train._actor_critic_kwargs(config, feature_cache=None, protect_residual_updates=False),
+        )
+        if not all(np.isfinite(value) for value in ac_metrics.values()):
+            raise FloatingPointError("Non-finite CoinRun private-policy update")
+        result["terminal_revisit_smoke"] = {
+            "current_task": 0, "memory_task": 1, "old_private_weights_unchanged": True,
+            "memory_loss": float(revisit["Memory/Loss/evolving_memory_total"].detach().cpu()),
+            "private_actor_critic_update": True,
+        }
     print(json.dumps(result, indent=2))
     return 0
 

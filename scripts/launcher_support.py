@@ -35,10 +35,11 @@ packages = (
     "tqdm",
 )
 package_versions = {name: metadata.version(name) for name in packages}
-try:
-    package_versions["swanlab"] = metadata.version("swanlab")
-except metadata.PackageNotFoundError:
-    package_versions["swanlab"] = None
+for optional in ("swanlab", "procgen", "gym3", "gym"):
+    try:
+        package_versions[optional] = metadata.version(optional)
+    except metadata.PackageNotFoundError:
+        package_versions[optional] = None
 print(json.dumps({
     "python": sys.version,
     "platform": platform.platform(),

@@ -789,11 +789,19 @@ def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dirs", type=Path, nargs="+")
+    parser.add_argument("--raw", action="store_true", help="Return-unit retention without Atari normalization")
     parser.add_argument("--normalization", type=Path, default=DEFAULT_NORMALIZATION)
     parser.add_argument("--paper-metrics", type=Path, default=DEFAULT_PAPER_METRICS)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
+    if args.raw:
+        result = {"schema_version": 1, "metric_schema_version": "raw-retention-v1",
+                  "reports": [build_raw_run_report(run_dir) for run_dir in args.run_dirs]}
+        if args.output is not None:
+            _write_json_atomic(args.output.resolve(), result)
+        print(json.dumps(result, indent=2))
+        return 0
     reports = [
         build_run_report(run_dir, args.normalization) for run_dir in args.run_dirs
     ]
@@ -818,6 +826,73 @@ def main() -> int:
     )
     print("published-table comparison: diagnostic only until five seeds are aggregated")
     return 0
+
+
+
+
+
+def build_raw_run_report(run_dir: Path) -> dict[str, Any]:
+    """Raw-return report with the final revisit separated from first acquisition.
+
+    This never imports Atari normalization constants into another benchmark.
+    Raw per-episode measurements are retained by the routing JSON artifacts.
+    """
+    from clworldmodel.evaluation.metrics import raw_retention_metrics
+
+    run_dir = run_dir.resolve()
+    config_path = _config_path(run_dir)
+    config = _json(config_path)
+    launch_path = run_dir / "launch.json"
+    launch = _json(launch_path)
+    tasks = config["esc"]["env_configs"]
+    names = [task["name"] for task in tasks]
+    durations = _task_durations(config, len(tasks))
+    log_path = run_dir / "train.log"
+    final_path = run_dir / "final_evaluation.json"
+    evaluations = _parse_periodic_evaluations(log_path, [float(t["rew_scale"]) for t in tasks])
+    final = _json(final_path)
+    if int(final["evaluation_after_completed_epochs"]) != int(config["epochs"]):
+        raise ValueError("Final evaluation does not cover the complete configured schedule")
+    _append_final_evaluation(evaluations, final_path, len(tasks))
+    row_by_epoch = {int(row["completed_epochs"]): i for i, row in enumerate(evaluations)}
+    boundaries, total = [], 0
+    for duration in durations:
+        total += duration
+        boundaries.append(total)
+    if any(epoch not in row_by_epoch for epoch in boundaries):
+        raise ValueError("Missing acquisition-boundary evaluations; cannot report forgetting")
+    matrix = [row["raw_return_mean"] for row in evaluations]
+    ends = [row_by_epoch[epoch] for epoch in boundaries]
+    final_row = row_by_epoch[int(config["epochs"])]
+    return {
+        "schema_version": 1, "artifact_kind": "continual_metric_report",
+        "metric_schema_version": "raw-retention-v1",
+        "method": launch["method"], "protocol": launch["protocol"],
+        "classification": launch["classification"], "seed_index": launch["seed_index"],
+        "seed": config["seed"], "task_order": names,
+        "normalization": None,
+        "metrics": raw_retention_metrics(matrix, ends, final_row),
+        "first_pass_before_revisit": raw_retention_metrics(matrix, ends, ends[-1]),
+        "evaluation_checkpoints": evaluations,
+        "evaluation_protocol": {
+            "task_completion_epochs": boundaries,
+            "final_completed_epochs": config["epochs"],
+            "episode_count_mode": "exact", "episodes_per_task": 16,
+            "acquisition_cohort": "fixed_validation", "final_cohort": final["seed_cohort"],
+            "cohorts_paired": False,
+            "caveat": "Final-minus-acquisition estimates include evaluation-cohort sampling noise; first-pass retention uses matched validation cohorts.",
+            "raw_episodes": "task_routing/periodic_epoch_*.json and final_evaluation.json",
+            "evaluation_transitions_enter_replay": False,
+        },
+        "source": {
+            "project_git": launch["project_git"],
+            **{path.name: {"path": _portable_path(path), "sha256": _sha256(path)}
+               for path in (config_path, launch_path, log_path, final_path)},
+        },
+        "paper_comparability": {"direct_published_table_comparison": False,
+                                "reason": "New inference/evaluation/training protocol; no external normalization anchors applied."},
+        "resource_accounting": _resource_accounting(run_dir),
+    }
 
 
 if __name__ == "__main__":

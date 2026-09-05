@@ -14,6 +14,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+procgen = [
+    "procgen @ git+https://github.com/openai/procgen.git@5e1dbf341d291eff40d1f9e0c0a0d5003643aebf",
+    "gym3==0.3.3",
+    "gym==0.26.2",
+    "gymnasium==1.1.1",
+    "numpy==1.26.4",
+]
 atari = [
     "ale-py==0.11.1",
     "gymnasium==1.1.1",

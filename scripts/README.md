@@ -155,3 +155,13 @@ python scripts/run_moe_arrow_atari.py --method dino-convbank ...
 
 Run offline audit commands from the repository root. Training launchers should
 be inspected with `--dry-run` before any environment interaction.
+
+### D-AutoRoute CoinRun (541 epochs, pilot)
+
+`scripts/run_evolving_atomic_rssm_d_autoroute_coinrun.py` composes the same
+D-AutoRoute trainer as Atari using a project-owned seeded Procgen adapter. It
+preserves the original six variants, all five seeds and the terminal one-epoch
+task-0 revisit. Training is task-aware, inference is reconstruction-routed, and
+policies remain private MLPs. See
+`docs/protocols/evolving_core_d_autoroute_v1_coinrun.md` for budgets, adapter
+semantics, raw-retention reporting and the required pre-launch smokes.

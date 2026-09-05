@@ -498,6 +498,17 @@ def _sequential_seen_task_count(config: Config, completed_epochs: int) -> int:
     return task_index + 1
 
 
+def _evolving_schedule_routes(config: Config, epoch: int):
+    """Return current route, acquired prefix and all non-current acquired routes.
+
+    Acquisition index and current route coincide on the first pass, but not on
+    a revisit. Future routes remain excluded independently of environment IDs.
+    """
+    current, _ = _sequential_task_position(config, epoch)
+    acquired = _sequential_seen_task_count(config, epoch)
+    return current, acquired, tuple(task for task in range(acquired) if task != current)
+
+
 def _raw_return_statistics(
     task_configs, scaled_means: list[float], scaled_stds: list[float]
 ) -> tuple[list[float], list[float]]:
@@ -955,6 +966,12 @@ def _restore_evolving_resumable_checkpoint(
             f"Checkpoint is not resumable Evolving-Core schema v{expected_schema}"
         )
     checkpoint_config = payload.get("config")
+    if isinstance(checkpoint_config, Mapping):
+        checkpoint_config = copy.deepcopy(dict(checkpoint_config))
+        checkpoint_config.setdefault("benchmark", "atari")
+        checkpoint_config.setdefault("interaction_counter_mode", "legacy_trajectory_positions")
+        for task in checkpoint_config.get("esc", {}).get("env_configs", []):
+            task.setdefault("adapter", "atari")
     if isinstance(checkpoint_config, Mapping) and not getattr(config, "uses_reconstruction_task_inference", False):
         # Historical D/other checkpoints predate these opt-in, default-off fields.
         checkpoint_config = dict(checkpoint_config)
@@ -2675,6 +2692,7 @@ def _evolving_world_model_update(
     private_optimizer: torch.optim.Optimizer,
     route_optimizer: Optional[torch.optim.Optimizer],
     materialize_diagnostics: bool = True,
+    eligible_memory_task_ids: Optional[tuple[int, ...]] = None,
 ) -> tuple[dict[str, torch.Tensor], dict[str, Any], torch.Tensor]:
     """Run one fixed-budget Evolving-Core world-model optimizer update."""
 
@@ -2684,9 +2702,12 @@ def _evolving_world_model_update(
         atom_output_penalty,
     )
 
-    current_sequences = (
-        config.mb_n_size if current_task_id == 0 else config.current_batch_n
-    )
+    memory_ids = tuple(range(current_task_id)) if eligible_memory_task_ids is None else eligible_memory_task_ids
+    if any(not 0 <= task < config.rssm_num_experts or task == current_task_id for task in memory_ids):
+        raise ValueError("Memory eligibility must contain non-current acquired routes")
+    if (memory_ids and memory_task_id not in memory_ids) or (not memory_ids and memory_task_id is not None):
+        raise ValueError("memory_task_id must select a previously completed task")
+    current_sequences = config.current_batch_n if memory_ids else config.mb_n_size
     current_batch = replay_buffer.minibatch_for_task(
         current_task_id,
         sequence_length,
@@ -2713,7 +2734,7 @@ def _evolving_world_model_update(
     private_parameters.extend(wm.route_parameters(current_task_id))
     diagnostics: dict[str, Any] = {}
     memory_metrics: dict[str, torch.Tensor] = {}
-    if current_task_id == 0:
+    if not memory_ids:
         assign_unprojected_current_gradients(
             current_loss,
             (*shared_parameters, *private_parameters),
@@ -2721,8 +2742,6 @@ def _evolving_world_model_update(
     else:
         if boundary_teacher is None:
             raise RuntimeError("Old-task protection requires a boundary teacher")
-        if memory_task_id is None or not 0 <= memory_task_id < current_task_id:
-            raise ValueError("memory_task_id must select a previously completed task")
         memory_batch = replay_buffer.minibatch_for_task(
             memory_task_id,
             sequence_length,
@@ -6111,8 +6130,15 @@ if __name__ == "__main__":
         print("Starting Epoch ", epoch)
         agent_decisions_before_epoch = total_agent_decisions
         current_task_id = None
+        acquired_task_count = None
+        eligible_memory_task_ids = ()
         if config.uses_task_experts:
             current_task_id = envs.current_task_index()
+            acquired_task_count = _sequential_seen_task_count(config, epoch)
+            if config.uses_evolving_atomic_rssm:
+                scheduled_task, acquired_task_count, eligible_memory_task_ids = _evolving_schedule_routes(config, epoch)
+                if scheduled_task != current_task_id:
+                    raise RuntimeError("Active environment and schedule routes disagree")
             mechanism_phase = "full"
             if config.continual_method == "rec_rssm_arrow":
                 _, task_epoch = _sequential_task_position(config, epoch)
@@ -6211,7 +6237,7 @@ if __name__ == "__main__":
                     evolving_shared_optimizer,
                     core_lr=(
                         config.first_task_shared_core_lr
-                        if current_task_id == 0
+                        if not eligible_memory_task_ids
                         else config.shared_core_lr
                     ),
                     prediction_head_lr=config.task_private_lr,
@@ -6291,7 +6317,7 @@ if __name__ == "__main__":
             ):
                 collection_routing = {}
                 collection_behavior = None if random_policy else (
-                    _autorouted_behavior(config, aco, actor_critic_bank, current_task_id + 1)
+                    _autorouted_behavior(config, aco, actor_critic_bank, acquired_task_count)
                     if config.uses_reconstruction_task_inference else aco.ac
                 )
                 _acts, _obss, _rews, _conts, _resets = reinterpret_nt_to_t_n(
@@ -6304,7 +6330,7 @@ if __name__ == "__main__":
                         env_repeat=config.env_repeat,
                         seed=_next_environment_seed(collection_environment_seed_rng),
                         task_id=None if config.uses_reconstruction_task_inference else current_task_id,
-                        eligible_route_ids=(tuple(range(current_task_id + 1))
+                        eligible_route_ids=(tuple(range(acquired_task_count))
                                             if config.uses_reconstruction_task_inference else None),
                         routing_diagnostics=collection_routing,
 
@@ -6376,9 +6402,10 @@ if __name__ == "__main__":
                     feature_cache.record(write_slots, frozen_features)
                 print(f"{replay.n_valid=}")
                 num_new_env_steps = (
-                    _acts.shape[0] * _acts.shape[1] * config.env_repeat
+                    (_acts.shape[0] * _acts.shape[1]
+                     - (config.n_sync if config.interaction_counter_mode == "environment_steps" else 0)) * config.env_repeat
                 )
-                total_agent_decisions += _acts.shape[0] * _acts.shape[1]
+                total_agent_decisions += num_new_env_steps // config.env_repeat
                 total_env_steps += num_new_env_steps
                 writer.add_scalar("Sample/total_env_steps", total_env_steps, global_step)
                 writer.add_scalar(
@@ -6426,7 +6453,7 @@ if __name__ == "__main__":
                 periodic_task_seeds,
                 actor_critic_bank=actor_critic_bank,
                 distributed_context=distributed_context,
-                eligible_task_count=current_task_id + 1,
+                eligible_task_count=acquired_task_count,
                 routing_diagnostics=periodic_routing,
             )
             if config.uses_reconstruction_task_inference:
@@ -6481,7 +6508,7 @@ if __name__ == "__main__":
                         raw_means=eval_raw_mean,
                         raw_stds=eval_raw_std,
                         cohort="periodic_validation",
-                        eligible_task_count=current_task_id + 1,
+                        eligible_task_count=acquired_task_count,
                     )
                     seen_task_count = min(
                         len(eval_raw_mean),
@@ -6585,8 +6612,8 @@ if __name__ == "__main__":
                 private_optimizer = evolving_private_optimizers[current_task_id]
                 route_optimizer = evolving_route_optimizers.get(current_task_id)
                 memory_task_id = (
-                    int(task_update_rng.integers(0, current_task_id))
-                    if current_task_id > 0
+                    eligible_memory_task_ids[int(task_update_rng.integers(0, len(eligible_memory_task_ids)))]
+                    if eligible_memory_task_ids
                     else None
                 )
                 metrics, projection_diagnostics, grad_norm = (
@@ -6603,6 +6630,7 @@ if __name__ == "__main__":
                         replay_buffer=replay,
                         current_task_id=current_task_id,
                         memory_task_id=memory_task_id,
+                        eligible_memory_task_ids=eligible_memory_task_ids,
                         sequence_length=mb_t_size,
                         shared_optimizer=evolving_shared_optimizer,
                         private_optimizer=private_optimizer,

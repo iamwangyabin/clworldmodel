@@ -163,8 +163,18 @@ class EnvConfig(Serialisable):
     name: str
     kwargs: dict[str, Any] = field(default_factory=dict)
     rew_scale: float = 1
+    adapter: Literal["atari", "procgen_coinrun"] = "atari"
+
+    def __post_init__(self):
+        if self.adapter not in {"atari", "procgen_coinrun"}:
+            raise ValueError(f"Unknown environment adapter: {self.adapter!r}")
+        if self.adapter == "procgen_coinrun" and (self.kwargs or self.rew_scale != 1):
+            raise ValueError("CoinRun v1 fixes raw rewards and the original variant settings")
 
     def get_function(self) -> Callable[[], Any]:
+        if self.adapter == "procgen_coinrun":
+            from clworldmodel.environments.coinrun import CoinRunFactory
+            return CoinRunFactory(self.name)
         return lambda: TransformReward(
             gym.make(
                 self.name,
@@ -455,6 +465,8 @@ class Config(Serialisable):
     shared_core_mode: SharedCoreMode = "trainable"
 
     action_space: int = 18
+    benchmark: Literal["atari", "procgen_coinrun"] = "atari"
+    interaction_counter_mode: Literal["legacy_trajectory_positions", "environment_steps"] = "legacy_trajectory_positions"
     replay_buffers: list[RbConfig] = field(default_factory=list)
     # ARROW only: split of total capacity 2 * data_n_max between FifoReplay vs LongTermReplay
     arrow_replay_capacity_ratio: ArrowReplayCapacityRatio = "50-50"
@@ -467,6 +479,25 @@ class Config(Serialisable):
         return cls(**data)
 
     def __post_init__(self) -> None:
+        if self.benchmark not in {"atari", "procgen_coinrun"}:
+            raise ValueError(f"Unknown benchmark: {self.benchmark!r}")
+        if self.interaction_counter_mode not in {"legacy_trajectory_positions", "environment_steps"}:
+            raise ValueError("Unknown interaction counter mode")
+        expected_tasks = (
+            "ALE/MsPacman-v5", "ALE/Boxing-v5", "ALE/CrazyClimber-v5",
+            "ALE/Frostbite-v5", "ALE/Seaquest-v5", "ALE/Enduro-v5",
+        )
+        expected_epochs = 540
+        if self.benchmark == "procgen_coinrun":
+            from clworldmodel.environments.coinrun import COINRUN_TASKS
+            expected_tasks, expected_epochs = COINRUN_TASKS, 541
+            if (self.continual_method != "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"
+                    or self.action_space != 15 or self.env_repeat != 1
+                    or self.interaction_counter_mode != "environment_steps"
+                    or any(t.adapter != "procgen_coinrun" for t in self.esc.env_configs)):
+                raise ValueError("CoinRun v1 fixes D-AutoRoute, prepared RGB adapters, 15 actions, repeat 1 and environment-step counters")
+        elif any(t.adapter != "atari" for t in self.esc.env_configs):
+            raise ValueError("Atari protocols require Atari adapters")
         if self.epochs < 1:
             raise ValueError("epochs must be positive")
         if self.compute_dtype not in {"float32", "bfloat16"}:
@@ -569,14 +600,11 @@ class Config(Serialisable):
             raise ValueError("The exact evaluation episode safety cap is fixed at 32768 decisions")
         if is_evolving_autoroute and (
             self.evolving_task0_profile != "fixed_v1" or len(self.esc.env_configs) != 6
-            or self.epochs != 540 or self.esc.kwargs.get("swap_sched") != 90
-            or tuple(task.name for task in self.esc.env_configs) != (
-                "ALE/MsPacman-v5", "ALE/Boxing-v5", "ALE/CrazyClimber-v5",
-                "ALE/Frostbite-v5", "ALE/Seaquest-v5", "ALE/Enduro-v5",
-            )
+            or self.epochs != expected_epochs or self.esc.kwargs.get("swap_sched") != 90
+            or tuple(task.name for task in self.esc.env_configs) != expected_tasks
         ):
             raise ValueError(
-                "Autoroute requires the original-six fixed_v1 540-epoch protocol"
+                f"Autoroute requires the {self.benchmark} original-six fixed_v1 {expected_epochs}-epoch protocol"
             )
         is_evolving_shared_fastkan = (
             self.continual_method
@@ -1121,14 +1149,6 @@ class Config(Serialisable):
                     raise ValueError(
                         "Adaptive compression Q/F/P distillation scale must be positive"
                     )
-                expected_tasks = (
-                    "ALE/MsPacman-v5",
-                    "ALE/Boxing-v5",
-                    "ALE/CrazyClimber-v5",
-                    "ALE/Frostbite-v5",
-                    "ALE/Seaquest-v5",
-                    "ALE/Enduro-v5",
-                )
                 observed_tasks = tuple(task.name for task in self.esc.env_configs)
                 if observed_tasks != expected_tasks:
                     raise ValueError(

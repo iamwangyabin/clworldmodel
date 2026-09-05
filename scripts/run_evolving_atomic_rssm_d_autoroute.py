@@ -37,13 +37,14 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, benchmark: str = "atari") -> int:
     args = _parser().parse_args(argv)
     def resolved(path: Path) -> str:
         expanded = path.expanduser()
         return str((expanded if expanded.is_absolute() else ROOT / expanded).resolve())
 
     command = [
+        "--benchmark", benchmark,
         "--task-order", "arrow-original-six",
         "--task0-profile", "fixed_v1",
         "--prediction-head-profile", "shared_distilled",

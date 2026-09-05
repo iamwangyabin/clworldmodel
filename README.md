@@ -877,3 +877,9 @@ single-seed and architecture-attribution limits are predeclared in
 `docs/protocols/arrow_fastkan_ac_stable_targets_continual_atari.md`.
 
 Project-wide research and engineering constraints are defined in `AGENTS.md`.
+
+D-AutoRoute also has a separately named **CoinRun original-six 541-epoch pilot**,
+including the published terminal task-0 revisit. It reuses the Atari method's
+model/trainer with a seeded environment adapter; private MLP policies are not
+shared. See [the CoinRun protocol](docs/protocols/evolving_core_d_autoroute_v1_coinrun.md).
+This is a new-method execution path, not a reproduced baseline or routing-accuracy claim.
