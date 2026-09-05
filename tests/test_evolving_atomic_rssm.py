@@ -874,6 +874,7 @@ class EvolvingAtomicRssmTests(unittest.TestCase):
         config = SimpleNamespace(
             uses_evolving_atomic_rssm=True,
             uses_replay_rehearsed_shared_behavior=True,
+            uses_adaptive_behavior_compression=False,
             to_dict=lambda: {
                 "continual_method": (
                     "evolving_atomic_rssm_shared_fastkan_arrow"
