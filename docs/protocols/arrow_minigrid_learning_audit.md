@@ -192,6 +192,28 @@ PYTHONPATH=src python scripts/audit_minigrid_doorkey_exploration.py \
   --output runs/diagnostics/doorkey_exploration_contract.json
 ```
 
+The diagnostic completed at clean, upstream-synchronized commit `e1451be` with
+Gymnasium 1.1.1 and MiniGrid 3.0.0:
+
+| Geometry | Oracle successes | Oracle path length (min/median/max) | Uniform-random successes |
+| --- | ---: | ---: | ---: |
+| released-source 8x8 | 100/100 | 10 / 17 / 24 | 1/6000 |
+| literal paper-label 9x9 | 100/100 | 11 / 18 / 29 | 0/6000 |
+
+Both geometries are comfortably solvable within 100 steps. Every oracle plan
+uses the native action contract (`left=0`, `right=1`, `forward=2`, `pickup=3`,
+`drop=4`, `toggle=5`, `done=6`) and obtains positive goal reward through the
+same 64x64 adapter used by training. Thus the observed zero is not explained by
+a broken action index, impossible layout, observation shape, or episode limit.
+The literal 9x9 uniform-random result exactly matches the completed training
+run's 0/6000 positive episodes; this supports an exploration-starvation
+diagnosis, while not equating the learned stochastic actor with a uniform
+random policy.
+
+Thirty affected tests passed in a PyTorch 2.3.0, Gymnasium 1.1.1, MiniGrid
+3.0.0 environment after the diagnostic. The formerly declared MiniGrid 3.1.0
+dependency does not exist on PyPI and was corrected to the available 3.0.0 pin.
+
 Dry-run (no environment interaction or parameter update):
 
 ```bash
