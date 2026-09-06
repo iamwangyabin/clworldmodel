@@ -21,6 +21,26 @@ from clworldmodel.routing import EpisodeReconstructionRouter
 from generate_trajectory import _routed_policy_step, _autocast_context
 
 
+def assert_checkpoint_state_equal(actual, expected):
+    """Compare every tensor AND scalar/ownership string in a checkpoint tree."""
+    if torch.is_tensor(expected):
+        if not torch.is_tensor(actual):
+            raise AssertionError("Checkpoint tensor type changed")
+        torch.testing.assert_close(actual.cpu(), expected.cpu(), rtol=0, atol=0)
+    elif isinstance(expected, dict):
+        if not isinstance(actual, dict) or actual.keys() != expected.keys():
+            raise AssertionError("Checkpoint mapping keys changed")
+        for key in expected:
+            assert_checkpoint_state_equal(actual[key], expected[key])
+    elif isinstance(expected, (tuple, list)):
+        if type(actual) is not type(expected) or len(actual) != len(expected):
+            raise AssertionError("Checkpoint sequence topology changed")
+        for current, original in zip(actual, expected):
+            assert_checkpoint_state_equal(current, original)
+    elif type(actual) is not type(expected) or actual != expected:
+        raise AssertionError(f"Checkpoint metadata changed: {actual!r} != {expected!r}")
+
+
 @torch.no_grad()
 def verify_mixed_routes(wm, bank, config, next_task):
     """Forced *test* episode locks cover both routes, never benchmark routing labels."""
@@ -112,18 +132,8 @@ def main():
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     torch.testing.assert_close({k: v.cpu() for k, v in wm.state_dict().items()}, payload["world_model"], rtol=0, atol=0)
     torch.testing.assert_close({k: v.cpu() for k, v in teacher.state_dict().items()}, payload["boundary_teacher"], rtol=0, atol=0)
-    def cpu_tree(value):
-        if torch.is_tensor(value):
-            return value.cpu()
-        if isinstance(value, dict):
-            return {k: cpu_tree(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [cpu_tree(v) for v in value]
-        if isinstance(value, tuple):
-            return tuple(cpu_tree(v) for v in value)
-        return value
-    torch.testing.assert_close(cpu_tree(optimizer.state_dict()), payload["optimizers"]["shared"], rtol=0, atol=0)
-    torch.testing.assert_close(cpu_tree(bank.resumable_state_dict()), payload["optimizers"]["actor_critic_bank"], rtol=0, atol=0)
+    assert_checkpoint_state_equal(optimizer.state_dict(), payload["optimizers"]["shared"])
+    assert_checkpoint_state_equal(bank.resumable_state_dict(), payload["optimizers"]["actor_critic_bank"])
     del payload
     if acquired >= config.rssm_num_experts:
         raise ValueError("This acquisition-boundary smoke needs a pending new route")

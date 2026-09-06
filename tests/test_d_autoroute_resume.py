@@ -90,6 +90,18 @@ class ResumeLineageTests(unittest.TestCase):
 
 @unittest.skipUnless(vendor_available, "requires tensor runtime")
 class ResumeCheckpointTests(unittest.TestCase):
+    def test_smoke_compares_optimizer_ownership_strings_as_well_as_tensors(self):
+        from smoke_d_autoroute_resume import assert_checkpoint_state_equal
+        from test_fastkan_autoroute import torch
+        state = {"ownership": "core", "step": torch.tensor(7.), "foreach": None,
+                 "groups": [True, 2, {"weight": torch.tensor([1., 2.])}]}
+        assert_checkpoint_state_equal(copy.deepcopy(state), state)
+        for value in ("incorrect owner", ""):
+            with self.assertRaises(AssertionError):
+                assert_checkpoint_state_equal({**state, "ownership": value}, state)
+        with self.assertRaises(AssertionError):
+            assert_checkpoint_state_equal({**state, "step": torch.tensor(8.)}, state)
+
     def test_compact_post_boundary_restore_retains_rng_actor_optimizer_and_schedule(self):
         from test_fastkan_autoroute import torch, Config, np, train
         from test_evolving_atomic_rssm import EvolvingAtomicRssmTests
