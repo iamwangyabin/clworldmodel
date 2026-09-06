@@ -102,6 +102,12 @@ class RecipeTests(unittest.TestCase):
             self.assertEqual(value["resolved_config"]["method"], "rs")
             self.assertFalse(output.exists())
 
+    def test_replay_leaf_import_outside_checkout_needs_no_r2_vendor(self):
+        subprocess.run([sys.executable, "-c",
+            "import sys; from clworldmodel.replay.episode_slots import EpisodeSlotsReplay; "
+            "assert 'clworldmodel.r2dreamer.agent' not in sys.modules"],
+            check=True, cwd="/tmp", capture_output=True)
+
 
 class ReplayTests(unittest.TestCase):
     def test_partial_capacity_wrap_and_short_episodes(self):
