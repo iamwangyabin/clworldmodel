@@ -12,9 +12,20 @@ and third_party/r2dreamer/UPSTREAM.md.
 The Bounded Dream Rehearsal implementation follows the algorithm described by
 Nijjer et al. in arXiv:2607.19749 and the Apache-2.0 reference artifact at
 https://github.com/gurpnijjer/dream-rehearsal, inspected at commit
-7680778f798be3a27a17c320cc875b573c45f0e1. The reference source tree is not
-vendored; implementation provenance and deviations are documented in
+7680778f798be3a27a17c320cc875b573c45f0e1. That original bounded port does not
+execute the reference source; its provenance and deviations are documented in
 docs/protocols/bounded_dream_rehearsal_atari.md.
+
+The separate official-code reference includes unmodified selected source from
+Dream Rehearsal under Apache-2.0 and NM512 DreamerV3 under the MIT License,
+copyright (c) 2023 NM512. See third_party/dream_rehearsal/LICENSE,
+third_party/dream_rehearsal/UPSTREAM.md, third_party/nm512_dreamerv3/LICENSE,
+and third_party/nm512_dreamerv3/UPSTREAM.md. These sources are not relabeled
+as project-original code.
+
+The paired-history collection adapter follows NM512 tools.simulate's
+MIT-licensed collection semantics; its attribution is retained in
+scripts/dream_rehearsal_collection.py and third_party/nm512_dreamerv3/LICENSE.
 
 KARROW can load DINOv3 model weights distributed separately by Meta Platforms,
 Inc. under the DINOv3 License. Those weights and DINOv3 source code are not
