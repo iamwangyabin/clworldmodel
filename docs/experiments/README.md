@@ -18,6 +18,15 @@ are the reviewed source of truth in this directory.
 
 ## What the current evidence says
 
+The [CoinRun five-seed baseline archive](coinrun_baselines_5seed_20260906.md)
+preserves **ARROW-50 × 5 and DreamerV3/FIFO × 5**, including every scheduled
+evaluation's individual raw episode returns, taskwise mean/std/count, resolved
+configs, provenance and source hashes. Training/evaluation completed for all
+ten; VirtAI's eight stale launcher-finalization records are explicitly retained,
+not rewritten as successful exits. Fixed-anchor normalized metrics are labelled
+diagnostic rather than exact paper reproduction. The report is recomputable
+from Git alone using `python3 scripts/report_coinrun_baselines.py check`.
+
 The [retained-method archive checked on 2026-09-06](retained_methods_20260906.md)
 adds the completed **D** six-task seed-0 pilot, all ten **D-AutoRoute** partial
 Atari/CoinRun seed records with failed-parent/recovery provenance, the historical

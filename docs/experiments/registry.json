@@ -2,7 +2,7 @@
   "schema_version": 1,
   "artifact_kind": "curated_experiment_registry",
   "generated_from": "docs/experiments/records/*/record.json",
-  "record_count": 26,
+  "record_count": 36,
   "storage_policy": {
     "included": [
       "structured provenance",
@@ -451,6 +451,846 @@
           "path": "docs/experiments/records/cnn-projector-lora-weak-source-s0/record.json",
           "sha256": "6faa8dc892cc14ea258debcffffbca28de2eebeb2805604efeeda4d543c003a7",
           "bytes": 5886
+        }
+      ]
+    },
+    {
+      "record_id": "coinrun-arrow-ar50-original-s0-20260903",
+      "run_id": "coinrun_ar50_dv3_original_5seed_official_20260903T005359CST/arrow_s0",
+      "method": "ARROW-50",
+      "protocol": "CoinRun original-order CPU-uint8 replay with explicit runtime seeding (541 epochs, 90/task)",
+      "evidence_level": "diagnostic",
+      "classification": "primary-method",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 541,
+        "final_evaluation_performed": false
+      },
+      "headline": "Epoch 540 six-task raw return vector: [6.054688, 7.500000, 7.578125, 8.085938, 8.242188, 4.375000]; training/evaluation complete; launcher finalization unverified.",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-540",
+        "stage": "periodic_pre_update",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.0546875,
+            "raw_return_std": 4.887497752157412,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.5,
+            "raw_return_std": 4.330127018922194,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.578125,
+            "raw_return_std": 4.284071834642249,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.0859375,
+            "raw_return_std": 3.9340805464674653,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 8.2421875,
+            "raw_return_std": 3.806339477088683,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.375,
+            "raw_return_std": 4.960783708246107,
+            "episode_count": 256
+          }
+        ]
+      },
+      "comparability_claim": "Matched five-seed ARROW-50 versus DreamerV3/FIFO diagnostic; not a verified paper numerical reproduction.",
+      "record_path": "docs/experiments/records/coinrun-arrow-ar50-original-s0-20260903/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/coinrun-arrow-ar50-original-s0-20260903/evaluation.log",
+          "sha256": "c96de90da097564728cfc9e6efc0d89565eea3fb6aa249948cc465cfb83e2113",
+          "bytes": 231721
+        },
+        {
+          "path": "docs/experiments/records/coinrun-arrow-ar50-original-s0-20260903/record.json",
+          "sha256": "41ce1392691d62c1f349c8b6558f0e38e27c5ed76bf0baa1258acd4668981157",
+          "bytes": 117721
+        }
+      ]
+    },
+    {
+      "record_id": "coinrun-arrow-ar50-original-s1-20260903",
+      "run_id": "coinrun_ar50_dv3_original_5seed_official_20260903T005359CST/arrow_s1",
+      "method": "ARROW-50",
+      "protocol": "CoinRun original-order CPU-uint8 replay with explicit runtime seeding (541 epochs, 90/task)",
+      "evidence_level": "diagnostic",
+      "classification": "primary-method",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 1,
+        "value": 1337
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 541,
+        "final_evaluation_performed": false
+      },
+      "headline": "Epoch 540 six-task raw return vector: [6.210938, 7.382812, 7.851562, 8.125000, 7.890625, 4.687500]; training/evaluation complete; launcher finalization unverified.",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-540",
+        "stage": "periodic_pre_update",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.2109375,
+            "raw_return_std": 4.85114732523078,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.3828125,
+            "raw_return_std": 4.395702968791653,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.8515625,
+            "raw_return_std": 4.107139066137614,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.125,
+            "raw_return_std": 3.9031237489989987,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.890625,
+            "raw_return_std": 4.079741059108408,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.6875,
+            "raw_return_std": 4.990224819584785,
+            "episode_count": 256
+          }
+        ]
+      },
+      "comparability_claim": "Matched five-seed ARROW-50 versus DreamerV3/FIFO diagnostic; not a verified paper numerical reproduction.",
+      "record_path": "docs/experiments/records/coinrun-arrow-ar50-original-s1-20260903/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/coinrun-arrow-ar50-original-s1-20260903/evaluation.log",
+          "sha256": "cf037d469a599889070f041a948fe1b2ae25005ba91e3814e71d9c7e9deaef21",
+          "bytes": 235297
+        },
+        {
+          "path": "docs/experiments/records/coinrun-arrow-ar50-original-s1-20260903/record.json",
+          "sha256": "9731ec2962622329bce74ccdc6bb4d95ff93b7a25dd5d71dcae51d06163c2446",
+          "bytes": 117833
+        }
+      ]
+    },
+    {
+      "record_id": "coinrun-arrow-ar50-original-s2-20260903",
+      "run_id": "coinrun_ar50_dv3_original_5seed_official_20260903T005359CST/arrow_s2",
+      "method": "ARROW-50",
+      "protocol": "CoinRun original-order CPU-uint8 replay with explicit runtime seeding (541 epochs, 90/task)",
+      "evidence_level": "diagnostic",
+      "classification": "primary-method",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 2,
+        "value": 31337
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 541,
+        "final_evaluation_performed": false
+      },
+      "headline": "Epoch 540 six-task raw return vector: [4.648438, 6.250000, 6.328125, 6.718750, 7.500000, 4.179688]; training/evaluation complete; launcher finalization unverified.",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-540",
+        "stage": "periodic_pre_update",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 4.6484375,
+            "raw_return_std": 4.987625066962607,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.25,
+            "raw_return_std": 4.841229182759271,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.328125,
+            "raw_return_std": 4.820382140906984,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.71875,
+            "raw_return_std": 4.695306000411475,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.5,
+            "raw_return_std": 4.330127018922194,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.1796875,
+            "raw_return_std": 4.932249730330344,
+            "episode_count": 256
+          }
+        ]
+      },
+      "comparability_claim": "Matched five-seed ARROW-50 versus DreamerV3/FIFO diagnostic; not a verified paper numerical reproduction.",
+      "record_path": "docs/experiments/records/coinrun-arrow-ar50-original-s2-20260903/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/coinrun-arrow-ar50-original-s2-20260903/evaluation.log",
+          "sha256": "e6480944f56b0c8e9993e0fb9f60a82b7fe351a7249e23d1952f18cc08d0fac2",
+          "bytes": 234684
+        },
+        {
+          "path": "docs/experiments/records/coinrun-arrow-ar50-original-s2-20260903/record.json",
+          "sha256": "560c6e6f36b373ddbb5c847b60462d805bd4945728b0aa79434639cb392fc721",
+          "bytes": 117787
+        }
+      ]
+    },
+    {
+      "record_id": "coinrun-arrow-ar50-original-s3-20260903",
+      "run_id": "coinrun_ar50_dv3_original_5seed_official_20260903T005359CST/arrow_s3",
+      "method": "ARROW-50",
+      "protocol": "CoinRun original-order CPU-uint8 replay with explicit runtime seeding (541 epochs, 90/task)",
+      "evidence_level": "diagnostic",
+      "classification": "primary-method",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 3,
+        "value": 42
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 541,
+        "final_evaluation_performed": false
+      },
+      "headline": "Epoch 540 six-task raw return vector: [5.078125, 5.039062, 6.210938, 6.289062, 6.250000, 4.804688]; training/evaluation complete; launcher finalization unverified.",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-540",
+        "stage": "periodic_pre_update",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.078125,
+            "raw_return_std": 4.999389611180049,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 5.0390625,
+            "raw_return_std": 4.9998474097809975,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.2109375,
+            "raw_return_std": 4.85114732523078,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.2890625,
+            "raw_return_std": 4.830974836520446,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.25,
+            "raw_return_std": 4.841229182759271,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.8046875,
+            "raw_return_std": 4.9961838464315695,
+            "episode_count": 256
+          }
+        ]
+      },
+      "comparability_claim": "Matched five-seed ARROW-50 versus DreamerV3/FIFO diagnostic; not a verified paper numerical reproduction.",
+      "record_path": "docs/experiments/records/coinrun-arrow-ar50-original-s3-20260903/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/coinrun-arrow-ar50-original-s3-20260903/evaluation.log",
+          "sha256": "5416e374418c403dd4a95ab3536f666f292a9a0eb5cf711f285783786c5d355b",
+          "bytes": 234413
+        },
+        {
+          "path": "docs/experiments/records/coinrun-arrow-ar50-original-s3-20260903/record.json",
+          "sha256": "b8e31ac89534d4bd6d707cb2daf848d5f023ed4384056114334e59b838bb2f98",
+          "bytes": 117863
+        }
+      ]
+    },
+    {
+      "record_id": "coinrun-arrow-ar50-original-s4-20260903",
+      "run_id": "coinrun_ar50_dv3_original_s4_official_4090-2_20260903T201327CST/arrow_s4",
+      "method": "ARROW-50",
+      "protocol": "CoinRun original-order CPU-uint8 replay with explicit runtime seeding (541 epochs, 90/task)",
+      "evidence_level": "diagnostic",
+      "classification": "primary-method",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 4,
+        "value": 987654321
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 541,
+        "final_evaluation_performed": false
+      },
+      "headline": "Epoch 540 six-task raw return vector: [5.390625, 8.125000, 7.968750, 8.125000, 7.773438, 4.765625]; strict finalization verified.",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-540",
+        "stage": "periodic_pre_update",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.390625,
+            "raw_return_std": 4.984717856546647,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 8.125,
+            "raw_return_std": 3.9031237489989987,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.96875,
+            "raw_return_std": 4.023247871744917,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.125,
+            "raw_return_std": 3.9031237489989987,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.7734375,
+            "raw_return_std": 4.160293791740404,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.765625,
+            "raw_return_std": 4.99450381513269,
+            "episode_count": 256
+          }
+        ]
+      },
+      "comparability_claim": "Matched five-seed ARROW-50 versus DreamerV3/FIFO diagnostic; not a verified paper numerical reproduction.",
+      "record_path": "docs/experiments/records/coinrun-arrow-ar50-original-s4-20260903/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/coinrun-arrow-ar50-original-s4-20260903/evaluation.log",
+          "sha256": "e7f7d9883bc97301d0cf01525c7a562e9d28eceb633b519666e7174ea9cef435",
+          "bytes": 236127
+        },
+        {
+          "path": "docs/experiments/records/coinrun-arrow-ar50-original-s4-20260903/record.json",
+          "sha256": "cd0d10394783290d2527e09e5bcf10260fd04ac8fd134b2cde46fe6693d99faf",
+          "bytes": 120309
+        }
+      ]
+    },
+    {
+      "record_id": "coinrun-dv3-fifo-original-s0-20260903",
+      "run_id": "coinrun_ar50_dv3_original_5seed_official_20260903T005359CST/dv3_s0",
+      "method": "DreamerV3/FIFO",
+      "protocol": "CoinRun original-order CPU-uint8 replay with explicit runtime seeding (541 epochs, 90/task)",
+      "evidence_level": "diagnostic",
+      "classification": "matched-control",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 541,
+        "final_evaluation_performed": false
+      },
+      "headline": "Epoch 540 six-task raw return vector: [6.250000, 5.703125, 5.585938, 4.921875, 5.859375, 5.820312]; training/evaluation complete; launcher finalization unverified.",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-540",
+        "stage": "periodic_pre_update",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.25,
+            "raw_return_std": 4.841229182759271,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 5.703125,
+            "raw_return_std": 4.950314660137778,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 5.5859375,
+            "raw_return_std": 4.965549037729237,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 4.921875,
+            "raw_return_std": 4.999389611180049,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.859375,
+            "raw_return_std": 4.925593833171286,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.8203125,
+            "raw_return_std": 4.932249730330344,
+            "episode_count": 256
+          }
+        ]
+      },
+      "comparability_claim": "Matched five-seed ARROW-50 versus DreamerV3/FIFO diagnostic; not a verified paper numerical reproduction.",
+      "record_path": "docs/experiments/records/coinrun-dv3-fifo-original-s0-20260903/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/coinrun-dv3-fifo-original-s0-20260903/evaluation.log",
+          "sha256": "c2946513b10ce7b687a895eaaba1a00ac9cb48f06988ae057f1aa78457eb77b1",
+          "bytes": 233171
+        },
+        {
+          "path": "docs/experiments/records/coinrun-dv3-fifo-original-s0-20260903/record.json",
+          "sha256": "8726872ce0f082c1911fca8d32667d82d66899e690c5f2c37d5b2be6e95872d0",
+          "bytes": 117515
+        }
+      ]
+    },
+    {
+      "record_id": "coinrun-dv3-fifo-original-s1-20260903",
+      "run_id": "coinrun_ar50_dv3_original_5seed_official_20260903T005359CST/dv3_s1",
+      "method": "DreamerV3/FIFO",
+      "protocol": "CoinRun original-order CPU-uint8 replay with explicit runtime seeding (541 epochs, 90/task)",
+      "evidence_level": "diagnostic",
+      "classification": "matched-control",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 1,
+        "value": 1337
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 541,
+        "final_evaluation_performed": false
+      },
+      "headline": "Epoch 540 six-task raw return vector: [6.484375, 5.039062, 5.507812, 5.390625, 5.898438, 6.171875]; training/evaluation complete; launcher finalization unverified.",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-540",
+        "stage": "periodic_pre_update",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.484375,
+            "raw_return_std": 4.774581747061726,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 5.0390625,
+            "raw_return_std": 4.9998474097809975,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 5.5078125,
+            "raw_return_std": 4.9741458025317025,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 5.390625,
+            "raw_return_std": 4.984717856546647,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.8984375,
+            "raw_return_std": 4.918618714496352,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 6.171875,
+            "raw_return_std": 4.860731321969463,
+            "episode_count": 256
+          }
+        ]
+      },
+      "comparability_claim": "Matched five-seed ARROW-50 versus DreamerV3/FIFO diagnostic; not a verified paper numerical reproduction.",
+      "record_path": "docs/experiments/records/coinrun-dv3-fifo-original-s1-20260903/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/coinrun-dv3-fifo-original-s1-20260903/evaluation.log",
+          "sha256": "a4af245903bb090fe0119620d6bdabe3c0c9c16b4a92938a64128cd94d9f411e",
+          "bytes": 230862
+        },
+        {
+          "path": "docs/experiments/records/coinrun-dv3-fifo-original-s1-20260903/record.json",
+          "sha256": "ec4b25603a8f52f7419d797859fbaa8ddf74ca0c37fb06641bea8c29198214fa",
+          "bytes": 117301
+        }
+      ]
+    },
+    {
+      "record_id": "coinrun-dv3-fifo-original-s2-20260903",
+      "run_id": "coinrun_ar50_dv3_original_5seed_official_20260903T005359CST/dv3_s2",
+      "method": "DreamerV3/FIFO",
+      "protocol": "CoinRun original-order CPU-uint8 replay with explicit runtime seeding (541 epochs, 90/task)",
+      "evidence_level": "diagnostic",
+      "classification": "matched-control",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 2,
+        "value": 31337
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 541,
+        "final_evaluation_performed": false
+      },
+      "headline": "Epoch 540 six-task raw return vector: [6.171875, 5.976562, 6.367188, 5.937500, 6.757812, 5.859375]; training/evaluation complete; launcher finalization unverified.",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-540",
+        "stage": "periodic_pre_update",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.171875,
+            "raw_return_std": 4.860731321969463,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 5.9765625,
+            "raw_return_std": 4.903705301462737,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.3671875,
+            "raw_return_std": 4.809448860300289,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 5.9375,
+            "raw_return_std": 4.911323014219285,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.7578125,
+            "raw_return_std": 4.680822066137929,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.859375,
+            "raw_return_std": 4.925593833171286,
+            "episode_count": 256
+          }
+        ]
+      },
+      "comparability_claim": "Matched five-seed ARROW-50 versus DreamerV3/FIFO diagnostic; not a verified paper numerical reproduction.",
+      "record_path": "docs/experiments/records/coinrun-dv3-fifo-original-s2-20260903/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/coinrun-dv3-fifo-original-s2-20260903/evaluation.log",
+          "sha256": "3f32aed25530772ebf4c25392e7fa505cc676898a46e0b182260a5f28fab833e",
+          "bytes": 233109
+        },
+        {
+          "path": "docs/experiments/records/coinrun-dv3-fifo-original-s2-20260903/record.json",
+          "sha256": "caa56a7dbcf520739ae724834aa632376b268e4c813d15b31b0e4b7615bd3f27",
+          "bytes": 117391
+        }
+      ]
+    },
+    {
+      "record_id": "coinrun-dv3-fifo-original-s3-20260903",
+      "run_id": "coinrun_ar50_dv3_original_5seed_official_20260903T005359CST/dv3_s3",
+      "method": "DreamerV3/FIFO",
+      "protocol": "CoinRun original-order CPU-uint8 replay with explicit runtime seeding (541 epochs, 90/task)",
+      "evidence_level": "diagnostic",
+      "classification": "matched-control",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 3,
+        "value": 42
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 541,
+        "final_evaluation_performed": false
+      },
+      "headline": "Epoch 540 six-task raw return vector: [5.625000, 4.414062, 5.136187, 5.468750, 5.742188, 6.015625]; training/evaluation complete; launcher finalization unverified.",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-540",
+        "stage": "periodic_pre_update",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.625,
+            "raw_return_std": 4.960783708246107,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 4.4140625,
+            "raw_return_std": 4.965549037729237,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 5.136186770428016,
+            "raw_return_std": 4.998144972243241,
+            "episode_count": 257
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 5.46875,
+            "raw_return_std": 4.977978850648122,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.7421875,
+            "raw_return_std": 4.94460895469437,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 6.015625,
+            "raw_return_std": 4.895764073091656,
+            "episode_count": 256
+          }
+        ]
+      },
+      "comparability_claim": "Matched five-seed ARROW-50 versus DreamerV3/FIFO diagnostic; not a verified paper numerical reproduction.",
+      "record_path": "docs/experiments/records/coinrun-dv3-fifo-original-s3-20260903/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/coinrun-dv3-fifo-original-s3-20260903/evaluation.log",
+          "sha256": "b79a7a3a8c53b5e597084fffcf8c5d765b3ace4135c1437438d60fb4603370c9",
+          "bytes": 232536
+        },
+        {
+          "path": "docs/experiments/records/coinrun-dv3-fifo-original-s3-20260903/record.json",
+          "sha256": "5988a21d63f11c5f6b6dd89f5e918527fece4dc8e85c62846b5f9f4c0dfdc936",
+          "bytes": 117408
+        }
+      ]
+    },
+    {
+      "record_id": "coinrun-dv3-fifo-original-s4-20260903",
+      "run_id": "coinrun_ar50_dv3_original_s4_official_4090-2_20260903T201327CST/dv3_s4",
+      "method": "DreamerV3/FIFO",
+      "protocol": "CoinRun original-order CPU-uint8 replay with explicit runtime seeding (541 epochs, 90/task)",
+      "evidence_level": "diagnostic",
+      "classification": "matched-control",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 4,
+        "value": 987654321
+      },
+      "completion": {
+        "completed_task_count": 6,
+        "total_task_count": 6,
+        "completed_epochs": 541,
+        "final_evaluation_performed": false
+      },
+      "headline": "Epoch 540 six-task raw return vector: [2.617188, 1.875000, 1.796875, 2.031250, 1.953125, 4.726562]; strict finalization verified.",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-540",
+        "stage": "periodic_pre_update",
+        "completed_epochs": 540,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 2.6171875,
+            "raw_return_std": 4.395702968791653,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 1.875,
+            "raw_return_std": 3.9031237489989987,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 1.796875,
+            "raw_return_std": 3.8392694922830044,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 2.03125,
+            "raw_return_std": 4.023247871744917,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 1.953125,
+            "raw_return_std": 3.9644107676141482,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.7265625,
+            "raw_return_std": 4.992517594720498,
+            "episode_count": 256
+          }
+        ]
+      },
+      "comparability_claim": "Matched five-seed ARROW-50 versus DreamerV3/FIFO diagnostic; not a verified paper numerical reproduction.",
+      "record_path": "docs/experiments/records/coinrun-dv3-fifo-original-s4-20260903/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/coinrun-dv3-fifo-original-s4-20260903/evaluation.log",
+          "sha256": "c95f68555a38bd46f003852d6962fe05e71e5c38fabf34333c9a4c1fa46176b2",
+          "bytes": 230844
+        },
+        {
+          "path": "docs/experiments/records/coinrun-dv3-fifo-original-s4-20260903/record.json",
+          "sha256": "a711c45fc7fe945145a818cf596ad74488c4a48792bf851acd8292a5b01f8c5f",
+          "bytes": 120071
         }
       ]
     },

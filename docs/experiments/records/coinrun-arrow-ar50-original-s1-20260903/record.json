@@ -1,0 +1,3689 @@
+{
+  "schema_version": 1,
+  "record_id": "coinrun-arrow-ar50-original-s1-20260903",
+  "run_id": "coinrun_ar50_dv3_original_5seed_official_20260903T005359CST/arrow_s1",
+  "method": "ARROW-50",
+  "protocol": "CoinRun original-order CPU-uint8 replay with explicit runtime seeding (541 epochs, 90/task)",
+  "evidence_level": "diagnostic",
+  "classification": "primary-method",
+  "status": "complete",
+  "recorded_at_utc": "2026-09-06T11:59:12.498112Z",
+  "project_git": {
+    "commit": "7b3ebec334c54942a40c888d8972aac24761c5ad",
+    "clean": true,
+    "upstream": "origin/codex/coinrun-five-seed-baselines",
+    "ahead": 0,
+    "behind": 0,
+    "repository": "https://github.com/iamwangyabin/clworldmodel.git",
+    "checkout_state": "detached HEAD at verified pushed branch commit"
+  },
+  "seed": {
+    "id": 1,
+    "value": 1337
+  },
+  "task_awareness": "task_agnostic",
+  "task_order": [
+    "CoinRun",
+    "CoinRun+NB",
+    "CoinRun+NB+RT",
+    "CoinRun+NB+RT+GA",
+    "CoinRun+NB+RT+GA+MA",
+    "CoinRun+NB+RT+GA+MA+CA"
+  ],
+  "completion": {
+    "total_task_count": 6,
+    "completed_task_count": 6,
+    "completed_epochs": 541,
+    "final_evaluation_performed": false,
+    "final_periodic_evaluation_performed": true,
+    "final_periodic_evaluation_epoch": 540,
+    "training_end_logged": true,
+    "completion_basis": "epoch_540_training_end_and_55_by_6_raw_evaluations",
+    "strict_finalization_verified": false,
+    "source_launcher_state": "running",
+    "source_launcher_exit_code": null,
+    "source_final_checksum_entries_verified": 0,
+    "source_started_at": "2026-09-02T17:04:20.244563+00:00",
+    "source_finished_at": null,
+    "post_training_evaluation_available": false,
+    "finalization_caveat": "Post-training wrapper Input/output error; source state remains running, exit code and final checksum manifest absent. Training/evaluation completion is not strict launcher completion."
+  },
+  "evaluation": {
+    "metric": "raw_environment_return",
+    "policy": "deterministic actor evaluation; advancing, separately seeded Procgen evaluation streams",
+    "evaluation_transitions_enter_replay": false,
+    "standard_deviation_ddof": 0,
+    "requested_completed_episodes_per_task": 256,
+    "episode_count_distribution": {
+      "256": 323,
+      "257": 7
+    },
+    "total_raw_episode_count": 84487,
+    "counter_mapping": "Source global_step counts completed world-model updates, not environment steps. Evaluation is before current epoch updates.",
+    "checkpoints": [
+      {
+        "checkpoint_id": "epoch-000",
+        "completed_epochs": 0,
+        "completed_task_count": 0,
+        "stage": "initial",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 0,
+        "actor_critic_updates": 0,
+        "collected_trajectory_positions_including_reset_observations": 16384,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 2.265625,
+            "raw_return_std": 4.186071351443379,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 2.65625,
+            "raw_return_std": 4.416654382844553,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 2.8125,
+            "raw_return_std": 4.4960920531056745,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 2.5390625,
+            "raw_return_std": 4.352446050336954,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 2.734375,
+            "raw_return_std": 4.457234945498723,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 3.0078125,
+            "raw_return_std": 4.585977427424142,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-010",
+        "completed_epochs": 10,
+        "completed_task_count": 0,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 10000,
+        "actor_critic_updates": 8000,
+        "collected_trajectory_positions_including_reset_observations": 180224,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.8984375,
+            "raw_return_std": 4.918618714496352,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.640625,
+            "raw_return_std": 4.72317156255995,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.171875,
+            "raw_return_std": 4.860731321969463,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.640625,
+            "raw_return_std": 4.72317156255995,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.5625,
+            "raw_return_std": 4.749588797990833,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 6.09375,
+            "raw_return_std": 4.878904686248749,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-020",
+        "completed_epochs": 20,
+        "completed_task_count": 0,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 20000,
+        "actor_critic_updates": 16000,
+        "collected_trajectory_positions_including_reset_observations": 344064,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.5078125,
+            "raw_return_std": 4.9741458025317025,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.0546875,
+            "raw_return_std": 4.887497752157412,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 5.78125,
+            "raw_return_std": 4.938587696649721,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.1328125,
+            "raw_return_std": 4.869983145745348,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.859375,
+            "raw_return_std": 4.925593833171286,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 6.015625,
+            "raw_return_std": 4.895764073091656,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-030",
+        "completed_epochs": 30,
+        "completed_task_count": 0,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 30000,
+        "actor_critic_updates": 24000,
+        "collected_trajectory_positions_including_reset_observations": 507904,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.328125,
+            "raw_return_std": 4.820382140906984,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.25,
+            "raw_return_std": 4.841229182759271,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.015625,
+            "raw_return_std": 4.895764073091656,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.5234375,
+            "raw_return_std": 4.762261876838962,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.3671875,
+            "raw_return_std": 4.809448860300289,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 6.09375,
+            "raw_return_std": 4.878904686248749,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-040",
+        "completed_epochs": 40,
+        "completed_task_count": 0,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 40000,
+        "actor_critic_updates": 32000,
+        "collected_trajectory_positions_including_reset_observations": 671744,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.1328125,
+            "raw_return_std": 4.869983145745348,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.1328125,
+            "raw_return_std": 4.869983145745348,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.2890625,
+            "raw_return_std": 4.830974836520446,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.2890625,
+            "raw_return_std": 4.830974836520446,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.264591439688716,
+            "raw_return_std": 4.8374382156949585,
+            "episode_count": 257
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.46875,
+            "raw_return_std": 4.977978850648122,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-050",
+        "completed_epochs": 50,
+        "completed_task_count": 0,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 50000,
+        "actor_critic_updates": 40000,
+        "collected_trajectory_positions_including_reset_observations": 835584,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.2109375,
+            "raw_return_std": 4.85114732523078,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.2890625,
+            "raw_return_std": 4.830974836520446,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.484375,
+            "raw_return_std": 4.774581747061726,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.6796875,
+            "raw_return_std": 4.709421397830496,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.7421875,
+            "raw_return_std": 4.94460895469437,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 6.0546875,
+            "raw_return_std": 4.887497752157412,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-060",
+        "completed_epochs": 60,
+        "completed_task_count": 0,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 60000,
+        "actor_critic_updates": 48000,
+        "collected_trajectory_positions_including_reset_observations": 999424,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.186770428015564,
+            "raw_return_std": 4.857116011707745,
+            "episode_count": 257
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.0546875,
+            "raw_return_std": 4.887497752157412,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.2109375,
+            "raw_return_std": 4.85114732523078,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 5.9765625,
+            "raw_return_std": 4.903705301462737,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.0546875,
+            "raw_return_std": 4.887497752157412,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.6640625,
+            "raw_return_std": 4.955705902905635,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-070",
+        "completed_epochs": 70,
+        "completed_task_count": 0,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 70000,
+        "actor_critic_updates": 56000,
+        "collected_trajectory_positions_including_reset_observations": 1163264,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.40625,
+            "raw_return_std": 4.798172666495027,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.2109375,
+            "raw_return_std": 4.85114732523078,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.2109375,
+            "raw_return_std": 4.85114732523078,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.015625,
+            "raw_return_std": 4.895764073091656,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.3671875,
+            "raw_return_std": 4.809448860300289,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.0,
+            "raw_return_std": 5.0,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-080",
+        "completed_epochs": 80,
+        "completed_task_count": 0,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 80000,
+        "actor_critic_updates": 64000,
+        "collected_trajectory_positions_including_reset_observations": 1327104,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.0546875,
+            "raw_return_std": 4.887497752157412,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 5.8984375,
+            "raw_return_std": 4.918618714496352,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.40625,
+            "raw_return_std": 4.798172666495027,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 4.765625,
+            "raw_return_std": 4.99450381513269,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 4.7265625,
+            "raw_return_std": 4.992517594720498,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.4296875,
+            "raw_return_std": 4.981502650038816,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-090",
+        "completed_epochs": 90,
+        "completed_task_count": 1,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 90000,
+        "actor_critic_updates": 72000,
+        "collected_trajectory_positions_including_reset_observations": 1490944,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.5234375,
+            "raw_return_std": 4.762261876838962,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.3671875,
+            "raw_return_std": 4.809448860300289,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.484375,
+            "raw_return_std": 4.774581747061726,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.25,
+            "raw_return_std": 4.841229182759271,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.171875,
+            "raw_return_std": 4.860731321969463,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.859375,
+            "raw_return_std": 4.925593833171286,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-100",
+        "completed_epochs": 100,
+        "completed_task_count": 1,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 100000,
+        "actor_critic_updates": 80000,
+        "collected_trajectory_positions_including_reset_observations": 1654784,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.4453125,
+            "raw_return_std": 4.786551135979198,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.796875,
+            "raw_return_std": 4.6659661630122224,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.4453125,
+            "raw_return_std": 4.786551135979198,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.015625,
+            "raw_return_std": 4.895764073091656,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.8984375,
+            "raw_return_std": 4.918618714496352,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.9765625,
+            "raw_return_std": 4.903705301462737,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-110",
+        "completed_epochs": 110,
+        "completed_task_count": 1,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 110000,
+        "actor_critic_updates": 88000,
+        "collected_trajectory_positions_including_reset_observations": 1818624,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.9765625,
+            "raw_return_std": 4.903705301462737,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 5.078125,
+            "raw_return_std": 4.999389611180049,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 5.2734375,
+            "raw_return_std": 4.992517594720498,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 2.34375,
+            "raw_return_std": 4.236075534914362,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 2.4609375,
+            "raw_return_std": 4.307338113161509,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.3125,
+            "raw_return_std": 4.990224819584785,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-120",
+        "completed_epochs": 120,
+        "completed_task_count": 1,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 120000,
+        "actor_critic_updates": 96000,
+        "collected_trajectory_positions_including_reset_observations": 1982464,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.078125,
+            "raw_return_std": 4.999389611180049,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.1328125,
+            "raw_return_std": 4.869983145745348,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.640625,
+            "raw_return_std": 4.72317156255995,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.40625,
+            "raw_return_std": 4.798172666495027,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.2109375,
+            "raw_return_std": 4.85114732523078,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.1796875,
+            "raw_return_std": 4.932249730330344,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-130",
+        "completed_epochs": 130,
+        "completed_task_count": 1,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 130000,
+        "actor_critic_updates": 104000,
+        "collected_trajectory_positions_including_reset_observations": 2146304,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.4453125,
+            "raw_return_std": 4.786551135979198,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.6015625,
+            "raw_return_std": 4.736559675396664,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.0546875,
+            "raw_return_std": 4.887497752157412,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 5.859375,
+            "raw_return_std": 4.925593833171286,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.1328125,
+            "raw_return_std": 4.869983145745348,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 6.09375,
+            "raw_return_std": 4.878904686248749,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-140",
+        "completed_epochs": 140,
+        "completed_task_count": 1,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 140000,
+        "actor_critic_updates": 112000,
+        "collected_trajectory_positions_including_reset_observations": 2310144,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.8359375,
+            "raw_return_std": 4.650734726480725,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.1328125,
+            "raw_return_std": 4.869983145745348,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 5.9375,
+            "raw_return_std": 4.911323014219285,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.7578125,
+            "raw_return_std": 4.680822066137929,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.25,
+            "raw_return_std": 4.841229182759271,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.3125,
+            "raw_return_std": 4.990224819584785,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-150",
+        "completed_epochs": 150,
+        "completed_task_count": 1,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 150000,
+        "actor_critic_updates": 120000,
+        "collected_trajectory_positions_including_reset_observations": 2473984,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.2890625,
+            "raw_return_std": 4.830974836520446,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.25,
+            "raw_return_std": 4.841229182759271,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.71875,
+            "raw_return_std": 4.695306000411475,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.1328125,
+            "raw_return_std": 4.869983145745348,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.03125,
+            "raw_return_std": 4.5688098491292015,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 3.984375,
+            "raw_return_std": 4.895764073091656,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-160",
+        "completed_epochs": 160,
+        "completed_task_count": 1,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 160000,
+        "actor_critic_updates": 128000,
+        "collected_trajectory_positions_including_reset_observations": 2637824,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.09375,
+            "raw_return_std": 4.878904686248749,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.71875,
+            "raw_return_std": 4.695306000411475,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.2109375,
+            "raw_return_std": 4.85114732523078,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.4453125,
+            "raw_return_std": 4.786551135979198,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.328125,
+            "raw_return_std": 4.820382140906984,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.4140625,
+            "raw_return_std": 4.965549037729237,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-170",
+        "completed_epochs": 170,
+        "completed_task_count": 1,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 170000,
+        "actor_critic_updates": 136000,
+        "collected_trajectory_positions_including_reset_observations": 2801664,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.09375,
+            "raw_return_std": 4.878904686248749,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.9140625,
+            "raw_return_std": 4.61913030191764,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.4453125,
+            "raw_return_std": 4.786551135979198,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 4.609375,
+            "raw_return_std": 4.984717856546647,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.796875,
+            "raw_return_std": 4.6659661630122224,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.8984375,
+            "raw_return_std": 4.918618714496352,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-180",
+        "completed_epochs": 180,
+        "completed_task_count": 2,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 180000,
+        "actor_critic_updates": 144000,
+        "collected_trajectory_positions_including_reset_observations": 2965504,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.859375,
+            "raw_return_std": 4.925593833171286,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.0703125,
+            "raw_return_std": 4.551242264738689,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.8359375,
+            "raw_return_std": 4.650734726480725,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 4.8046875,
+            "raw_return_std": 4.9961838464315695,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.171875,
+            "raw_return_std": 4.860731321969463,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.4140625,
+            "raw_return_std": 4.965549037729237,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-190",
+        "completed_epochs": 190,
+        "completed_task_count": 2,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 190000,
+        "actor_critic_updates": 152000,
+        "collected_trajectory_positions_including_reset_observations": 3129344,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.171875,
+            "raw_return_std": 4.860731321969463,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.9921875,
+            "raw_return_std": 4.585977427424142,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.109375,
+            "raw_return_std": 4.533270023876253,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 5.3515625,
+            "raw_return_std": 4.987625066962607,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.5859375,
+            "raw_return_std": 4.965549037729237,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.7421875,
+            "raw_return_std": 4.94460895469437,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-200",
+        "completed_epochs": 200,
+        "completed_task_count": 2,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 200000,
+        "actor_critic_updates": 160000,
+        "collected_trajectory_positions_including_reset_observations": 3293184,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.6640625,
+            "raw_return_std": 4.955705902905635,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.003891050583658,
+            "raw_return_std": 4.580875533933521,
+            "episode_count": 257
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.25,
+            "raw_return_std": 4.841229182759271,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.09375,
+            "raw_return_std": 4.878904686248749,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.328125,
+            "raw_return_std": 4.820382140906984,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.7265625,
+            "raw_return_std": 4.992517594720498,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-210",
+        "completed_epochs": 210,
+        "completed_task_count": 2,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 210000,
+        "actor_critic_updates": 168000,
+        "collected_trajectory_positions_including_reset_observations": 3457024,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.8984375,
+            "raw_return_std": 4.918618714496352,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.9921875,
+            "raw_return_std": 4.585977427424142,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.796875,
+            "raw_return_std": 4.6659661630122224,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.3671875,
+            "raw_return_std": 4.809448860300289,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.859375,
+            "raw_return_std": 4.925593833171286,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.609375,
+            "raw_return_std": 4.984717856546647,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-220",
+        "completed_epochs": 220,
+        "completed_task_count": 2,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 220000,
+        "actor_critic_updates": 176000,
+        "collected_trajectory_positions_including_reset_observations": 3620864,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.25,
+            "raw_return_std": 4.841229182759271,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.1875,
+            "raw_return_std": 4.4960920531056745,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.6015625,
+            "raw_return_std": 4.736559675396664,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.09375,
+            "raw_return_std": 4.878904686248749,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.5078125,
+            "raw_return_std": 4.9741458025317025,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 3.7890625,
+            "raw_return_std": 4.85114732523078,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-230",
+        "completed_epochs": 230,
+        "completed_task_count": 2,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 230000,
+        "actor_critic_updates": 184000,
+        "collected_trajectory_positions_including_reset_observations": 3784704,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.15625,
+            "raw_return_std": 4.997557997412336,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.0703125,
+            "raw_return_std": 4.551242264738689,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.03125,
+            "raw_return_std": 4.5688098491292015,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 5.3515625,
+            "raw_return_std": 4.987625066962607,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.5234375,
+            "raw_return_std": 4.762261876838962,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.375,
+            "raw_return_std": 4.960783708246107,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-240",
+        "completed_epochs": 240,
+        "completed_task_count": 2,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 240000,
+        "actor_critic_updates": 192000,
+        "collected_trajectory_positions_including_reset_observations": 3948544,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.7421875,
+            "raw_return_std": 4.94460895469437,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.0703125,
+            "raw_return_std": 4.551242264738689,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.578125,
+            "raw_return_std": 4.284071834642249,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 5.5078125,
+            "raw_return_std": 4.9741458025317025,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.8203125,
+            "raw_return_std": 4.932249730330344,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.53125,
+            "raw_return_std": 4.977978850648122,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-250",
+        "completed_epochs": 250,
+        "completed_task_count": 2,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 250000,
+        "actor_critic_updates": 200000,
+        "collected_trajectory_positions_including_reset_observations": 4112384,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.625,
+            "raw_return_std": 4.960783708246107,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.3046875,
+            "raw_return_std": 4.437163004369317,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 6.875,
+            "raw_return_std": 4.635124054434789,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 5.7421875,
+            "raw_return_std": 4.94460895469437,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.3671875,
+            "raw_return_std": 4.809448860300289,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.1796875,
+            "raw_return_std": 4.932249730330344,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-260",
+        "completed_epochs": 260,
+        "completed_task_count": 2,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 260000,
+        "actor_critic_updates": 208000,
+        "collected_trajectory_positions_including_reset_observations": 4276224,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.5078125,
+            "raw_return_std": 4.9741458025317025,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.2265625,
+            "raw_return_std": 4.476876079767425,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.34375,
+            "raw_return_std": 4.416654382844553,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.015625,
+            "raw_return_std": 4.895764073091656,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.859375,
+            "raw_return_std": 4.925593833171286,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.2734375,
+            "raw_return_std": 4.992517594720498,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-270",
+        "completed_epochs": 270,
+        "completed_task_count": 3,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 270000,
+        "actor_critic_updates": 216000,
+        "collected_trajectory_positions_including_reset_observations": 4440064,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.15625,
+            "raw_return_std": 4.997557997412336,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.265625,
+            "raw_return_std": 4.457234945498723,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.0703125,
+            "raw_return_std": 4.551242264738689,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 5.4863813229571985,
+            "raw_return_std": 4.976287090660908,
+            "episode_count": 257
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.46875,
+            "raw_return_std": 4.977978850648122,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 3.984375,
+            "raw_return_std": 4.895764073091656,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-280",
+        "completed_epochs": 280,
+        "completed_task_count": 3,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 280000,
+        "actor_critic_updates": 224000,
+        "collected_trajectory_positions_including_reset_observations": 4603904,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.25,
+            "raw_return_std": 4.841229182759271,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.9296875,
+            "raw_return_std": 4.05178123204397,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.2265625,
+            "raw_return_std": 4.476876079767425,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.3828125,
+            "raw_return_std": 4.395702968791653,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.5625,
+            "raw_return_std": 4.749588797990833,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 3.28125,
+            "raw_return_std": 4.695306000411475,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-290",
+        "completed_epochs": 290,
+        "completed_task_count": 3,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 290000,
+        "actor_critic_updates": 232000,
+        "collected_trajectory_positions_including_reset_observations": 4767744,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.0546875,
+            "raw_return_std": 4.887497752157412,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.5390625,
+            "raw_return_std": 4.307338113161509,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.7734375,
+            "raw_return_std": 4.160293791740404,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.0703125,
+            "raw_return_std": 4.551242264738689,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.484375,
+            "raw_return_std": 4.774581747061726,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 3.984375,
+            "raw_return_std": 4.895764073091656,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-300",
+        "completed_epochs": 300,
+        "completed_task_count": 3,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 300000,
+        "actor_critic_updates": 240000,
+        "collected_trajectory_positions_including_reset_observations": 4931584,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.5859375,
+            "raw_return_std": 4.965549037729237,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.875,
+            "raw_return_std": 4.635124054434789,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.3828125,
+            "raw_return_std": 4.395702968791653,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.2265625,
+            "raw_return_std": 4.476876079767425,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.6015625,
+            "raw_return_std": 4.736559675396664,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 2.96875,
+            "raw_return_std": 4.5688098491292015,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-310",
+        "completed_epochs": 310,
+        "completed_task_count": 3,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 310000,
+        "actor_critic_updates": 248000,
+        "collected_trajectory_positions_including_reset_observations": 5095424,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.5078125,
+            "raw_return_std": 4.9741458025317025,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 6.9921875,
+            "raw_return_std": 4.585977427424142,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.1875,
+            "raw_return_std": 4.4960920531056745,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.0703125,
+            "raw_return_std": 4.551242264738689,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.6015625,
+            "raw_return_std": 4.736559675396664,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 2.421875,
+            "raw_return_std": 4.284071834642249,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-320",
+        "completed_epochs": 320,
+        "completed_task_count": 3,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 320000,
+        "actor_critic_updates": 256000,
+        "collected_trajectory_positions_including_reset_observations": 5259264,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.25,
+            "raw_return_std": 4.841229182759271,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.3046875,
+            "raw_return_std": 4.437163004369317,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.4609375,
+            "raw_return_std": 4.352446050336954,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.34375,
+            "raw_return_std": 4.416654382844553,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.875,
+            "raw_return_std": 4.635124054434789,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.453125,
+            "raw_return_std": 4.970002790177788,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-330",
+        "completed_epochs": 330,
+        "completed_task_count": 3,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 330000,
+        "actor_critic_updates": 264000,
+        "collected_trajectory_positions_including_reset_observations": 5423104,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.859375,
+            "raw_return_std": 4.925593833171286,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.109375,
+            "raw_return_std": 4.533270023876253,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 8.1640625,
+            "raw_return_std": 3.871525344885882,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.265625,
+            "raw_return_std": 4.457234945498723,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.703125,
+            "raw_return_std": 4.950314660137778,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 2.890625,
+            "raw_return_std": 4.533270023876253,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-340",
+        "completed_epochs": 340,
+        "completed_task_count": 3,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 340000,
+        "actor_critic_updates": 272000,
+        "collected_trajectory_positions_including_reset_observations": 5586944,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.3671875,
+            "raw_return_std": 4.809448860300289,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.6171875,
+            "raw_return_std": 4.260320362348793,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.0703125,
+            "raw_return_std": 4.551242264738689,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 6.9140625,
+            "raw_return_std": 4.61913030191764,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.640625,
+            "raw_return_std": 4.72317156255995,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 1.2109375,
+            "raw_return_std": 3.262361931345716,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-350",
+        "completed_epochs": 350,
+        "completed_task_count": 3,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 350000,
+        "actor_critic_updates": 280000,
+        "collected_trajectory_positions_including_reset_observations": 5750784,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.40625,
+            "raw_return_std": 4.798172666495027,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.421875,
+            "raw_return_std": 4.3743023997404435,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.421875,
+            "raw_return_std": 4.3743023997404435,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.65625,
+            "raw_return_std": 4.236075534914362,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.1328125,
+            "raw_return_std": 4.869983145745348,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 1.2890625,
+            "raw_return_std": 3.3509614845733084,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-360",
+        "completed_epochs": 360,
+        "completed_task_count": 4,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 360000,
+        "actor_critic_updates": 288000,
+        "collected_trajectory_positions_including_reset_observations": 5914624,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.0546875,
+            "raw_return_std": 4.887497752157412,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.5390625,
+            "raw_return_std": 4.307338113161509,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.4609375,
+            "raw_return_std": 4.352446050336954,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.203125,
+            "raw_return_std": 3.8392694922830044,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 5.0,
+            "raw_return_std": 5.0,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 0.4296875,
+            "raw_return_std": 2.0278667738152203,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-370",
+        "completed_epochs": 370,
+        "completed_task_count": 4,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 370000,
+        "actor_critic_updates": 296000,
+        "collected_trajectory_positions_including_reset_observations": 6078464,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.328125,
+            "raw_return_std": 4.820382140906984,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.5,
+            "raw_return_std": 4.330127018922194,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.5390625,
+            "raw_return_std": 4.307338113161509,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.65625,
+            "raw_return_std": 4.236075534914362,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.5390625,
+            "raw_return_std": 4.307338113161509,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 2.7734375,
+            "raw_return_std": 4.476876079767425,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-380",
+        "completed_epochs": 380,
+        "completed_task_count": 4,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 380000,
+        "actor_critic_updates": 304000,
+        "collected_trajectory_positions_including_reset_observations": 6242304,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.328125,
+            "raw_return_std": 4.820382140906984,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.5,
+            "raw_return_std": 4.330127018922194,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.7734375,
+            "raw_return_std": 4.160293791740404,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.734375,
+            "raw_return_std": 4.186071351443379,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.4609375,
+            "raw_return_std": 4.352446050336954,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 2.6953125,
+            "raw_return_std": 4.437163004369317,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-390",
+        "completed_epochs": 390,
+        "completed_task_count": 4,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 390000,
+        "actor_critic_updates": 312000,
+        "collected_trajectory_positions_including_reset_observations": 6406144,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.625,
+            "raw_return_std": 4.960783708246107,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.6953125,
+            "raw_return_std": 4.211328831538063,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.734375,
+            "raw_return_std": 4.186071351443379,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.7734375,
+            "raw_return_std": 4.160293791740404,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.9296875,
+            "raw_return_std": 4.05178123204397,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 1.796875,
+            "raw_return_std": 3.8392694922830044,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-400",
+        "completed_epochs": 400,
+        "completed_task_count": 4,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 400000,
+        "actor_critic_updates": 320000,
+        "collected_trajectory_positions_including_reset_observations": 6569984,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.859375,
+            "raw_return_std": 4.925593833171286,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.421875,
+            "raw_return_std": 4.3743023997404435,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.109375,
+            "raw_return_std": 4.533270023876253,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.4609375,
+            "raw_return_std": 4.352446050336954,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.4319066147859925,
+            "raw_return_std": 4.368733250836006,
+            "episode_count": 257
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 1.9921875,
+            "raw_return_std": 3.9941286865652876,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-410",
+        "completed_epochs": 410,
+        "completed_task_count": 4,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 410000,
+        "actor_critic_updates": 328000,
+        "collected_trajectory_positions_including_reset_observations": 6733824,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.703125,
+            "raw_return_std": 4.950314660137778,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.8125,
+            "raw_return_std": 4.133986423538423,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.7734375,
+            "raw_return_std": 4.160293791740404,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.96875,
+            "raw_return_std": 4.023247871744917,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.7734375,
+            "raw_return_std": 4.160293791740404,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 2.421875,
+            "raw_return_std": 4.284071834642249,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-420",
+        "completed_epochs": 420,
+        "completed_task_count": 4,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 420000,
+        "actor_critic_updates": 336000,
+        "collected_trajectory_positions_including_reset_observations": 6897664,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.1328125,
+            "raw_return_std": 4.869983145745348,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.890625,
+            "raw_return_std": 4.079741059108408,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.109375,
+            "raw_return_std": 4.533270023876253,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.3046875,
+            "raw_return_std": 4.437163004369317,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.8515625,
+            "raw_return_std": 4.107139066137614,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 1.484375,
+            "raw_return_std": 3.5553313290571107,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-430",
+        "completed_epochs": 430,
+        "completed_task_count": 4,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 430000,
+        "actor_critic_updates": 344000,
+        "collected_trajectory_positions_including_reset_observations": 7061504,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.6796875,
+            "raw_return_std": 4.709421397830496,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.734375,
+            "raw_return_std": 4.186071351443379,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.265625,
+            "raw_return_std": 4.457234945498723,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.0078125,
+            "raw_return_std": 3.9941286865652876,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 6.9921875,
+            "raw_return_std": 4.585977427424142,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 3.1640625,
+            "raw_return_std": 4.650734726480725,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-440",
+        "completed_epochs": 440,
+        "completed_task_count": 4,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 440000,
+        "actor_critic_updates": 352000,
+        "collected_trajectory_positions_including_reset_observations": 7225344,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.859375,
+            "raw_return_std": 4.925593833171286,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.6953125,
+            "raw_return_std": 4.211328831538063,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 8.2421875,
+            "raw_return_std": 3.806339477088683,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.125,
+            "raw_return_std": 3.9031237489989987,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.4609375,
+            "raw_return_std": 4.352446050336954,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.0234375,
+            "raw_return_std": 4.903705301462737,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-450",
+        "completed_epochs": 450,
+        "completed_task_count": 5,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 450000,
+        "actor_critic_updates": 360000,
+        "collected_trajectory_positions_including_reset_observations": 7389184,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.5234375,
+            "raw_return_std": 4.762261876838962,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.7734375,
+            "raw_return_std": 4.160293791740404,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.734375,
+            "raw_return_std": 4.186071351443379,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.1640625,
+            "raw_return_std": 3.871525344885882,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 8.046875,
+            "raw_return_std": 3.9644107676141482,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.2578125,
+            "raw_return_std": 4.94460895469437,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-460",
+        "completed_epochs": 460,
+        "completed_task_count": 5,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 460000,
+        "actor_critic_updates": 368000,
+        "collected_trajectory_positions_including_reset_observations": 7553024,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.5234375,
+            "raw_return_std": 4.762261876838962,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.34375,
+            "raw_return_std": 4.416654382844553,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 8.0078125,
+            "raw_return_std": 3.9941286865652876,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.7734375,
+            "raw_return_std": 4.160293791740404,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.65625,
+            "raw_return_std": 4.236075534914362,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.765625,
+            "raw_return_std": 4.99450381513269,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-470",
+        "completed_epochs": 470,
+        "completed_task_count": 5,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 470000,
+        "actor_critic_updates": 376000,
+        "collected_trajectory_positions_including_reset_observations": 7716864,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.5234375,
+            "raw_return_std": 4.762261876838962,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 8.01556420233463,
+            "raw_return_std": 3.9882793961303546,
+            "episode_count": 257
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.421875,
+            "raw_return_std": 4.3743023997404435,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.046875,
+            "raw_return_std": 3.9644107676141482,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 8.359375,
+            "raw_return_std": 3.7033227795285413,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.8046875,
+            "raw_return_std": 4.9961838464315695,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-480",
+        "completed_epochs": 480,
+        "completed_task_count": 5,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 480000,
+        "actor_critic_updates": 384000,
+        "collected_trajectory_positions_including_reset_observations": 7880704,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.1953125,
+            "raw_return_std": 4.9961838464315695,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.03125,
+            "raw_return_std": 4.5688098491292015,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 5.8984375,
+            "raw_return_std": 4.918618714496352,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.6171875,
+            "raw_return_std": 4.260320362348793,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 8.203125,
+            "raw_return_std": 3.8392694922830044,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.7421875,
+            "raw_return_std": 4.94460895469437,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-490",
+        "completed_epochs": 490,
+        "completed_task_count": 5,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 490000,
+        "actor_critic_updates": 392000,
+        "collected_trajectory_positions_including_reset_observations": 8044544,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.1328125,
+            "raw_return_std": 4.869983145745348,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.265625,
+            "raw_return_std": 4.457234945498723,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.578125,
+            "raw_return_std": 4.284071834642249,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.125,
+            "raw_return_std": 3.9031237489989987,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 8.0859375,
+            "raw_return_std": 3.9340805464674653,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.1953125,
+            "raw_return_std": 4.9961838464315695,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-500",
+        "completed_epochs": 500,
+        "completed_task_count": 5,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 500000,
+        "actor_critic_updates": 400000,
+        "collected_trajectory_positions_including_reset_observations": 8208384,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.171875,
+            "raw_return_std": 4.860731321969463,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 8.3203125,
+            "raw_return_std": 3.7383853335823676,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 8.359375,
+            "raw_return_std": 3.7033227795285413,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.96875,
+            "raw_return_std": 4.023247871744917,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.890625,
+            "raw_return_std": 4.079741059108408,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.3515625,
+            "raw_return_std": 4.987625066962607,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-510",
+        "completed_epochs": 510,
+        "completed_task_count": 5,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 510000,
+        "actor_critic_updates": 408000,
+        "collected_trajectory_positions_including_reset_observations": 8372224,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.8203125,
+            "raw_return_std": 4.932249730330344,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.7734375,
+            "raw_return_std": 4.160293791740404,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.9296875,
+            "raw_return_std": 4.05178123204397,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 7.578125,
+            "raw_return_std": 4.284071834642249,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.6953125,
+            "raw_return_std": 4.211328831538063,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 5.46875,
+            "raw_return_std": 4.977978850648122,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-520",
+        "completed_epochs": 520,
+        "completed_task_count": 5,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 520000,
+        "actor_critic_updates": 416000,
+        "collected_trajectory_positions_including_reset_observations": 8536064,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.5859375,
+            "raw_return_std": 4.965549037729237,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.34375,
+            "raw_return_std": 4.416654382844553,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.1875,
+            "raw_return_std": 4.4960920531056745,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.01556420233463,
+            "raw_return_std": 3.9882793961303546,
+            "episode_count": 257
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.578125,
+            "raw_return_std": 4.284071834642249,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.0234375,
+            "raw_return_std": 4.903705301462737,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-530",
+        "completed_epochs": 530,
+        "completed_task_count": 5,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 530000,
+        "actor_critic_updates": 424000,
+        "collected_trajectory_positions_including_reset_observations": 8699904,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 5.625,
+            "raw_return_std": 4.960783708246107,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.8125,
+            "raw_return_std": 4.133986423538423,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 8.4375,
+            "raw_return_std": 3.6309218870694533,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.28125,
+            "raw_return_std": 3.7727176461405114,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 8.203125,
+            "raw_return_std": 3.8392694922830044,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.7265625,
+            "raw_return_std": 4.992517594720498,
+            "episode_count": 256
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "epoch-540",
+        "completed_epochs": 540,
+        "completed_task_count": 6,
+        "stage": "periodic_pre_update",
+        "cohort": "advancing_eval_rng_stream",
+        "rollouts_per_task": 256,
+        "world_model_updates": 540000,
+        "actor_critic_updates": 432000,
+        "collected_trajectory_positions_including_reset_observations": 8863744,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "CoinRun",
+            "raw_return_mean": 6.2109375,
+            "raw_return_std": 4.85114732523078,
+            "episode_count": 256
+          },
+          {
+            "task_index": 1,
+            "task_name": "CoinRun+NB",
+            "raw_return_mean": 7.3828125,
+            "raw_return_std": 4.395702968791653,
+            "episode_count": 256
+          },
+          {
+            "task_index": 2,
+            "task_name": "CoinRun+NB+RT",
+            "raw_return_mean": 7.8515625,
+            "raw_return_std": 4.107139066137614,
+            "episode_count": 256
+          },
+          {
+            "task_index": 3,
+            "task_name": "CoinRun+NB+RT+GA",
+            "raw_return_mean": 8.125,
+            "raw_return_std": 3.9031237489989987,
+            "episode_count": 256
+          },
+          {
+            "task_index": 4,
+            "task_name": "CoinRun+NB+RT+GA+MA",
+            "raw_return_mean": 7.890625,
+            "raw_return_std": 4.079741059108408,
+            "episode_count": 256
+          },
+          {
+            "task_index": 5,
+            "task_name": "CoinRun+NB+RT+GA+MA+CA",
+            "raw_return_mean": 4.6875,
+            "raw_return_std": 4.990224819584785,
+            "episode_count": 256
+          }
+        ]
+      }
+    ]
+  },
+  "headline": {
+    "summary": "Epoch 540 six-task raw return vector: [6.210938, 7.382812, 7.851562, 8.125000, 7.890625, 4.687500]; training/evaluation complete; launcher finalization unverified."
+  },
+  "comparability": {
+    "direct_comparison_group": "coinrun-original-order-cpu-uint8-5seed-20260903",
+    "claim": "Matched five-seed ARROW-50 versus DreamerV3/FIFO diagnostic; not a verified paper numerical reproduction.",
+    "limitations": [
+      "CPU uint8 replay instead of published CUDA float32; equal sample capacity, byte usage reported separately.",
+      "Explicit Python/Procgen training and evaluation RNG seeds differ from released unseeded defaults; deterministic algorithms are not asserted.",
+      "Fixed rounded Table A.16 anchors are diagnostic, not verified author per-seed/time-aligned normalization.",
+      "Final scheduled evaluation precedes the final epoch optimizer updates; no held-out post-training evaluation or model weights were saved.",
+      "Seed 4 uses a different accelerator/runtime from seeds 0-3; no seed is excluded.",
+      "Post-training wrapper Input/output error; source state remains running, exit code and final checksum manifest absent. Training/evaluation completion is not strict launcher completion."
+    ]
+  },
+  "source_artifacts": [
+    {
+      "role": "campaign_manifest",
+      "name": "campaign_manifest.json",
+      "sha256": "90f5154eaf87eeb57d49e308366611db34cc11fabccfb56b01d6cda8a86f939e",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "external_downloaded_campaign_archive",
+      "name": "coinrun_ar50_dv3_original_5seed_official_20260903T005359CST.tar.gz",
+      "sha256": "857ced1e49156e222da99e6d243a2dd36072d65a49ed98832750e2b13539fed1",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "prior_semantic_and_tensorboard_audit",
+      "name": "coinrun_paper_gap_audit_20260905.json",
+      "sha256": "e4e62b7e0f8a7298240a47f3cc287f1c5f018e1fc080e83df764859147490674",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "runtime_provenance_git_commit_at_launch",
+      "name": "git_commit_at_launch.txt",
+      "sha256": "f6dc65c3f096ea8fb657a087f24e267d953266f36d19639c72f61d9792b111a3",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "runtime_provenance_git_status_at_launch",
+      "name": "git_status_at_launch.txt",
+      "sha256": "ba051334ebc33f3162a4fd5be48615e03c8dac8ec7977e7c2752dbc1cf981841",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "runtime_provenance_launcher_started_at",
+      "name": "launcher_started_at.txt",
+      "sha256": "638f7b9b9b8cf07bfc35c6252f4f52e77be7b47d9c5dd5861948a5bafbe4d4db",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "runtime_provenance_lscpu",
+      "name": "lscpu.txt",
+      "sha256": "c829ca6380f6041110a1cdd03ad89c495be395b543e273557754d2c497484b52",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "runtime_provenance_memory_at_launch",
+      "name": "memory_at_launch.txt",
+      "sha256": "c5ae97e77d0746e54520c32e5b2dd9599e836d49c40fd62b8377110af7678d49",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "runtime_provenance_nvidia_smi_q_at_launch",
+      "name": "nvidia_smi_q_at_launch.txt",
+      "sha256": "a0e92c77dcd574e15e1f34ba21e89b69debf340a705d0e6d6bdb3fc03950c0b2",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "runtime_provenance_orchestration_changes",
+      "name": "orchestration_changes.tsv",
+      "sha256": "32d4cd0ead82e8c7bb96e40bac63a5703d67efcb1b5216cebdc32db1174b0c48",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "runtime_provenance_pip_freeze",
+      "name": "pip_freeze.txt",
+      "sha256": "1675eeda0ade1a95aa2832e52972650605f68082d65d8b81fd50209310536609",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "runtime_provenance_s4_external_placement",
+      "name": "s4_external_placement.json",
+      "sha256": "1e4527ef04a18cbe6e459464bb4ee8f0b73e59bfd208806886d6496c87a6f0af",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "runtime_provenance_uname",
+      "name": "uname.txt",
+      "sha256": "9119c33b1c0a6d0ddaebe8f3221dc7c9c82219174ed8ae5e086382cd47309b01",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "original_raw_returns",
+      "name": "evaluation_returns.jsonl",
+      "sha256": "f225b955fac63ca1b253c6faa342df589acc7de9061593b1f7ef5a1470fe6f3c",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "curated_raw_returns",
+      "name": "evaluation.log",
+      "sha256": "cf037d469a599889070f041a948fe1b2ae25005ba91e3814e71d9c7e9deaef21",
+      "repository_copy_excluded": false,
+      "repository_path": "docs/experiments/records/coinrun-arrow-ar50-original-s1-20260903/evaluation.log"
+    },
+    {
+      "role": "original_training_log",
+      "name": "train.log",
+      "sha256": "485c9140dd811a9c1555819bafba92acf2d555a17b902c86dcac5e4d9c27a0ac",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "original_launcher_status",
+      "name": "status.json",
+      "sha256": "7ac2770b4eb188ca7df6ae989445c55498759596c3d2be2b89245b66007caac1",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "published_config",
+      "name": "arrow_s1_published.json",
+      "sha256": "49a0b0ff548a6926da6bca3affd6bfc837154cf2a84bbd366267df5e63c29b43",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "requested_config",
+      "name": "arrow_s1.json",
+      "sha256": "7f58e95f8e01a220468ecdd08a3146b72c342e470e42dac4c3f71b16c1f25bf9",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "resolved_config",
+      "name": "config.json",
+      "sha256": "bebf3290dbcad36a9262fae8170967059b79a6c87eaaef19238b684e79dc3eb5",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "original_tensorboard_main",
+      "name": "events.out.tfevents.1788368681.gjob-dev-750383850169499648-taskrole1-0.828.0",
+      "sha256": "72d18f19c1df7e24a57b0729b77724796718bfdc3a2f10796293300a6f69cb64",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "original_wrapper_log",
+      "name": "jobs_arrow_s1_wrapper.log",
+      "sha256": "6ade3b4cfae9bbfbba47d804115faa34815a233adaac98e0b7ef8b2782cdde41",
+      "repository_copy_excluded": true
+    }
+  ],
+  "notes": [
+    "All ordered individual episode returns at every scheduled checkpoint are preserved in evaluation.log; integers represent original floats exactly.",
+    "All 55 evaluation checkpoints cover all six tasks, including not-yet-trained tasks; no task identity enters the agent.",
+    "Requested 256 episodes can yield 257 under vectorized stopping. Preserve all recorded episodes.",
+    "The scheduler revisits task 0 for epoch 540 collection; the subsequent extra gradients do not affect the epoch-540 evaluation.",
+    "Full logs/events/runtime dumps and campaign tarballs remain external and are identified by SHA256.",
+    "Source campaign label official is preserved as provenance only; curated evidence label is diagnostic."
+  ],
+  "budgets": {
+    "epochs": 541,
+    "epochs_per_task": 90,
+    "world_model_updates_at_training_end": 541000,
+    "actor_critic_updates_at_training_end": 432800,
+    "world_model_updates_at_final_evaluation": 540000,
+    "actor_critic_updates_at_final_evaluation": 432000,
+    "collected_trajectory_positions_including_reset_observations": 8863744,
+    "environment_decisions_inferred_excluding_reset_observations": 8861580,
+    "environment_counter_derivation": "541 * 4 * (4096 - 1), repeat=1; source Sample/total_env_steps includes 4 reset observations per epoch.",
+    "replay_capacity_slots": {
+      "fifo": 512,
+      "ltdm": 512,
+      "total": 1024
+    },
+    "replay_sequence_length": 512,
+    "replay_allocated_tensor_bytes": 6480199680,
+    "replay_byte_scope": "Observation, action, reward and termination tensors; excludes Python object/index metadata overhead.",
+    "whole_minibatch_selection": {
+      "fifo": 0.5,
+      "ltdm": 0.5
+    }
+  },
+  "derived_metrics": {
+    "normalization": {
+      "kind": "diagnostic_fixed_rounded_table_A16_anchors",
+      "source": "https://arxiv.org/html/2603.11395v3",
+      "table": "A.16",
+      "random": [
+        2.78,
+        2.45,
+        2.7,
+        2.62,
+        2.5,
+        2.69
+      ],
+      "single_task": [
+        6.09,
+        7.14,
+        6.89,
+        6.85,
+        7.89,
+        5.78
+      ],
+      "author_per_seed_references_and_time_aligned_pipeline_verified": false
+    },
+    "task_end_evaluation_rows": [
+      9,
+      18,
+      27,
+      36,
+      45,
+      54
+    ],
+    "fixed_table_A16_diagnostic": {
+      "metric_schema_version": "arrow-paper-v1",
+      "completed_task_count": 6,
+      "final_evaluation_row": 54,
+      "forgetting": -0.018536327628723853,
+      "per_task_forgetting": [
+        0.09441087613293031,
+        -0.06663113006396593,
+        -0.18645584725537012,
+        0.01846926713947994,
+        0.02898886827458269,
+        0.0
+      ],
+      "acc": 1.0442956297607173,
+      "min_acc": 0.8901547954253038,
+      "wc_acc": 0.8495356844293929,
+      "boundaries": [
+        {
+          "completed_task_count": 1,
+          "completed_task_index": 0,
+          "evaluation_row": 9,
+          "acc": 1.1309478851963746,
+          "min_acc": null,
+          "wc_acc": 1.1309478851963746,
+          "current_task_score": 1.1309478851963746,
+          "old_task_minima": []
+        },
+        {
+          "completed_task_count": 2,
+          "completed_task_index": 1,
+          "evaluation_row": 18,
+          "acc": 0.9577330157048165,
+          "min_acc": 0.6942975830815711,
+          "wc_acc": 0.8397194205386533,
+          "current_task_score": 0.9851412579957357,
+          "old_task_minima": [
+            0.6942975830815711
+          ]
+        },
+        {
+          "completed_task_count": 3,
+          "completed_task_index": 2,
+          "evaluation_row": 27,
+          "acc": 0.929240008649019,
+          "min_acc": 0.8313905292806576,
+          "wc_acc": 0.9019383560359516,
+          "current_task_score": 1.0430340095465394,
+          "old_task_minima": [
+            0.6942975830815711,
+            0.9684834754797442
+          ]
+        },
+        {
+          "completed_task_count": 4,
+          "completed_task_index": 3,
+          "evaluation_row": 36,
+          "acc": 1.13264229102967,
+          "min_acc": 0.8936094647779559,
+          "wc_acc": 1.000179025297415,
+          "current_task_score": 1.3198877068557922,
+          "old_task_minima": [
+            0.6942975830815711,
+            0.943496801705757,
+            1.0430340095465394
+          ]
+        },
+        {
+          "completed_task_count": 5,
+          "completed_task_index": 4,
+          "evaluation_row": 45,
+          "acc": 1.161457712516674,
+          "min_acc": 0.9470798822714102,
+          "wc_acc": 0.9634848705666643,
+          "current_task_score": 1.029104823747681,
+          "old_task_minima": [
+            0.6942975830815711,
+            0.943496801705757,
+            1.0430340095465394,
+            1.107491134751773
+          ]
+        },
+        {
+          "completed_task_count": 6,
+          "completed_task_index": 5,
+          "evaluation_row": 54,
+          "acc": 1.0442956297607173,
+          "min_acc": 0.8901547954253038,
+          "wc_acc": 0.8495356844293929,
+          "current_task_score": 0.6464401294498382,
+          "old_task_minima": [
+            0.6942975830815711,
+            0.943496801705757,
+            0.7633502386634845,
+            1.107491134751773,
+            0.9421382189239332
+          ]
+        }
+      ]
+    },
+    "forward_transfer": null,
+    "forward_transfer_reason": "Aligned single-task acquisition curves are not available."
+  },
+  "runtime": {
+    "source_campaign_label": "official",
+    "source_campaign_name": "coinrun_ar50_dv3_original_5seed_official_20260903T005359CST",
+    "hardware": {
+      "site": "VirtAI four-GPU server",
+      "gpu_reported_product_name": "S2.gpu.xlarge",
+      "gpu_count_at_launch": 4,
+      "driver_version": "470.57.02",
+      "driver_reported_cuda_version": "11.4",
+      "cpu_model": "Intel(R) Xeon(R) Gold 6342 CPU @ 2.80GHz",
+      "logical_cpu_count_at_launch": 96,
+      "architecture": "x86_64",
+      "os_kernel_release": "5.4.0-42-generic"
+    },
+    "physical_gpu_at_launch": 1,
+    "cpu_set_at_launch": "12-17",
+    "packages_from_launch_freeze": {
+      "torch": "2.3.0+cu118",
+      "numpy": "1.26.4",
+      "gym": "0.26.2",
+      "gym3": "0.3.3",
+      "procgen": "0.10.7",
+      "protobuf": "4.25.1",
+      "tensorboard": "2.13.0"
+    },
+    "procgen_version_from_campaign_manifest": "0.10.7",
+    "python_version_explicitly_recorded": null,
+    "runtime_provenance_limitations": [
+      "pip freeze contains some local package references; only identifiable versions are embedded, with full source dump hashes.",
+      "Driver-reported CUDA capability is not the PyTorch CUDA build version.",
+      "A standalone Python version and all backend flags are not available in the curated source metadata."
+    ],
+    "upstream_arrow": {
+      "repository": "https://github.com/Cerenaut/ARROW",
+      "commit": "cb05e7d97ed83c3cf6e528960db0da6868e29232",
+      "license": "MIT"
+    },
+    "resolved_config": {
+      "esc": {
+        "env_schedule_type": "SequentialEnvironments",
+        "env_configs": [
+          {
+            "name": "CoinRun",
+            "kwargs": {},
+            "rew_scale": 1
+          },
+          {
+            "name": "CoinRun+NB",
+            "kwargs": {},
+            "rew_scale": 1
+          },
+          {
+            "name": "CoinRun+NB+RT",
+            "kwargs": {},
+            "rew_scale": 1
+          },
+          {
+            "name": "CoinRun+NB+RT+GA",
+            "kwargs": {},
+            "rew_scale": 1
+          },
+          {
+            "name": "CoinRun+NB+RT+GA+MA",
+            "kwargs": {},
+            "rew_scale": 1
+          },
+          {
+            "name": "CoinRun+NB+RT+GA+MA+CA",
+            "kwargs": {},
+            "rew_scale": 1
+          }
+        ],
+        "kwargs": {
+          "swap_sched": 90
+        }
+      },
+      "algorithm": "arrow",
+      "seed": 1337,
+      "epochs": 541,
+      "wm_lr": 0.0001,
+      "log_frequency": 1000,
+      "steps_per_batch": 1000,
+      "ac_train_steps": 800,
+      "ac_train_sync": 128,
+      "fresh_ac": false,
+      "n_sync": 4,
+      "gen_seq_len": 4096,
+      "env_repeat": 1,
+      "data_n": 32,
+      "data_n_max": 512,
+      "sac_dv3_data_n_max": 1024,
+      "data_t": 512,
+      "mb_t_size": 32,
+      "mb_n_size": 16,
+      "random_policy": "first",
+      "pretrain_enabled": false,
+      "pretrain_data_multiplier": 4,
+      "pretrain_mb_t_size": 8,
+      "pretrain_mb_n_size": 16,
+      "pretrain_steps": 30000,
+      "gru_units": 512,
+      "cnn_depth": 32,
+      "mlp_features": 512,
+      "mlp_layers": 2,
+      "wall_time_optimisation": false,
+      "action_space": 15,
+      "replay_buffers": [
+        {
+          "rb_type": "FifoReplay",
+          "rb_device": "cpu"
+        },
+        {
+          "rb_type": "LongTermReplay",
+          "rb_device": "cpu"
+        }
+      ],
+      "replay_observation_dtype": "uint8",
+      "deterministic_runtime_seeding": true,
+      "arrow_replay_capacity_ratio": "50-50"
+    },
+    "published_to_resolved_changes": {
+      "arrow_replay_capacity_ratio": {
+        "published": null,
+        "resolved": "50-50"
+      },
+      "deterministic_runtime_seeding": {
+        "published": null,
+        "resolved": true
+      },
+      "replay_buffers": {
+        "published": [
+          {
+            "rb_type": "FifoReplay",
+            "rb_device": "cuda"
+          },
+          {
+            "rb_type": "LongTermReplay",
+            "rb_device": "cuda"
+          }
+        ],
+        "resolved": [
+          {
+            "rb_type": "FifoReplay",
+            "rb_device": "cpu"
+          },
+          {
+            "rb_type": "LongTermReplay",
+            "rb_device": "cpu"
+          }
+        ]
+      },
+      "replay_observation_dtype": {
+        "published": null,
+        "resolved": "uint8"
+      },
+      "sac_dv3_data_n_max": {
+        "published": null,
+        "resolved": 1024
+      }
+    },
+    "replay": {
+      "data_t": 512,
+      "observation_shape": [
+        3,
+        64,
+        64
+      ],
+      "observation_dtype": "uint8",
+      "storage_device": "cpu",
+      "sample_device": "cuda",
+      "total_replay_bytes_per_job": 6480199680
+    },
+    "runtime_seeding": {
+      "deterministic_runtime_seeding": true,
+      "training_and_evaluation_procgen_streams_disjoint": true,
+      "deterministic_algorithms_guaranteed": false
+    },
+    "checkpoint_semantics": {
+      "save_nets": false,
+      "model_weights_present": false,
+      "complete_resumable_checkpoint": false
+    },
+    "training_log_error_keyword_counts": {
+      "Traceback": 0,
+      "RuntimeError": 0,
+      "OutOfMemoryError": 0,
+      "OOM": 0,
+      "Killed": 0
+    },
+    "recorded_core_loss_summaries": {
+      "Loss/kl": {
+        "count": 541,
+        "nonfinite": 0,
+        "first": [
+          0,
+          3.2567880153656006
+        ],
+        "last": [
+          540000,
+          2.9539337158203125
+        ]
+      },
+      "Loss/recon": {
+        "count": 541,
+        "nonfinite": 0,
+        "first": [
+          0,
+          8218.794921875
+        ],
+        "last": [
+          540000,
+          5.937889575958252
+        ]
+      },
+      "Loss/rew": {
+        "count": 541,
+        "nonfinite": 0,
+        "first": [
+          0,
+          0.12260578572750092
+        ],
+        "last": [
+          540000,
+          0.011424731463193893
+        ]
+      },
+      "Loss/cont": {
+        "count": 541,
+        "nonfinite": 0,
+        "first": [
+          0,
+          0.6667590141296387
+        ],
+        "last": [
+          540000,
+          0.03444904461503029
+        ]
+      }
+    },
+    "tensorboard_counter_summaries": {
+      "Sample/total_env_steps": {
+        "count": 541,
+        "nonfinite": 0,
+        "first": [
+          0,
+          16384.0
+        ],
+        "last": [
+          540000,
+          8863744.0
+        ]
+      },
+      "Sample/replay_buffer_size": {
+        "count": 541,
+        "nonfinite": 0,
+        "first": [
+          0,
+          32.0
+        ],
+        "last": [
+          540000,
+          512.0
+        ]
+      },
+      "Sample/total_train_iters": {
+        "count": 541000,
+        "nonfinite": 0,
+        "first": [
+          0,
+          0.0
+        ],
+        "last": [
+          540999,
+          540999.0
+        ]
+      }
+    },
+    "tensorboard_mean_vs_raw_returns_mismatch_count": 0,
+    "tensorboard_audit_crc_checked": false,
+    "auxiliary_nonfinite_counts": {
+      "Metric/neg_cont_mean": 2,
+      "Metric/low_kl_recon_loss": 194
+    }
+  }
+}
