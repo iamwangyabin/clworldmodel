@@ -30,3 +30,18 @@ GPU smoke and pilot outcomes must be read from the timestamped run artifacts;
 this plan is not evidence that a run has completed.
 
 See `../protocols/dream_rehearsal_memory_pair_v1_atari.md` and decision 0056.
+
+## First launch attempt: rejected before environment interaction
+
+The 2026-09-06 13:19:57 +08:00 full-history smoke attempt at commit
+`a617ebc7e93370f04f7d7b47529622a0dee16848` failed the pinned-runtime guard:
+the launcher resolved the venv Python symlink to the base ARROW interpreter,
+which imported torch 2.3.0+cu118 instead of the installed isolated 2.4.1+cu121.
+The guard ran before constructing environments, collecting transitions or
+updating parameters. The queue stopped; no pilot started. Preserve its launch,
+status and error log rather than overwriting the failed attempt.
+
+The fix makes the selected Python path absolute without dereferencing symlinks.
+A regression test covers the common original-code launcher and both history
+arms. No learning source, budget or protocol setting changes. The retry must
+use the newly pushed fix commit and a fresh output directory.

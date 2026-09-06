@@ -88,6 +88,21 @@ class OfficialDreamRehearsalScheduleTests(unittest.TestCase):
 
 
 class OfficialDreamRehearsalLaunchTests(unittest.TestCase):
+    def test_python_symlink_preserves_the_selected_virtual_environment(self):
+        with TemporaryDirectory() as td:
+            interpreter = Path(td) / "venv-python"
+            interpreter.symlink_to(sys.executable)
+            for entry, extra in (
+                ("official", []), ("memory_pair", ["--history", "full"]),
+                ("memory_pair", ["--history", "bounded"]),
+            ):
+                with self.subTest(entry=entry, extra=extra):
+                    result = subprocess.run([
+                        sys.executable, str(ROOT / f"scripts/run_dream_rehearsal_{entry}_atari.py"),
+                        "--python", str(interpreter), "--dry-run", *extra,
+                    ], cwd=td, check=True, capture_output=True, text=True)
+                    self.assertEqual(json.loads(result.stdout)["command"][0], str(interpreter.absolute()))
+
     def test_cli_overrides_only_explicit_values(self):
         with TemporaryDirectory() as td:
             config = Path(td) / "protocol.json"

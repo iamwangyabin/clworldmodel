@@ -57,7 +57,9 @@ def main(*, config_type=OfficialDreamRehearsalConfig) -> int:
     name = (f"dream_rehearsal_memory_pair_{config.history_arm}" if isinstance(config, MemoryPairConfig)
             else "dream_rehearsal_official_atari")
     output = root_path(args.output_dir or Path("runs") / f"{name}_{config.classification}_seed{config.seed}")
-    python = root_path(args.python)
+    # Resolving a venv's interpreter symlink launches its base environment.
+    python = args.python.expanduser()
+    python = Path(os.path.abspath(python if python.is_absolute() else ROOT / python))
     command = [str(python), str(ROOT / "scripts/train_dream_rehearsal_official_atari.py"),
                "--run-dir", str(output)]
     reference_sources = verify_reference_sources()
