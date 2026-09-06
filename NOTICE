@@ -1,6 +1,10 @@
 clworldmodel
 Copyright 2026 Wang Yabin
 
+This product includes selected NM512 DreamerV3 source files, copyright (c)
+2023 NM512, licensed under the MIT License. See third_party/nm512_dreamerv3/LICENSE
+and third_party/nm512_dreamerv3/UPSTREAM.md.
+
 This product includes a project-maintained snapshot of ARROW, copyright Cerenaut,
 licensed under the MIT License. See third_party/arrow/LICENSE and
 third_party/arrow/UPSTREAM.md.
