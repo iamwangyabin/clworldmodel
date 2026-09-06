@@ -1,5 +1,10 @@
 # 0051: Port Dream Rehearsal with a fixed sample-capacity budget
 
+> 2026-09-05 correction: “artifact's 4-sequence by 16-step batch” below refers
+> to a smoke override, not its normal configuration. This historical bounded
+> decision is not a faithful-reproduction claim. See decision 0053 and the
+> Dream Rehearsal fidelity audit for the separately named original-code path.
+
 ## Status
 
 Accepted and implemented on 2026-09-04. This decision authorizes code, tests,

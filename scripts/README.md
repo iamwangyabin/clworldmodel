@@ -151,3 +151,25 @@ python scripts/run_moe_arrow_atari.py --method dino-convbank ...
 
 Run offline audit commands from the repository root. Training launchers should
 be inspected with `--dry-run` before any environment interaction.
+
+
+## Dream Rehearsal Original-Code Reference
+
+- `run_dream_rehearsal_memory_pair_atari.py`: the requested paired experiment;
+  `--history full` or `--history bounded` changes only retained-history capacity.
+  Both use the same trainer, source learner, budgets and evaluation. The bounded
+  arm randomly retains 1,024 × 512 transitions, with no hidden rehearsal backup.
+- `dream_rehearsal_collection.py`: the storage-aware single-environment
+  collector shared by both arms; source reset/policy/insert parity is tested.
+- `run_dream_rehearsal_official_atari.py`: strict protocol config, source hashes,
+  side-effect-free dry run and clean/pushed Git guard; separate from the old
+  ARROW bounded/never-clear ports.
+- `train_dream_rehearsal_official_atari.py`: Atari scheduling and isolated
+  evaluation around unmodified NM512 learning and official `tunnel_update`.
+- `dream_rehearsal_reference_support.py`: audited source-import boundary and
+  exact composition of the normal reference substrate preset.
+
+See `docs/protocols/dream_rehearsal_memory_pair_v1_atari.md` for the pair and
+`docs/protocols/dream_rehearsal_official_code_v1_atari.md` for the earlier source
+reference. These paths require a separate pinned torch 2.4.1 environment;
+do not install it into the ARROW runtime.

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/NM512/dreamerv3-torch",
+  "commit": "6ef8646d807cd10ce0c88e10a7e943211e7fc44c",
+  "import_date": "2026-09-05",
+  "local_modifications": [],
+  "files": {
+    "LICENSE": "2991634eca8d411611f201feafb50cb7041afbca049b6618b3be1cd515393ada",
+    "configs.yaml": "6ddfa13ed0f0329a7dd079a01c80ac5eca3cca2238ee01c5f6b2bf3b13762779",
+    "requirements.txt": "e24ca4701ac0e3ecc7a9c65fc2c1079b37d697d6e90f0206f3c84d58453d3cd9",
+    "dreamer.py": "0ba507eef85532d60d0e189b2728ce47b80a738de4ed0cf97da51e14feeb72ad",
+    "models.py": "4cb8c2c858481c3d762162aee8a7bf05347d1f9713e6dc7c7a3e65e7077da49a",
+    "networks.py": "6111a4f3d4332dd4cbe8c4bc319222b384419a8110e8a27b5d041f1075ad493a",
+    "tools.py": "32266d2d3b741e6b0afe2a2033ec37aa2849e759f39c147020042920df73c7c5",
+    "parallel.py": "4fa41d57d84b1c39a1c9de394ed66e869ded6632a5ee114c00b33e56f8fff678",
+    "exploration.py": "5f90034258150338a801fe87df9e9a3c37cefc8c7e6c5aeaf9671ad77f34db62",
+    "envs/wrappers.py": "7073225392506bda80f5d2b1af17b086f18d300f1da360af2abb40aed63e2676"
+  }
+}

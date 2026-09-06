@@ -838,3 +838,39 @@ single-seed and architecture-attribution limits are predeclared in
 `docs/protocols/arrow_fastkan_ac_stable_targets_continual_atari.md`.
 
 Project-wide research and engineering constraints are defined in `AGENTS.md`.
+
+
+## Dream Rehearsal: official-code Atari reference
+
+The requested **full-history vs bounded-history pair** now uses one entry:
+
+```bash
+python scripts/run_dream_rehearsal_memory_pair_atari.py --history full --dry-run
+python scripts/run_dream_rehearsal_memory_pair_atari.py --history bounded --dry-run
+```
+
+Both arms have identical learning, ordinary update budgets, rehearsal and
+evaluation. The only config difference is history capacity: all transitions
+versus a uniform reservoir of **1,024 × 512 = 524,288** transitions. Ordinary
+training and rehearsal both read the same retained pool; old-phase views and
+disk archives cannot preserve a hidden full-history backup in the bounded arm.
+See the [memory-only pair protocol](docs/protocols/dream_rehearsal_memory_pair_v1_atari.md).
+CPU parity/storage fixtures pass; target-GPU smoke and both new runs are still
+pending. Capacity matching to ARROW is not a claim of full compute/byte matching.
+
+`Dream-Rehearsal-OfficialCode-v1-Atari` directly executes pinned, unmodified
+Dream Rehearsal `tunnel_update` and NM512 DreamerV3 learning components. Ordinary
+world-model and actor/critic training use the **shared full history**, and the
+normal batch is **16 × 64**, not the author's smoke preset. This separate path
+does not change the old ARROW ports or relabel their results.
+
+```bash
+python scripts/run_dream_rehearsal_official_atari.py --dry-run
+```
+
+The [protocol](docs/protocols/dream_rehearsal_official_code_v1_atari.md) describes
+its isolated torch 2.4.1 environment, source-parity tests, mandatory clean/pushed
+launch provenance, target-GPU smoke and explicit Atari adaptations. CPU
+fixtures pass; no corrected Atari or paper reproduction result is claimed.
+The [fidelity audit](docs/experiments/dream_rehearsal_fidelity_audit_20260905.md)
+records why the earlier never-clear scores are not official-method results.
