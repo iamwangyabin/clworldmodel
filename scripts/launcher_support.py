@@ -71,10 +71,15 @@ def write_json(path: Path, value: dict) -> None:
 
 
 def run_and_tee(
-    command: list[str], *, cwd: Path, env: dict[str, str], log_path: Path
+    command: list[str], *, cwd: Path, env: dict[str, str], log_path: Path,
+    prefix_log_path: Path | None = None
 ) -> int:
     """Run one command while mirroring its combined output to console and disk."""
     with log_path.open("w", encoding="utf-8") as log:
+        if prefix_log_path is not None:
+            log.write(prefix_log_path.read_text(encoding="utf-8"))
+            log.write("\n[resume-lineage] Inherited prefix ends here; new attempt follows.\n")
+            log.flush()
         process = subprocess.Popen(
             command,
             cwd=cwd,

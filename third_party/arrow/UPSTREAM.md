@@ -730,6 +730,20 @@ documented here, covered by focused parity tests, and followed by regenerating
     parity, action/reset handling, reversed revisit IDs and compact old-route
     protection. See the new CoinRun protocol for budgets and deviations.
 
+65. Repair mixed BF16/FP32 multi-route recurrent/latent state assembly by
+    concatenating (promoting across all route outputs) before scattering back to
+    worker order. Homogeneous dtypes remain unchanged; no router score, task-ID
+    visibility, private policy or training budget changes. Wire a separately
+    validated D-AutoRoute post-consolidation continuation CLI into the existing
+    full-state restore, including schedule/counter/actor/retired-optimizer guards.
+    Load checkpoints on CPU before owned modules/optimizers restore to their
+    devices; preserve RNG tensors and immutable replay assets. The launcher
+    creates a new lineage-preserving attempt, never overwrites failed runs or
+    relabels old snapshot weights. Fixed/mock dtype/continuation tests and an
+    explicit actual-checkpoint CUDA recovery smoke cover this runtime repair.
+    See `docs/protocols/d_autoroute_boundary_recovery_v1.md` for rollback overhead
+    and the bounds on automatic recovery; no performance claim accompanies it.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

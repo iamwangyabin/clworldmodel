@@ -171,6 +171,39 @@ class DAutorouteIntegrationTests(unittest.TestCase):
             trajectory._routed_policy_step(wm, view, EpisodeReconstructionRouter((0,)),
                                           x, z, h, previous, torch.ones(2, 1), stochastic=False)
 
+    def test_mixed_route_state_dtypes_promote_without_route_order_quantization(self):
+        from clworldmodel.routing import EpisodeReconstructionRouter
+        for dtypes in ((torch.bfloat16, torch.float32), (torch.float32, torch.bfloat16),
+                       (torch.bfloat16, torch.bfloat16), (torch.float32, torch.float32)):
+            with self.subTest(dtypes=dtypes):
+                wm, _ = fixed_models()
+                view, _ = self.actors()
+                forward = wm.rssm.forward
+                def mixed(z, action, h, obs, reset, *, task_id, stochastic):
+                    _, next_z, next_h = forward(z, action, h, obs, reset,
+                                               task_id=task_id, stochastic=stochastic)
+                    # A value not exactly representable by BF16 detects a cast
+                    # into the first route's dtype instead of true promotion.
+                    return None, (next_z + 1.0001).to(dtypes[task_id]), next_h.to(dtypes[task_id])
+                wm.rssm.forward = mixed
+                z, h = wm.rssm.initial_state(4)
+                x = torch.tensor([1., 0., 1., 0.])[:, None, None, None].expand(4, 3, 2, 2)
+                router = EpisodeReconstructionRouter((0, 1))
+                with torch.autocast("cpu", dtype=torch.bfloat16):
+                    nz, nh, action = trajectory._routed_policy_step(
+                        wm, view, router, x, z, h,
+                        torch.nn.functional.one_hot(torch.zeros(4, dtype=torch.long), 18),
+                        torch.ones(4, 1), stochastic=False,
+                    )
+                dtype = torch.promote_types(*dtypes)
+                self.assertEqual(nz.dtype, dtype)
+                self.assertEqual(nh.dtype, dtype)
+                expected = torch.stack([torch.tensor(1.0001, dtype=dtypes[i]).to(dtype)
+                                        for i in (1, 0, 1, 0)]).reshape(4, 1, 1)
+                torch.testing.assert_close(nz, expected, rtol=0, atol=0)
+                self.assertEqual(action.tolist(), [11, 7, 11, 7])
+                self.assertEqual(router.routes.tolist(), [1, 0, 1, 0])
+
     def test_private_actor_view_validates_shapes_eligibility_and_finiteness(self):
         from clworldmodel.routing import RoutedActorBank
         view, actors = self.actors()

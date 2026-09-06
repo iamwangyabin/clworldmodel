@@ -52,18 +52,23 @@ def _routed_policy_step(wm, ac, router, obs, z, h, previous_action, reset, *, st
         restarting = reset.bool().reshape(-1)
         previous_action[restarting] = 0
         previous_action[restarting, dummy_previous_action] = 1
-        next_z, next_h = None, None
+        route_rows, route_zs, route_hs = [], [], []
         for route_id in route_ids.unique(sorted=True).tolist():
             rows = torch.where(route_ids == route_id)[0]
             _, route_z, route_h = wm.rssm(
                 z[rows], previous_action[rows], h[rows], obs[rows], reset[rows],
                 task_id=route_id, stochastic=stochastic,
             )
-            if next_z is None:
-                next_z = route_z.new_empty((len(obs), *route_z.shape[1:]))
-                next_h = route_h.new_empty((len(obs), *route_h.shape[1:]))
-            next_z[rows] = route_z
-            next_h[rows] = route_h
+            route_rows.append(rows)
+            route_zs.append(route_z)
+            route_hs.append(route_h)
+        # Frozen/compact and acquiring routes can emit different AMP dtypes.
+        # Concatenation promotes across *all* routes before restoring worker
+        # order: never quantize FP32 states into the first route's BF16 buffer.
+        rows = torch.cat(route_rows)
+        grouped_z, grouped_h = torch.cat(route_zs), torch.cat(route_hs)
+        next_z = torch.empty_like(grouped_z).index_copy_(0, rows, grouped_z)
+        next_h = torch.empty_like(grouped_h).index_copy_(0, rows, grouped_h)
         features = zh_to_ac_state(next_z, next_h)
         logits = (ac(features, route_ids) if isinstance(ac, RoutedActorBank)
                   else ac.actor(features)).float()

@@ -34,6 +34,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
+    parser.add_argument("--resume-from", type=Path, help="Failed run post-consolidation checkpoint; keep all budgets/seeds.")
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -58,7 +59,7 @@ def main(argv: list[str] | None = None, *, benchmark: str = "atari") -> int:
         "--python", resolved(args.python, follow_symlinks=False),
         "--cpu-threads", str(args.cpu_threads),
     ]
-    for name in ("output_dir", "replay_mmap_root"):
+    for name in ("output_dir", "replay_mmap_root", "resume_from"):
         value = getattr(args, name)
         if value is not None:
             command.extend(("--" + name.replace("_", "-"), resolved(value)))

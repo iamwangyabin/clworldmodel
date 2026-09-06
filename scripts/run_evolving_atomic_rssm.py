@@ -597,6 +597,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
+    parser.add_argument("--resume-from", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--benchmark", choices=("atari", "procgen_coinrun"), default="atari")
     return parser
@@ -1585,6 +1586,11 @@ def main(argv: list[str] | None = None) -> int:
         task_snapshot_dir=task_snapshot_dir,
         project_commit=str(project_git["commit"]),
     )
+    resume_lineage = None
+    if args.resume_from is not None:
+        from d_autoroute_resume import inspect_resume
+        resume_lineage = inspect_resume(args.resume_from, config, protocol)
+        command.extend(("--resume-evolving-checkpoint", resume_lineage["source_checkpoint"]))
     env = os.environ.copy()
     thread_env = {key: str(args.cpu_threads) for key in THREAD_ENV_KEYS}
     env.update(thread_env)
@@ -1634,6 +1640,8 @@ def main(argv: list[str] | None = None) -> int:
         "classification": args.classification,
         "status": "dry_run" if args.dry_run else "launching",
         "project_git": project_git,
+        "resume_lineage": resume_lineage,
+        "routing_state_assembly": "all-route-dtype-promotion-v1",
         "upstream_arrow_commit": UPSTREAM_COMMIT,
         "source_config": str(source_path),
         "seed_index": args.seed,
@@ -1873,12 +1881,18 @@ def main(argv: list[str] | None = None) -> int:
         None if replay_backing is None else str(replay_backing)
     )
     _write_json(output_dir / "launch.json", launch)
+    resume_log_options = {}
+    if resume_lineage is not None:
+        from d_autoroute_resume import stage_resume_prefix
+        prefix = stage_resume_prefix(output_dir, resume_lineage)
+        resume_log_options["prefix_log_path"] = prefix
 
     return_code = _run_and_tee(
         command,
         cwd=ARROW_ROOT,
         env=env,
         log_path=output_dir / "train.log",
+        **resume_log_options,
     )
     required = [
         "save_wm.pt",
