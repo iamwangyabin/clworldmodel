@@ -1,0 +1,15 @@
+# Isolated reference environment; do not combine with ARROW's torch==2.3.0.
+# Core learning version follows the pinned NM512 requirements. Simulator and
+# I/O versions below are our explicitly recorded modern Atari compatibility set.
+torch==2.4.1
+numpy==1.26.4
+ruamel.yaml==0.17.21
+gym==0.22.0
+gymnasium==1.1.1
+ale-py==0.11.1
+opencv-python==4.11.0.86
+einops==0.8.1
+tensorboard==2.17.1
+protobuf==4.25.8
+matplotlib==3.10.0
+moviepy==1.0.3

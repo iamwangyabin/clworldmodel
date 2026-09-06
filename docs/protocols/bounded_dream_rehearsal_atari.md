@@ -1,5 +1,11 @@
 # Bounded Dream Rehearsal v1 Atari protocol
 
+> Fidelity correction, 2026-09-05: the 4 × 16 layout described below belongs
+> to the author's **smoke** config, not the normal method. Historical protocol
+> values are unchanged; this is an ARROW adaptation, not an original-code
+> reproduction. See `../experiments/dream_rehearsal_fidelity_audit_20260905.md`
+> and the separate `dream_rehearsal_official_code_v1_atari.md` reference path.
+
 ## Status
 
 Implemented; target-CUDA smoke and multi-seed evaluation have not yet run.
