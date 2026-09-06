@@ -196,6 +196,7 @@ class SourceRecipeAgent:
         torch.save(dict(
             checkpoint_kind="inference_only", resumable=False,
             replay_checkpointed=False, counters=counters, resolved_config=resolved,
+            resolved_native_config=vars(self.native), native_source_pin=NM_PIN,
             world_model=self.wm.state_dict(), task_actor=self.task.actor.state_dict(),
             task_value=self.task.value.state_dict(), exploration_actor=self.explore.actor.state_dict(),
             exploration_value=self.explore.value.state_dict(), ensemble=self.ensemble.state_dict(),

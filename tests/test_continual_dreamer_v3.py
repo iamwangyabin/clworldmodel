@@ -1,6 +1,8 @@
 """Pure/fixture contracts; no real environment actions or optimizer steps."""
 
 from dataclasses import replace
+from contextlib import redirect_stdout
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -10,6 +12,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -226,6 +229,66 @@ class P2ETests(unittest.TestCase):
 
 
 class CollectionTests(unittest.TestCase):
+    def test_three_task_runner_counters_and_evaluation_isolation_fixture(self):
+        import gymnasium as gym
+        import run_continual_dreamer_v3 as runner
+
+        class Env(gym.Env):
+            observation_space = gym.spaces.Box(0, 255, (2, 2, 3), np.uint8)
+            def __init__(self):
+                self.action_space = gym.spaces.Discrete(7)
+                self.position = 0
+            def reset(self, seed=None):
+                self.position = 0
+                return np.zeros((2, 2, 3), np.uint8), {}
+            def step(self, action):
+                self.position += 1
+                last = self.position == 4
+                return np.full((2, 2, 3), self.position, np.uint8), float(last), last, False, {}
+
+        class Agent:
+            instances = []
+            def __init__(self, *args):
+                self.updates = 0
+                self.instances.append(self)
+            def act(self, observation, state=None, *, evaluation=False):
+                if set(observation) != {"image", "is_first", "is_terminal"}:
+                    raise AssertionError("Privileged input at agent boundary")
+                return 0, None
+            def update(self, data):
+                if set(data) != {"image", "reward", "action", "is_first", "is_last", "is_terminal"}:
+                    raise AssertionError("Privileged data in replay")
+                self.updates += 1
+                return {"fixture_updates": self.updates}
+            def save_inference_snapshot(self, *args): pass
+
+        values = ContinualDreamerConfig().as_dict()
+        values.update(task_count=3, decisions_per_task=12, total_decisions=36,
+            prefill_decisions=4, initial_updates=2, train_every_decisions=2,
+            batch_size=2, batch_length=3, episode_limit=4, replay_episode_slots=4,
+            eval_every_decisions=4, eval_decisions_per_task=8, log_every_decisions=4,
+            expected_updates=18, device="cpu")
+        cfg = SimpleNamespace(**values)
+        with tempfile.TemporaryDirectory() as d, patch.object(runner, "SourceRecipeAgent", Agent), patch(
+            "clworldmodel.environments.minigrid.make_minigrid_environment", side_effect=lambda *a, **k: Env()
+        ), redirect_stdout(io.StringIO()):
+            path = Path(d)
+            manifest = {"resolved_config": values}
+            runner.run(cfg, None, path, manifest)
+            records = [json.loads(line) for line in (path / "metrics.jsonl").read_text().splitlines()]
+        self.assertEqual(len(Agent.instances), 1)  # No model reset at task boundaries.
+        self.assertEqual(Agent.instances[0].updates, 18)
+        counts = manifest["final_counters"]
+        self.assertEqual(counts["environment_decisions"], 36)
+        self.assertEqual(counts["collected_transitions"], 36)
+        self.assertEqual(counts["world_model_updates"], 18)
+        self.assertEqual(counts["evaluation_decisions"], 3 * (1 + 2 + 3) * 8)
+        self.assertEqual(manifest["replay_final"]["eligible_episodes_seen"], 9)
+        self.assertEqual([r["task_index"] for r in records if r["kind"] == "task_boundary"], [0, 1, 2])
+        evaluations = [r for r in records if r["kind"] == "evaluation"]
+        self.assertEqual(len(evaluations), 18)
+        self.assertTrue(all(r["raw_returns"] == [1.0, 1.0] for r in evaluations))
+
     def test_terminal_observation_action_reward_and_timeout_bootstrap(self):
         class Env:
             action_space = SimpleNamespace(n=3, seed=lambda seed: None)
