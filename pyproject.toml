@@ -10,11 +10,12 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
 dependencies = [
-    "torch==2.3.0",
+    "torch>=2.3.0,<=2.4.1",
 ]
 
 [project.optional-dependencies]
 atari = [
+    "torch==2.3.0",
     "ale-py==0.11.1",
     "gymnasium==1.1.1",
     "gymnasium-notices==0.0.1",
@@ -30,6 +31,7 @@ atari = [
     "tensorboard-data-server==0.7.2",
 ]
 minigrid = [
+    "torch==2.3.0",
     "gymnasium==1.1.1",
     "minigrid==3.0.0",
     "numpy==1.26.4",
@@ -37,6 +39,17 @@ minigrid = [
     "sortedcontainers==2.4.0",
     "tensorboard==2.13.0",
     "tqdm==4.67.1",
+]
+continual-dreamer-v3 = [
+    "torch==2.4.1",
+    "numpy==1.26.4",
+    "ruamel.yaml==0.17.21",
+    "tensorboard==2.17.1",
+    "protobuf==4.25.8",
+    "gymnasium==1.1.1",
+    "minigrid==3.0.0",
+    "opencv-python==4.11.0.86",
+    "Pillow==11.1.0",
 ]
 online = [
     "swanlab==0.9.4",

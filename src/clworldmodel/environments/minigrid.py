@@ -35,8 +35,11 @@ DOORKEY_GEOMETRY_SIZES = {
 class _ResizeRgbObservation(gym.ObservationWrapper):
     """Expose a fixed 64x64 uint8 RGB observation."""
 
-    def __init__(self, env: gym.Env[Any, Any]) -> None:
+    def __init__(self, env: gym.Env[Any, Any], interpolation: str = "area") -> None:
         super().__init__(env)
+        if interpolation not in {"area", "nearest"}:
+            raise ValueError("MiniGrid resize interpolation must be area or nearest")
+        self.interpolation = interpolation
         self.observation_space = gym.spaces.Box(
             low=0,
             high=255,
@@ -50,7 +53,12 @@ class _ResizeRgbObservation(gym.ObservationWrapper):
                 "MiniGrid RGB observation must have shape [height, width, 3], "
                 f"got {observation.shape}"
             )
-        resized = cv2.resize(observation, (64, 64), interpolation=cv2.INTER_AREA)
+        if self.interpolation == "nearest":
+            from PIL import Image
+
+            resized = Image.fromarray(observation).resize((64, 64), Image.Resampling.NEAREST)
+        else:
+            resized = cv2.resize(observation, (64, 64), interpolation=cv2.INTER_AREA)
         return np.asarray(resized, dtype=np.uint8)
 
 
@@ -60,6 +68,7 @@ def make_minigrid_environment(
     max_episode_steps: int = 100,
     tile_size: int = 8,
     doorkey_geometry: str = "paper_label_9x9",
+    resize_interpolation: str = "area",
     **kwargs: Any,
 ) -> gym.Env[Any, Any]:
     """Construct one named, task-agnostic MiniGrid environment.
@@ -75,6 +84,8 @@ def make_minigrid_environment(
         raise ValueError("max_episode_steps must be positive")
     if tile_size < 1:
         raise ValueError("tile_size must be positive")
+    if resize_interpolation not in {"area", "nearest"}:
+        raise ValueError("MiniGrid resize interpolation must be area or nearest")
     if doorkey_geometry not in DOORKEY_GEOMETRY_SIZES:
         raise ValueError(
             "Unsupported DoorKey geometry: "
@@ -99,7 +110,7 @@ def make_minigrid_environment(
     env = RGBImgPartialObsWrapper(env, tile_size=tile_size)
     env = ImgObsWrapper(env)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
-    env = _ResizeRgbObservation(env)
+    env = _ResizeRgbObservation(env, resize_interpolation)
 
     # The vendored collector normally applies AtariPreprocessing.  Mark this
     # environment as already normalized at the shared 64x64 visual boundary.

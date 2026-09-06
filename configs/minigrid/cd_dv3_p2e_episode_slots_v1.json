@@ -1,0 +1,8 @@
+{
+  "protocol": "CD-DV3-P2E-EpisodeSlots-v1",
+  "evidence_level": "pilot",
+  "method": "arrow50",
+  "task_count": 1,
+  "decisions_per_task": 750000,
+  "seed": 0
+}

@@ -820,3 +820,12 @@ single-seed and architecture-attribution limits are predeclared in
 `docs/protocols/arrow_fastkan_ac_stable_targets_continual_atari.md`.
 
 Project-wide research and engineering constraints are defined in `AGENTS.md`.
+
+## Source-recipe MiniGrid V3 + Plan2Explore pilot
+
+The separate `CD-DV3-P2E-EpisodeSlots-v1` integration uses pinned NM512
+DreamerV3 with a source-recipe exploration actor and matched RS / ARROW-50
+episode replay. It is **not a reproduced paper result** or a replacement for
+historical MiniGrid configurations. Source differences, CPU replay capacity,
+commands and validation are documented in
+[the protocol](docs/protocols/cd_dv3_p2e_episode_slots_v1.md).

@@ -1,0 +1,10 @@
+# Isolated NM512 reference runtime. Install project with --no-deps, not [atari].
+torch==2.4.1
+numpy==1.26.4
+ruamel.yaml==0.17.21
+tensorboard==2.17.1
+protobuf==4.25.8
+gymnasium==1.1.1
+minigrid==3.0.0
+opencv-python==4.11.0.86
+Pillow==11.1.0
