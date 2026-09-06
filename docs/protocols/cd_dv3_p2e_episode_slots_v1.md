@@ -173,3 +173,43 @@ The unit suite covers source hashes, geometry interpolation, terminal and
 action alignment, ensemble loss/std, stopped WM gradients, uniform reservoir
 retention, FIFO wraparound, CPU bytes, sampler ownership, cadence, matched
 configs, dry-run side effects and evaluation RNG isolation.
+
+## Execution evidence (2026-09-06)
+
+Validated and launched code commit:
+`80b85d1010f1c6add897e348e3bea87e085ae4d6`, on the pushed
+`codex/arrow-minigrid-learning-audit` branch. Source import is separately
+recorded in commit `86e1ed8`; implementation starts in `c0d8edc`.
+
+- **18 new contract tests passed**, both locally and on the GPU server. This
+  includes a synthetic three-task runner trace proving one persistent agent,
+  exactly counted learner updates and evaluation exclusion from replay.
+- **23 existing MiniGrid tests passed** in the original ARROW runtime on a
+  CUDA-enabled server. The same local CPU-only sweep passed 22/23; its one
+  failure was the unchanged legacy test's explicit CUDA replay allocation.
+- Three existing frozen-feature replay tests passed after the lazy R2-import
+  change; no old model/replay learning source was modified.
+- CPU synthetic gradient/snapshot check passed with a deliberately tiny native
+  backbone. Full-size RTX 4090 check passed with **B=16, T=50, horizon=15,
+  all ten 4×400 ensemble members**. It updated WM, task policy, exploration
+  policy and ensemble, and validated seeded evaluation/snapshot round trips.
+  Recorded PyTorch peak allocation: **4,802,925,056 bytes (4.47 GiB)**. This is
+  a two-update synthetic execution check, not a training speed or score claim.
+- The first new game run is the one-task **ARROW-50 replay + V3 + P2E** pilot,
+  seed 0, 750k real actions, on GPU 0 of `4090x4`. Run identifier:
+  `arrow50_doorkey_seed0_750k_80b85d1`. The runtime manifest independently
+  records clean worktree, full commit, fetched upstream, ahead=behind=0,
+  all installed versions and hardware. Its results remain pending.
+
+Before validation, a fresh script-process import exposed unwanted eager R2
+vendor loading in the shared replay package. Commit `13c9b54` makes that
+optional import lazy and adds an outside-checkout regression. A local macOS
+sandbox OpenMP shared-memory denial was resolved by running the identical test
+suite outside that restriction, without changing assertions or training math.
+Remote GitHub TLS failures occurred before any training launch; a temporary
+localhost SSH relay restricted to `github.com:443` allowed genuine upstream
+fetch. The configured GitHub upstream was not replaced with a local bundle.
+
+No five-seed or three-task campaign has been launched by this implementation
+step. A later documentation commit does not retroactively change the launch
+commit above; do not pull changes into the running experiment checkout.
