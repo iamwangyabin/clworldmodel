@@ -18,6 +18,16 @@ are the reviewed source of truth in this directory.
 
 ## What the current evidence says
 
+The [retained-method archive checked on 2026-09-06](retained_methods_20260906.md)
+adds the completed **D** six-task seed-0 pilot, all ten **D-AutoRoute** partial
+Atari/CoinRun seed records with failed-parent/recovery provenance, the historical
+StableTargets single-task screen, and a separately labelled D zero-regularization
+ablation. The existing six-task StableTargets record is unchanged. No F/D-AutoKAN
+training result was found in the searched local archives and three servers.
+This newer evidence must not be confused with the retired dense Evolving-Core
+v2 partial record described below. D and D-AutoRoute are not direct members of
+the matched task-agnostic comparison group in the next table.
+
 There is no universal "best raw return": Atari games have different reward
 scales, and several records use different task-awareness, evaluation cohorts,
 or compute. Raw returns must remain per task.
@@ -36,7 +46,7 @@ Forward transfer is unavailable because aligned single-task acquisition curves
 were not preserved. The exact raw checkpoint matrices and source hashes are in
 the corresponding records.
 
-A particularly strong current **early-curriculum task-aware** record is the
+A historical **early-curriculum task-aware** record is the
 partial dense Evolving-Core run. Its accepted fixed-validation vectors were:
 
 - after three tasks: MsPacman `2164.375`, Boxing `86.625`, CrazyClimber

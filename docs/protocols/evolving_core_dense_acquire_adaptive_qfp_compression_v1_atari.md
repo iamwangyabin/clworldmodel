@@ -8,8 +8,12 @@ Its config method key is
 `evolving_atomic_rssm_adaptive_compression_shared_heads_arrow`.
 
 This is a separately named, from-scratch, seed-0-capable pilot derived from
-experiment A. It is not a redefinition of A and has no validated performance
-result yet.
+experiment A. It is not a redefinition of A. A complete 540-epoch seed-0 run
+with held-out final evaluation is now preserved in the
+[curated D record](../experiments/records/evolving-d-adaptive-qfp-original-s0/record.json).
+This is single-seed pilot evidence, not a validated multi-seed performance claim;
+see the [2026-09-06 archive](../experiments/retained_methods_20260906.md) for
+evaluation/budget differences and provenance.
 
 ## Fixed curriculum and online acquisition
 

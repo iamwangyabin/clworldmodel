@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import statistics
 import sys
 import tempfile
 import unittest
@@ -170,6 +171,60 @@ class ExperimentRegistryTests(unittest.TestCase):
             DEFAULT_REGISTRY,
             DEFAULT_RESULTS_INDEX,
         )
+
+    def test_d_archive_metrics_reproduce_from_preserved_raw_checkpoints(self) -> None:
+        sys.path.insert(0, str(ROOT / "src"))
+        from clworldmodel.evaluation.metrics import normalize_return_matrix, single_pass_metrics
+
+        record = json.loads((DEFAULT_RECORDS_ROOT /
+            "evolving-d-adaptive-qfp-original-s0/record.json").read_text())
+        reference = json.loads((ROOT / record["derived_metrics"]["normalization_reference"]).read_text())
+        checkpoints = record["evaluation"]["checkpoints"]
+        raw = [[task["raw_return_mean"] for task in row["tasks"]] for row in checkpoints]
+        normalized = normalize_return_matrix(raw,
+            [task["random_return"] for task in reference["tasks"]],
+            [task["single_task_arrow_return"] for task in reference["tasks"]])
+        epochs = [row["completed_epochs"] for row in checkpoints]
+        ends = [epochs.index(epoch) for epoch in record["derived_metrics"]["task_completion_epochs"]]
+        computed = single_pass_metrics(normalized, ends)
+        for key in ("acc", "forgetting", "min_acc", "wc_acc"):
+            self.assertAlmostEqual(computed[key], record["derived_metrics"][key], places=12)
+        self.assertEqual(checkpoints[-1]["cohort"], "heldout_final")
+        self.assertEqual(len(record["runtime"]["compression_boundaries"]), 6)
+        for boundary in record["runtime"]["compression_boundaries"]:
+            self.assertEqual(len(boundary["candidates"]), 4)
+            self.assertFalse(boundary["heldout_final_data_used"])
+
+    def test_autoroute_archive_keeps_all_seeds_raw_episodes_and_failed_lineage(self) -> None:
+        seeds = [123456789, 1337, 31337, 42, 987654321]
+        records = [json.loads(path.read_text()) for path in
+                   DEFAULT_RECORDS_ROOT.glob("d-autoroute-*-20260906/record.json")]
+        self.assertEqual(len(records), 10)
+        for benchmark in ("atari", "coinrun"):
+            group = [r for r in records if f"d-autoroute-{benchmark}-" in r["record_id"]]
+            self.assertEqual(sorted(r["seed"]["id"] for r in group), list(range(5)))
+        for record in records:
+            self.assertEqual(record["seed"]["value"], seeds[record["seed"]["id"]])
+            self.assertFalse(record["evaluation"]["evaluation_transitions_enter_replay"])
+            self.assertNotEqual(record["project_git"]["commit"],
+                                record["runtime"]["failed_parent_attempt"]["project_git"]["commit"])
+            self.assertEqual(record["runtime"]["failed_parent_attempt"]["status"], "failed")
+            self.assertTrue(record["runtime"]["restored_boundary"]["optimizer_replay_rng_restored"])
+            for checkpoint in record["evaluation"]["checkpoints"]:
+                self.assertLessEqual(checkpoint["completed_epochs"], record["completion"]["completed_epochs"])
+                for task in checkpoint["tasks"]:
+                    values = task["raw_episode_returns"]
+                    self.assertEqual(len(values), checkpoint["rollouts_per_task"])
+                    self.assertAlmostEqual(statistics.mean(values), task["raw_return_mean"], places=12)
+                    self.assertAlmostEqual(statistics.pstdev(values), task["raw_return_std"], places=12)
+                    audit = task["routing_audit"]
+                    counts = audit["confusion_matrix"][task["task_index"]]
+                    self.assertEqual(sum(counts), len(values))
+                    self.assertAlmostEqual(counts[task["task_index"]] / len(values), audit["accuracy"])
+            resumed = record["runtime"]["resume_lineage"]
+            discarded = 1 if record["record_id"].startswith("d-autoroute-coinrun-s3-") else 0
+            self.assertEqual(resumed["discarded_completed_online_epochs"], discarded)
+        self.assertEqual(sum(len(r["runtime"]["prior_startup_failures"]) for r in records), 4)
 
 
 if __name__ == "__main__":

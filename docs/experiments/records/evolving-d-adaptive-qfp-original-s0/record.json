@@ -1,0 +1,4532 @@
+{
+  "schema_version": 1,
+  "record_id": "evolving-d-adaptive-qfp-original-s0",
+  "run_id": "adaptive_qfp_compression_original_six_s0_pilot",
+  "method": "Evolving-Core Dense Acquire + Return-Gated Adaptive Q/F/P Compression + Shared Distilled Prediction Heads + Private MLP Actor-Critic",
+  "protocol": "Evolving-Core-DenseAcquire-ReturnGatedAdaptiveQFP-SharedDistilledHeads-PrivateMLPAC-ARROW-v1-OriginalSix-Atari-TaskAware-Pilot",
+  "evidence_level": "pilot",
+  "classification": "pilot",
+  "status": "complete",
+  "recorded_at_utc": "2026-09-06T04:03:34.337093+00:00",
+  "project_git": {
+    "commit": "2e8a058e5af3be562bb9cc5a46a223e8d98b1b2b",
+    "clean": true,
+    "upstream": "origin/codex/evolving-dense-adaptive-compression",
+    "ahead": 0,
+    "behind": 0
+  },
+  "seed": {
+    "id": 0,
+    "value": 123456789
+  },
+  "task_awareness": "task_aware",
+  "task_order": [
+    "ALE/MsPacman-v5",
+    "ALE/Boxing-v5",
+    "ALE/CrazyClimber-v5",
+    "ALE/Frostbite-v5",
+    "ALE/Seaquest-v5",
+    "ALE/Enduro-v5"
+  ],
+  "completion": {
+    "total_task_count": 6,
+    "completed_task_count": 6,
+    "completed_epochs": 540,
+    "final_evaluation_performed": true,
+    "started_at_utc": "2026-09-02T09:36:24.556452+00:00",
+    "return_code": 0,
+    "finished_at_utc": "2026-09-03T16:00:16.772041+00:00"
+  },
+  "evaluation": {
+    "metric": "raw_environment_return",
+    "policy": "deterministic_argmax_and_latent_mode",
+    "cohort_protocol": "fixed_validation_heldout_final",
+    "evaluation_transitions_enter_replay": false,
+    "checkpoints": [
+      {
+        "checkpoint_id": "periodic-0000",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 0,
+        "completed_task_count": 0,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 440.625,
+            "raw_return_std": 233.6254681643249
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 3.25,
+            "raw_return_std": 3.8649062084350767
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 6690.00015258789,
+            "raw_return_std": 2181.9486889597547
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 83.75,
+            "raw_return_std": 46.080771477916905
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 75.0,
+            "raw_return_std": 54.543560573178574
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0010",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 10,
+        "completed_task_count": 0,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 523.125,
+            "raw_return_std": 373.12395309735876
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 1.6875,
+            "raw_return_std": 5.4625858116829615
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 8212.499976158142,
+            "raw_return_std": 1862.4161491784591
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 60.0,
+            "raw_return_std": 24.494897427831777
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 73.75,
+            "raw_return_std": 65.46707187586749
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0020",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 20,
+        "completed_task_count": 0,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 766.25,
+            "raw_return_std": 113.90099867867708
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 2.4375,
+            "raw_return_std": 5.7659425725548115
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 7500.000211927626,
+            "raw_return_std": 1921.226254958151
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 61.875,
+            "raw_return_std": 29.41486656437523
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 101.25,
+            "raw_return_std": 48.2020487116471
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0030",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 30,
+        "completed_task_count": 0,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1410.0,
+            "raw_return_std": 312.9496764657219
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 2.9375,
+            "raw_return_std": 5.584227229438286
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 7250.0001430511475,
+            "raw_return_std": 2462.214515325783
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 63.75,
+            "raw_return_std": 42.70172713134681
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 73.75,
+            "raw_return_std": 35.15590277606308
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.125,
+            "raw_return_std": 0.33071891388307384
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0040",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 40,
+        "completed_task_count": 0,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4184.375,
+            "raw_return_std": 196.72216289732071
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": -0.5625,
+            "raw_return_std": 3.5172565658478767
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 8885.714530944824,
+            "raw_return_std": 2545.2635088389034
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 80.0,
+            "raw_return_std": 45.961940777125584
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 97.5,
+            "raw_return_std": 63.59048670988452
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0050",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 50,
+        "completed_task_count": 0,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 2547.5,
+            "raw_return_std": 98.1389321319526
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 1.8125,
+            "raw_return_std": 4.333283252915738
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 6460.0000858306885,
+            "raw_return_std": 2171.266813592006
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 82.5,
+            "raw_return_std": 40.54318685056714
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 50.0,
+            "raw_return_std": 46.36809247747852
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0060",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 60,
+        "completed_task_count": 0,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4060.625,
+            "raw_return_std": 649.003743729572
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 1.0,
+            "raw_return_std": 4.198213905936666
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 6822.2222328186035,
+            "raw_return_std": 1131.1527609802718
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 73.125,
+            "raw_return_std": 32.92391797766481
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 76.25,
+            "raw_return_std": 48.58947931394203
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.5,
+            "raw_return_std": 1.3228756555322954
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0070",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 70,
+        "completed_task_count": 0,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4571.25,
+            "raw_return_std": 482.56961932968795
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 1.125,
+            "raw_return_std": 4.106016926414211
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 7109.091151844371,
+            "raw_return_std": 1919.0220900152412
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 65.0,
+            "raw_return_std": 28.284271247461902
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 77.5,
+            "raw_return_std": 51.901348730066736
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0080",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 80,
+        "completed_task_count": 0,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4461.875,
+            "raw_return_std": 324.0798271645429
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": -0.25,
+            "raw_return_std": 5.6844085004510365
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 6518.182017586448,
+            "raw_return_std": 1269.801816827618
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 70.0,
+            "raw_return_std": 44.581386250317514
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 56.25,
+            "raw_return_std": 49.607837082461074
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0090",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 90,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4663.125,
+            "raw_return_std": 718.4420535958345
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": -33.9375,
+            "raw_return_std": 7.360950600975393
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 7000.000238418579,
+            "raw_return_std": 2389.9790446907227
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 70.625,
+            "raw_return_std": 26.331718041176117
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 63.75,
+            "raw_return_std": 49.10129835350589
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0100",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 100,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4680.625,
+            "raw_return_std": 352.96013850716906
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 27.0625,
+            "raw_return_std": 7.066370620764241
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 6688.8889736599385,
+            "raw_return_std": 2288.349337496019
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 68.75,
+            "raw_return_std": 28.256636388643283
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 60.0,
+            "raw_return_std": 42.42640687119285
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0110",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 110,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4745.625,
+            "raw_return_std": 352.20677076825194
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 77.4375,
+            "raw_return_std": 9.772210279665497
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 7899.999976158142,
+            "raw_return_std": 2541.1610928063324
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 65.0,
+            "raw_return_std": 39.2109678533953
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 67.5,
+            "raw_return_std": 58.683472971527515
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0120",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 120,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4685.625,
+            "raw_return_std": 478.2254796380051
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 80.1875,
+            "raw_return_std": 8.308269600223623
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 8511.111312442355,
+            "raw_return_std": 1962.1101287303752
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 90.0,
+            "raw_return_std": 53.38539126015655
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 96.25,
+            "raw_return_std": 72.87617923574204
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0130",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 130,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4678.75,
+            "raw_return_std": 245.53194802306274
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 88.5,
+            "raw_return_std": 4.58257569495584
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 7230.000066757202,
+            "raw_return_std": 1650.484804369519
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 71.25,
+            "raw_return_std": 41.51430476353903
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 55.0,
+            "raw_return_std": 52.20153254455275
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0140",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 140,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4623.75,
+            "raw_return_std": 339.1694819702975
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 88.625,
+            "raw_return_std": 4.567206476611277
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 7277.777883741591,
+            "raw_return_std": 1753.5854771195868
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 78.75,
+            "raw_return_std": 46.88749833377763
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 85.0,
+            "raw_return_std": 63.047601064592456
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0150",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 150,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4656.25,
+            "raw_return_std": 286.26637507747915
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 89.875,
+            "raw_return_std": 3.7228181529588578
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 7300.0001430511475,
+            "raw_return_std": 2360.9322055679168
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 70.0,
+            "raw_return_std": 40.92676385936225
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 50.0,
+            "raw_return_std": 49.49747468305833
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0160",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 160,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4747.5,
+            "raw_return_std": 318.7377448624496
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 89.0,
+            "raw_return_std": 3.570714214271425
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 6730.000114440917,
+            "raw_return_std": 1368.2469264420902
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 72.5,
+            "raw_return_std": 47.63139720814412
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 76.25,
+            "raw_return_std": 62.935979375870524
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.125,
+            "raw_return_std": 0.33071891388307384
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0170",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 170,
+        "completed_task_count": 1,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4893.75,
+            "raw_return_std": 385.7278023425327
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 85.3125,
+            "raw_return_std": 7.613464635105361
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 8587.500274181366,
+            "raw_return_std": 1570.3802133071983
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 69.375,
+            "raw_return_std": 30.916975515079088
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 68.75,
+            "raw_return_std": 56.554730129318095
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0180",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 180,
+        "completed_task_count": 2,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4641.875,
+            "raw_return_std": 264.48579238779536
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 91.9375,
+            "raw_return_std": 3.848193569715536
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 72.5,
+            "raw_return_std": 40.54318685056714
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 68.75,
+            "raw_return_std": 60.81478027585071
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0190",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 190,
+        "completed_task_count": 2,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4675.0,
+            "raw_return_std": 261.7966768314678
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 88.5,
+            "raw_return_std": 3.2596012026013246
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 14966.66685740153,
+            "raw_return_std": 4903.966753441324
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 71.25,
+            "raw_return_std": 38.70965641800505
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 42.5,
+            "raw_return_std": 42.352685865243544
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0200",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 200,
+        "completed_task_count": 2,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4572.5,
+            "raw_return_std": 264.1850677082261
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.875,
+            "raw_return_std": 2.8476964374736293
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 17085.714067731584,
+            "raw_return_std": 701.8924733162919
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 65.625,
+            "raw_return_std": 38.8858505757557
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 82.5,
+            "raw_return_std": 35.968736424845396
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.125,
+            "raw_return_std": 0.33071891388307384
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0210",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 210,
+        "completed_task_count": 2,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4832.5,
+            "raw_return_std": 418.0086721588441
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 93.9375,
+            "raw_return_std": 3.151760420780742
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 74650.00438690186,
+            "raw_return_std": 21227.9910713017
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 82.5,
+            "raw_return_std": 42.64680527307995
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 72.5,
+            "raw_return_std": 46.30064794363034
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0220",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 220,
+        "completed_task_count": 2,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4826.875,
+            "raw_return_std": 450.7593419719662
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 90.8125,
+            "raw_return_std": 3.9086242784386425
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 43300.00045082786,
+            "raw_return_std": 22783.68457637528
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 56.875,
+            "raw_return_std": 22.281929337469858
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 73.75,
+            "raw_return_std": 48.33153732295301
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0230",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 230,
+        "completed_task_count": 2,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4675.0,
+            "raw_return_std": 200.21863050175924
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 93.1875,
+            "raw_return_std": 5.960481838744247
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 82487.50305175781,
+            "raw_return_std": 34146.5399222191
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 63.75,
+            "raw_return_std": 35.50968177835448
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 47.5,
+            "raw_return_std": 45.757513044307814
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.25,
+            "raw_return_std": 0.6614378277661477
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0240",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 240,
+        "completed_task_count": 2,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4647.5,
+            "raw_return_std": 274.55646049583316
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 91.5,
+            "raw_return_std": 3.4641016151377544
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 80033.33621554905,
+            "raw_return_std": 29331.138489038003
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 75.625,
+            "raw_return_std": 40.151081865872555
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 52.5,
+            "raw_return_std": 34.55068740271313
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0250",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 250,
+        "completed_task_count": 2,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4726.875,
+            "raw_return_std": 241.57604263461226
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 93.625,
+            "raw_return_std": 3.7728470681966426
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 101312.50190734863,
+            "raw_return_std": 20294.052966470503
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 80.625,
+            "raw_return_std": 32.10699884760331
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 50.0,
+            "raw_return_std": 40.0
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0260",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 260,
+        "completed_task_count": 2,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4738.125,
+            "raw_return_std": 247.1138085478025
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 91.1875,
+            "raw_return_std": 3.6438089617871023
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 111100.00038146973,
+            "raw_return_std": 12203.279332787235
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 91.875,
+            "raw_return_std": 35.039040726024446
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 70.0,
+            "raw_return_std": 50.49752469181039
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0270",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 270,
+        "completed_task_count": 3,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4762.5,
+            "raw_return_std": 556.4564223728574
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.3125,
+            "raw_return_std": 2.7999720980752647
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 110366.67124430339,
+            "raw_return_std": 6928.122432932207
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 139.375,
+            "raw_return_std": 41.753555237847706
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 87.5,
+            "raw_return_std": 65.90713163232034
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0280",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 280,
+        "completed_task_count": 3,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4828.125,
+            "raw_return_std": 366.9676203359092
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.0,
+            "raw_return_std": 4.860555523805895
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 108171.42813546317,
+            "raw_return_std": 5583.320354441054
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 241.875,
+            "raw_return_std": 196.28482971182464
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 65.0,
+            "raw_return_std": 52.67826876426369
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0290",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 290,
+        "completed_task_count": 3,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4873.125,
+            "raw_return_std": 229.25746307372415
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 93.3125,
+            "raw_return_std": 3.686440525764657
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 117150.0015258789,
+            "raw_return_std": 13680.248726560229
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 223.75,
+            "raw_return_std": 9.921567416492215
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 113.75,
+            "raw_return_std": 80.84514518510063
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0300",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 300,
+        "completed_task_count": 3,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4883.75,
+            "raw_return_std": 633.323327771842
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 93.75,
+            "raw_return_std": 3.2882366094914763
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 111866.67124430339,
+            "raw_return_std": 8533.008852393305
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 2514.375,
+            "raw_return_std": 117.1520779798634
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 103.75,
+            "raw_return_std": 67.16351316004844
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0310",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 310,
+        "completed_task_count": 3,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4636.875,
+            "raw_return_std": 342.6499443674258
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.0,
+            "raw_return_std": 4.387482193696061
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 100837.50057220459,
+            "raw_return_std": 6809.72244300748
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 2685.625,
+            "raw_return_std": 120.31047076210783
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 80.0,
+            "raw_return_std": 58.309518948453004
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.375,
+            "raw_return_std": 0.9921567416492215
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0320",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 320,
+        "completed_task_count": 3,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 5085.625,
+            "raw_return_std": 1082.1620069910973
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 90.75,
+            "raw_return_std": 4.337337893224368
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 114360.00061035156,
+            "raw_return_std": 8759.587072804788
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 2855.625,
+            "raw_return_std": 174.42651568783916
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 73.75,
+            "raw_return_std": 43.999289766995105
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0330",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 330,
+        "completed_task_count": 3,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4663.75,
+            "raw_return_std": 193.51598771161
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 91.4375,
+            "raw_return_std": 4.329675940529499
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 106428.57469831195,
+            "raw_return_std": 8649.807115020603
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3072.5,
+            "raw_return_std": 114.91844934561203
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 101.25,
+            "raw_return_std": 83.2071962032131
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0340",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 340,
+        "completed_task_count": 3,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 5474.375,
+            "raw_return_std": 1273.1897381674894
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.875,
+            "raw_return_std": 2.9553976043842223
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 106585.71515764509,
+            "raw_return_std": 10174.117307292985
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3585.0,
+            "raw_return_std": 439.3034258914902
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 75.0,
+            "raw_return_std": 65.0
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0350",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 350,
+        "completed_task_count": 3,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4818.125,
+            "raw_return_std": 805.6691221432034
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 93.5625,
+            "raw_return_std": 2.5973243443975185
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 104349.9984741211,
+            "raw_return_std": 8174.094710160139
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3495.625,
+            "raw_return_std": 514.1007774502972
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 76.25,
+            "raw_return_std": 74.23568885650621
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0360",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 360,
+        "completed_task_count": 4,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4868.125,
+            "raw_return_std": 488.31622374748105
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 91.5625,
+            "raw_return_std": 2.978438139360964
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 106914.28593226841,
+            "raw_return_std": 9575.027978499324
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3533.75,
+            "raw_return_std": 586.8546987968998
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0370",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 370,
+        "completed_task_count": 4,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4566.875,
+            "raw_return_std": 252.10907237741367
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 91.0,
+            "raw_return_std": 3.774917217635375
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 100216.66828791301,
+            "raw_return_std": 39910.042310921504
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3910.625,
+            "raw_return_std": 1226.644145371835
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 198.75,
+            "raw_return_std": 45.53501400021746
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0380",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 380,
+        "completed_task_count": 4,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4896.875,
+            "raw_return_std": 552.7852063640994
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 94.1875,
+            "raw_return_std": 2.8111107680061274
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 98500.00163487026,
+            "raw_return_std": 21127.301532553607
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3084.375,
+            "raw_return_std": 325.23008682315964
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 373.75,
+            "raw_return_std": 102.64471491508951
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0390",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 390,
+        "completed_task_count": 4,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4935.625,
+            "raw_return_std": 504.72726236552745
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 93.125,
+            "raw_return_std": 3.314268395890713
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 101299.99978201729,
+            "raw_return_std": 26664.100055793693
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 4483.333333333333,
+            "raw_return_std": 1468.9243986294491
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 285.0,
+            "raw_return_std": 135.92277219068185
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0400",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 400,
+        "completed_task_count": 4,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4675.0,
+            "raw_return_std": 434.1658669218482
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.8125,
+            "raw_return_std": 3.4318134783230865
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 105071.42966134207,
+            "raw_return_std": 19302.754857217882
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3602.5,
+            "raw_return_std": 665.5777565393843
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 458.75,
+            "raw_return_std": 112.35407202233482
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.125,
+            "raw_return_std": 0.33071891388307384
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0410",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 410,
+        "completed_task_count": 4,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4631.25,
+            "raw_return_std": 345.64929842254844
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 93.75,
+            "raw_return_std": 3.6314597615834874
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 112483.336130778,
+            "raw_return_std": 8688.579876060063
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3185.0,
+            "raw_return_std": 516.5510623355642
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 235.0,
+            "raw_return_std": 96.56603957913983
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0420",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 420,
+        "completed_task_count": 4,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4661.25,
+            "raw_return_std": 251.44271216322812
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.625,
+            "raw_return_std": 2.6896793489187516
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 99362.50305175781,
+            "raw_return_std": 20961.866816203063
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3190.625,
+            "raw_return_std": 672.5926399946702
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 551.25,
+            "raw_return_std": 104.15583276994141
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.125,
+            "raw_return_std": 0.33071891388307384
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0430",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 430,
+        "completed_task_count": 4,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4695.625,
+            "raw_return_std": 216.9380311863275
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.5625,
+            "raw_return_std": 3.121873435935544
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 111333.3371480306,
+            "raw_return_std": 4015.6646808386236
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3418.888888888889,
+            "raw_return_std": 863.2553947373916
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 263.75,
+            "raw_return_std": 93.59987980761514
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0440",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 440,
+        "completed_task_count": 4,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4671.25,
+            "raw_return_std": 357.4541054457201
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.4375,
+            "raw_return_std": 2.423033996872516
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 107462.50247955322,
+            "raw_return_std": 27610.09461886154
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3929.375,
+            "raw_return_std": 1296.9265050013435
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 442.5,
+            "raw_return_std": 126.07041683122968
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.125,
+            "raw_return_std": 0.33071891388307384
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0450",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 450,
+        "completed_task_count": 5,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4560.625,
+            "raw_return_std": 254.39803335521285
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 91.6875,
+            "raw_return_std": 4.223723919718238
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 109825.00839233398,
+            "raw_return_std": 13366.63046964456
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 4031.25,
+            "raw_return_std": 1411.7625287207477
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 723.75,
+            "raw_return_std": 218.65712314031757
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0460",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 460,
+        "completed_task_count": 5,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4736.875,
+            "raw_return_std": 262.24317793795893
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 93.75,
+            "raw_return_std": 3.75
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 99771.43369402204,
+            "raw_return_std": 24330.801542251204
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3486.25,
+            "raw_return_std": 899.6865773701417
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 781.25,
+            "raw_return_std": 160.38527831443884
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.875,
+            "raw_return_std": 1.6153559979150107
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0470",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 470,
+        "completed_task_count": 5,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4519.375,
+            "raw_return_std": 202.59160736565568
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.5,
+            "raw_return_std": 3.3541019662496847
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 106600.00038146973,
+            "raw_return_std": 8699.425709065717
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3297.5,
+            "raw_return_std": 306.5432269680738
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 885.0,
+            "raw_return_std": 213.60009363293827
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 83.375,
+            "raw_return_std": 15.889756920733557
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0480",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 480,
+        "completed_task_count": 5,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4687.5,
+            "raw_return_std": 211.61580753809483
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 91.5,
+            "raw_return_std": 4.387482193696061
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 79414.28756713867,
+            "raw_return_std": 39501.878648417405
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 4266.666666666667,
+            "raw_return_std": 1781.934030453678
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 948.75,
+            "raw_return_std": 195.95519258238605
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 100.75,
+            "raw_return_std": 17.383541066192468
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0490",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 490,
+        "completed_task_count": 5,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4825.625,
+            "raw_return_std": 558.6475717077807
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 89.625,
+            "raw_return_std": 4.211220131980754
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 59637.500166893005,
+            "raw_return_std": 34289.683010365145
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3746.6666666666665,
+            "raw_return_std": 899.6789550846581
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 917.5,
+            "raw_return_std": 160.13666038730793
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 80.0,
+            "raw_return_std": 19.00657780874821
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0500",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 500,
+        "completed_task_count": 5,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4753.75,
+            "raw_return_std": 307.32464512303596
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.6875,
+            "raw_return_std": 3.617988909601576
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 87755.55928548177,
+            "raw_return_std": 24110.214894911256
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3345.4545454545455,
+            "raw_return_std": 763.7629765166157
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 853.75,
+            "raw_return_std": 148.1078576578569
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 76.75,
+            "raw_return_std": 18.91262805640718
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0510",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 510,
+        "completed_task_count": 5,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4483.75,
+            "raw_return_std": 255.19294171273623
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 93.3125,
+            "raw_return_std": 3.0967472854593736
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 104525.0015258789,
+            "raw_return_std": 6881.81503983516
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 4055.3846153846152,
+            "raw_return_std": 2008.9553940164844
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 820.0,
+            "raw_return_std": 230.10866998007702
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 107.75,
+            "raw_return_std": 23.155722834755128
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0520",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 520,
+        "completed_task_count": 5,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4642.5,
+            "raw_return_std": 342.5
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.6875,
+            "raw_return_std": 2.4165768661476505
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 87700.0013078962,
+            "raw_return_std": 28457.436124436274
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3912.7272727272725,
+            "raw_return_std": 732.0344118723444
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 793.75,
+            "raw_return_std": 152.76104706370666
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 149.5,
+            "raw_return_std": 24.300205760445735
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "periodic-0530",
+        "stage": "scheduled_periodic",
+        "completed_epochs": 530,
+        "completed_task_count": 5,
+        "cohort": "fixed_validation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4885.625,
+            "raw_return_std": 706.9827504083815
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.75,
+            "raw_return_std": 3.491060010942235
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 79125.00095367432,
+            "raw_return_std": 28973.597828343023
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3615.7142857142853,
+            "raw_return_std": 676.0147323596926
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 962.5,
+            "raw_return_std": 113.33026956643137
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 158.875,
+            "raw_return_std": 26.58212510315908
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "final-0540",
+        "stage": "heldout_final",
+        "completed_epochs": 540,
+        "completed_task_count": 6,
+        "cohort": "heldout_final",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 4906.25,
+            "raw_return_std": 663.2389746539327
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 92.8125,
+            "raw_return_std": 3.694907813464363
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 97766.67213439941,
+            "raw_return_std": 25972.018229490164
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 2895.0,
+            "raw_return_std": 980.828731226813
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 907.5,
+            "raw_return_std": 158.4100691244089
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 225.6,
+            "raw_return_std": 94.15009293675712
+          }
+        ]
+      }
+    ],
+    "boundary_metric_endpoint_note": "Source reporting command uses periodic acquisition endpoints and the separate heldout final endpoint; these cohorts are preserved, not silently relabelled as the same evaluator draws."
+  },
+  "headline": {
+    "summary": "Completed six-task seed-0 D pilot, held-out final raw returns: MsPacman 4906.25; Boxing 92.8125; CrazyClimber 97766.7; Frostbite 2895; Seaquest 907.5; Enduro 225.6."
+  },
+  "comparability": {
+    "direct_comparison_group": null,
+    "claim": "Single-seed, task-aware D pilot; not an official reproduction or an evaluator-matched ranking against StableTargets/ARROW.",
+    "limitations": [
+      "One seed only.",
+      "Task identity selects the model route and private policy.",
+      "Deterministic fixed/heldout evaluation differs from the stochastic advancing-cohort StableTargets record.",
+      "552,000 WM updates include 12,000 consolidation/recovery updates; equal replay sample capacity does not match dtype, bytes or compute.",
+      "Final rollout count is the historical nominal trajectory evaluator, not the new exact-complete-episode AutoRoute evaluator.",
+      "Forward transfer is unavailable without aligned single-task curves."
+    ]
+  },
+  "source_artifacts": [
+    {
+      "name": "model_parameter_accounting.json",
+      "sha256": "36861d2bd92aace3b41e8c764b05ee058092063e27372a3c37b0e7b31778461c",
+      "role": "parameter_accounting",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "actor_critic_parameter_accounting.json",
+      "sha256": "1ccd0fa04f95fcef928f28a1b6f80f88d259ebdabe88b49bbd65da7a5ebccd69",
+      "role": "parameter_accounting",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "adaptive_qfp_compression/task_00_boundary.json",
+      "sha256": "1c3c08b235ab1a1c4ee9dd05f3ba4ca07ff6d325925e5673ec2cc0e045151afd",
+      "role": "compression_selection",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "adaptive_qfp_compression/task_01_boundary.json",
+      "sha256": "1f2ee418a984910286788e6064c0957e0c286b26407213af700039340026d1fe",
+      "role": "compression_selection",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "adaptive_qfp_compression/task_02_boundary.json",
+      "sha256": "011ecfeebc16ce3ab7b6f1f632120b9475773ea44d5697f04b73d98852a3fc61",
+      "role": "compression_selection",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "adaptive_qfp_compression/task_03_boundary.json",
+      "sha256": "557dc5ae8b8675ed0e4ef3f7e1c59c312245c4920f573e48fb322000ed178f85",
+      "role": "compression_selection",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "adaptive_qfp_compression/task_04_boundary.json",
+      "sha256": "892c510f168c48d05ccfa1ec162289f2b5bd82ceba15f12080a68525b93a9a0e",
+      "role": "compression_selection",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "adaptive_qfp_compression/task_05_boundary.json",
+      "sha256": "a82c2763d14bcde24e2eaff31a41e38f30f658b3a89b98c8bc3532cc4de7917d",
+      "role": "compression_selection",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "launch.json",
+      "sha256": "9bbe6c470e7a018af060948a6beb5c55cc33b7f21e0e9ce8bd7b7fd1ef6466ac",
+      "role": "source_result",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "resolved_training_config.json",
+      "sha256": "50c521f20d3a0647c648c9b527cc724cb6388cc0d57210cd57b6685b526e4824",
+      "role": "source_result",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "run_status.json",
+      "sha256": "65daaeb80b4fce4e03dd408b7f26eca7449a65e743553d5e682b210aded2f5a5",
+      "role": "source_result",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "final_evaluation.json",
+      "sha256": "eb5344161f458196f7fa3ea04e768fcdf680be5ac3025919691da2cc0de26472",
+      "role": "source_result",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "continual_metrics.json",
+      "sha256": "ebdc854a88ec70419af6ce5c262e1aa6880f7d85b79973809cc31665fd862ad3",
+      "role": "source_result",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "evaluation_seed_manifest.json",
+      "sha256": "c57ae133da8578c8d72936172dc6e073d87f246fdec452fbd20214603b9c23ec",
+      "role": "source_result",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "train.log",
+      "sha256": "4cb6a2afe503201cd95e46333161c357cc6217d8c9ef6a1d6b3bcd2b03f1d095",
+      "role": "full_training_log",
+      "repository_copy_excluded": true
+    },
+    {
+      "name": "arrow_v3_atari_normalization_v1.json",
+      "repository_path": "docs/protocols/references/arrow_v3_atari_normalization_v1.json",
+      "role": "normalization_reference",
+      "sha256": "eacbbcf17e9bf062d737ebd8aaa2ae9bb19464fe23a3539af57b3989761281fe"
+    }
+  ],
+  "notes": [
+    "Remote metadata, final evaluation and full-log hashes match the previously downloaded local archive.",
+    "This is D with adaptive Q/F/P and shared prediction heads, not the retired dense Evolving-Core v2 partial pilot.",
+    "Periodic evaluations of future tasks remain isolated measurements, not training labels or successful task acquisition.",
+    "Weights, Replay, full logs and optimizer states remain outside Git."
+  ],
+  "derived_metrics": {
+    "forgetting": 0.2904490072200333,
+    "forward_transfer": null,
+    "acc": 2.962900257215997,
+    "min_acc": 3.2940384520907813,
+    "wc_acc": 2.79817756871548,
+    "schema_version": "arrow-paper-v1",
+    "normalization_reference": "docs/protocols/references/arrow_v3_atari_normalization_v1.json",
+    "normalization_sha256": "eacbbcf17e9bf062d737ebd8aaa2ae9bb19464fe23a3539af57b3989761281fe",
+    "task_completion_epochs": [
+      90,
+      180,
+      270,
+      360,
+      450,
+      540
+    ],
+    "source_reporting_command": "python scripts/summarize_continual_metrics.py <preserved-run-directory>",
+    "source_sha256": "ebdc854a88ec70419af6ce5c262e1aa6880f7d85b79973809cc31665fd862ad3"
+  },
+  "budgets": {
+    "task_count": 6,
+    "task_duration_epochs": [
+      90,
+      90,
+      90,
+      90,
+      90,
+      90
+    ],
+    "raw_environment_frames": 35389440,
+    "online_world_model_updates": 540000,
+    "boundary_consolidation_world_model_updates": 6000,
+    "adaptive_compression_world_model_updates": 6000,
+    "adaptive_compression_sequences": 96000,
+    "adaptive_compression_validation_rollouts": 480,
+    "total_world_model_optimizer_steps": 552000,
+    "actor_critic_updates": 432000,
+    "online_current_sequences": 6840000,
+    "online_memory_sequences": 1800000,
+    "actor_critic_updates_by_task_route": {
+      "0": 72000,
+      "1": 72000,
+      "2": 72000,
+      "3": 72000,
+      "4": 72000,
+      "5": 72000
+    },
+    "actor_critic_update_budget_fixed": true,
+    "shared_behavior_rehearsal_adds_optimizer_steps": false,
+    "shared_prediction_distillation_adds_optimizer_steps": false,
+    "shared_prediction_distillation_reuses_memory_teacher_forward": true,
+    "consolidation_sequences": 96000,
+    "online_sequence_batch_total": 16,
+    "later_task_current_memory_split": [
+      12,
+      4
+    ],
+    "memory_task_selection": "uniform over completed tasks",
+    "memory_source": "LTDM task-homogeneous sequences",
+    "replay": {
+      "dtype": "uint8",
+      "bytes_per_element": 1,
+      "observation_dtype": "uint8",
+      "observation_bytes_per_element": 1,
+      "auxiliary_dtype": "float32",
+      "auxiliary_bytes_per_element": 4,
+      "transitions": 524288,
+      "observation_bytes": 6442450944,
+      "allocated_tensor_bytes": 6486491136,
+      "buffers": {
+        "fifo": {
+          "slots": 512,
+          "device": "cpu",
+          "observation_bytes": 3221225472,
+          "allocated_tensor_bytes": 3243245568
+        },
+        "ltdm": {
+          "slots": 512,
+          "device": "cpu",
+          "observation_bytes": 3221225472,
+          "allocated_tensor_bytes": 3243245568,
+          "priority_index_entries": 512
+        }
+      },
+      "python_index_bytes_included": false,
+      "actor_comparison_difference_bytes": 0
+    },
+    "checkpoint_retention": "latest_boundary",
+    "retained_boundary_replay_asset_bytes": 6442450944,
+    "peak_boundary_replay_asset_bytes": 12884901888,
+    "minimum_live_plus_peak_replay_observation_bytes": 19327352832,
+    "evaluation_transitions_enter_replay": false,
+    "consolidation_is_extra_compute": true,
+    "adaptive_compression_is_extra_compute": true,
+    "adaptive_compression_candidate_compute_is_fixed": true,
+    "adaptive_compression_replay_source": "completed-task LTDM"
+  },
+  "parameter_accounting": {
+    "dense_acquisition_bound": {
+      "schema_version": 1,
+      "scope": "online inference parameters; FP32 master weights; excludes optimizer state, gradients, activations, Replay, and boundary world-model teachers",
+      "world_model_parameters": 42601625,
+      "prediction_head_topology": "single_shared",
+      "shared_prediction_head_parameters": 8562629,
+      "mechanism_parameterization": "adaptive_dense_width",
+      "shared_frozen_down_parameters": 0,
+      "behavior_parameters": 10295910,
+      "online_parameters": 52897535,
+      "fp32_parameter_bytes": 211590140,
+      "per_task_world_model_additions": {
+        "0": 3850432,
+        "1": 3850444,
+        "2": 3850456,
+        "3": 3850468,
+        "4": 3850480,
+        "5": 3850492
+      },
+      "per_later_task_behavior_growth": 1715985,
+      "runtime_verification_artifacts": [
+        "model_parameter_accounting.json",
+        "actor_critic_parameter_accounting.json"
+      ],
+      "comparison_to_matched_world_model_private_mlp": {
+        "reference_parameters": 52897535,
+        "difference": 0,
+        "relative_difference": 0.0
+      },
+      "comparison_to_dense_evolving_v2_private_mlp": {
+        "reference_parameters": 95710680,
+        "difference": -42813145,
+        "relative_difference": -0.447318366142629
+      },
+      "comparison_to_arrow_50": {
+        "reference_parameters": 21214838,
+        "difference": 31682697,
+        "relative_difference": 1.493421585401689
+      },
+      "training_only_prediction_head_teacher": {
+        "parameters": 8562629,
+        "additional_teacher_copy": false,
+        "contained_in_common_evolving_boundary_world_model_teacher": true,
+        "growth_with_task_count": 0
+      },
+      "adaptive_compression": {
+        "outcome_dependent": true,
+        "dense_acquisition_widths": [
+          512,
+          512,
+          256
+        ],
+        "candidate_width_fractions": [
+          0.75,
+          0.5,
+          0.25,
+          0.125
+        ],
+        "candidate_widths": [
+          [
+            384,
+            384,
+            192
+          ],
+          [
+            256,
+            256,
+            128
+          ],
+          [
+            128,
+            128,
+            64
+          ],
+          [
+            64,
+            64,
+            32
+          ]
+        ],
+        "minimum_candidate_widths": [
+          64,
+          64,
+          32
+        ],
+        "minimum_final_world_model_parameters": 22639193,
+        "minimum_final_online_parameters": 32935103,
+        "maximum_final_online_parameters": 52897535,
+        "maximum_acquisition_online_parameters": 52897535,
+        "dense_fallback_retained_when_no_candidate_passes": true,
+        "selection_metric": "current-task raw episodic return",
+        "final_heldout_cohort_used_for_selection": false,
+        "full_dense_teacher_persistent": false
+      }
+    },
+    "final_world_model": {
+      "parameters": 37848665,
+      "trainable_parameters": 23349345,
+      "parameter_bytes": 151394660
+    },
+    "final_actor_critic_parameters": 10295910
+  },
+  "runtime": {
+    "observed_at_utc": "2026-09-06T04:03:34.337093+00:00",
+    "source_host_label": "4090-1",
+    "environment": {
+      "python": "3.10.21 (main, Aug 27 2026, 14:42:07) [GCC 14.3.0]",
+      "platform": "Linux-7.0.0-30-generic-x86_64-with-glibc2.39",
+      "machine": "x86_64",
+      "cpu_count": 32,
+      "packages": {
+        "ale-py": "0.11.1",
+        "gymnasium": "1.1.1",
+        "numpy": "1.26.4",
+        "opencv-python": "4.11.0.86",
+        "sortedcontainers": "2.4.0",
+        "tensorboard": "2.13.0",
+        "torch": "2.3.0+cu118",
+        "torchaudio": "2.3.0+cu118",
+        "torchvision": "0.18.0+cu118",
+        "tqdm": "4.67.1",
+        "swanlab": null
+      },
+      "torch_cuda_build": "11.8",
+      "cudnn_version": 8700,
+      "cuda_device_count": 1,
+      "cuda_device_name": "NVIDIA GeForce RTX 4090",
+      "cuda_total_memory_bytes": 25241190400
+    },
+    "upstream_arrow_commit": "cb05e7d97ed83c3cf6e528960db0da6868e29232",
+    "compression_boundaries": [
+      {
+        "completed_epochs": 90,
+        "completed_task_id": 0,
+        "optimizer_updates": 1000,
+        "selected_width_fraction": 1.0,
+        "selected_dense_fallback": true,
+        "dense_teacher_validation": {
+          "scaled_mean": 246.5,
+          "scaled_std": 39.912012602724005,
+          "raw_mean": 4930.0,
+          "raw_std": 798.24025205448
+        },
+        "selected_validation": {
+          "scaled_mean": 246.5,
+          "scaled_std": 39.912012602724005,
+          "raw_mean": 4930.0,
+          "raw_std": 798.24025205448
+        },
+        "selected_layout": {
+          "recurrent": [
+            512,
+            512,
+            512,
+            512,
+            512,
+            512
+          ],
+          "posterior": [
+            512,
+            512,
+            512,
+            512,
+            512,
+            512
+          ],
+          "prior": [
+            256,
+            256,
+            256,
+            256,
+            256,
+            256
+          ]
+        },
+        "world_model_parameters_before": 42601625,
+        "world_model_parameters_after": 42601625,
+        "candidates": [
+          {
+            "width_fraction": 0.75,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "383501108ee76a22391bf62192c263098b96c60616eec05c6c58e40576c515ec",
+                "task_id": 0,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 526336,
+                "new_parameters": 395136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "27cc3e1f50273eb5ada8889d3baef4e77e21bbfbe0342832cc84bfb71526c499",
+                "task_id": 0,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 2894336,
+                "new_parameters": 2173312
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 192,
+                "selected_channel_count": 192,
+                "selected_channel_sha256": "d197a1634b4f5ea49450fbc32404383bd65770aae22fe16d4c07eb4aacf193bd",
+                "task_id": 0,
+                "old_hidden_features": 256,
+                "new_hidden_features": 192,
+                "old_parameters": 395520,
+                "new_parameters": 297152
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 8.8197739944458,
+            "distillation_loss_first": 21.22212791442871,
+            "distillation_loss_last": 6.765161037445068,
+            "validation": {
+              "scaled_mean": 222.21875,
+              "scaled_std": 10.67410527573623,
+              "raw_mean": 4444.375,
+              "raw_std": 213.48210551472457
+            },
+            "relative_raw_return_drop": 0.09850405679513184,
+            "passed": false,
+            "world_model_parameters": 41651033
+          },
+          {
+            "width_fraction": 0.5,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "79200672d1b2e616228280e6ae57ca9002f2e1edb77a4a76f4f5d23842844e42",
+                "task_id": 0,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 395136,
+                "new_parameters": 263936
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "2b73cdc60245f69f882c605a2d5b04ec4583d71b6006f769a87de8435bf1fea8",
+                "task_id": 0,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 2173312,
+                "new_parameters": 1452288
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "9771fabc12869dbc67ca58d43300eba9eb4968daa5f8d2de4e75bfd9e5c4e856",
+                "task_id": 0,
+                "old_hidden_features": 192,
+                "new_hidden_features": 128,
+                "old_parameters": 297152,
+                "new_parameters": 198784
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 11.620864837646485,
+            "distillation_loss_first": 22.933320999145508,
+            "distillation_loss_last": 8.188801765441895,
+            "validation": {
+              "scaled_mean": 229.78125,
+              "scaled_std": 25.667324041229932,
+              "raw_mean": 4595.625,
+              "raw_std": 513.3464808245986
+            },
+            "relative_raw_return_drop": 0.06782454361054767,
+            "passed": false,
+            "world_model_parameters": 40700441
+          },
+          {
+            "width_fraction": 0.25,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "f63fdb712ecab6d2aea53eb56ef5fd8dbd950e1c462005ae0427b33e97b4ab46",
+                "task_id": 0,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 263936,
+                "new_parameters": 132736
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "0b57765bda72e8d7b1f1e772b9bfce0fcb512d910367532078ba07ea909b2e88",
+                "task_id": 0,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 1452288,
+                "new_parameters": 731264
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "58b3ab702d5343c876e639e4748db6fa7710b62c16158ed7a6440a3de9808413",
+                "task_id": 0,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 198784,
+                "new_parameters": 100416
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 16.642016807556153,
+            "distillation_loss_first": 22.823484420776367,
+            "distillation_loss_last": 12.377039909362793,
+            "validation": {
+              "scaled_mean": 216.6875,
+              "scaled_std": 11.154980670086346,
+              "raw_mean": 4333.75,
+              "raw_std": 223.0996134017269
+            },
+            "relative_raw_return_drop": 0.12094320486815416,
+            "passed": false,
+            "world_model_parameters": 39749849
+          },
+          {
+            "width_fraction": 0.125,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "948ff973495f9a0297925754025b2c20b842daac74395223cd8c3dc93d976c80",
+                "task_id": 0,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 132736,
+                "new_parameters": 67136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "028d698af05798484982d32bb4079659fbd49445f2245ae66ca83710c0649b38",
+                "task_id": 0,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 731264,
+                "new_parameters": 370752
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 32,
+                "selected_channel_count": 32,
+                "selected_channel_sha256": "4a2121fb14ded667d408b15d9a7daad0997438a06b861429c5c09550ff56278d",
+                "task_id": 0,
+                "old_hidden_features": 64,
+                "new_hidden_features": 32,
+                "old_parameters": 100416,
+                "new_parameters": 51232
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 19.719282215118408,
+            "distillation_loss_first": 22.831573486328125,
+            "distillation_loss_last": 15.403536796569824,
+            "validation": {
+              "scaled_mean": 210.46875,
+              "scaled_std": 20.276578814915993,
+              "raw_mean": 4209.375,
+              "raw_std": 405.53157629831986
+            },
+            "relative_raw_return_drop": 0.1461713995943205,
+            "passed": false,
+            "world_model_parameters": 39274553
+          }
+        ],
+        "evaluation_transitions_enter_replay": false,
+        "heldout_final_data_used": false
+      },
+      {
+        "completed_epochs": 180,
+        "completed_task_id": 1,
+        "optimizer_updates": 1000,
+        "selected_width_fraction": 0.75,
+        "selected_dense_fallback": false,
+        "dense_teacher_validation": {
+          "scaled_mean": 93.75,
+          "scaled_std": 3.5794552658190883,
+          "raw_mean": 93.75,
+          "raw_std": 3.5794552658190883
+        },
+        "selected_validation": {
+          "scaled_mean": 92.0625,
+          "scaled_std": 3.6651867278489374,
+          "raw_mean": 92.0625,
+          "raw_std": 3.6651867278489374
+        },
+        "selected_layout": {
+          "recurrent": [
+            512,
+            384,
+            512,
+            512,
+            512,
+            512
+          ],
+          "posterior": [
+            512,
+            384,
+            512,
+            512,
+            512,
+            512
+          ],
+          "prior": [
+            256,
+            192,
+            256,
+            256,
+            256,
+            256
+          ]
+        },
+        "world_model_parameters_before": 42601625,
+        "world_model_parameters_after": 41651033,
+        "candidates": [
+          {
+            "width_fraction": 0.75,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "73cfcc1764a326ffe68e051cc9cfeddd3fb72d47919d4c68e8cc104d1a1f0318",
+                "task_id": 1,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 526336,
+                "new_parameters": 395136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "d00f7a896e1818fcbd383115135695fc379c40074ee6549059c9c2195de1f995",
+                "task_id": 1,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 2894336,
+                "new_parameters": 2173312
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 192,
+                "selected_channel_count": 192,
+                "selected_channel_sha256": "9fbad29ce8b98f21ba0e60d28ca63e73d705a3fa613acb9cf32c049d13e64e10",
+                "task_id": 1,
+                "old_hidden_features": 256,
+                "new_hidden_features": 192,
+                "old_parameters": 395520,
+                "new_parameters": 297152
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 11.399871223449708,
+            "distillation_loss_first": 32.678279876708984,
+            "distillation_loss_last": 10.192198753356934,
+            "validation": {
+              "scaled_mean": 92.0625,
+              "scaled_std": 3.6651867278489374,
+              "raw_mean": 92.0625,
+              "raw_std": 3.6651867278489374
+            },
+            "relative_raw_return_drop": 0.018,
+            "passed": true,
+            "world_model_parameters": 41651033
+          },
+          {
+            "width_fraction": 0.5,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "b165181f777a7b94b657c8f7946466a5fea20f315388d7454f688a921fbb427e",
+                "task_id": 1,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 395136,
+                "new_parameters": 263936
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "4f939cebce466ed0cbbd3408a5c3c5c70e1786d2c7736051c25d39b36daafb08",
+                "task_id": 1,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 2173312,
+                "new_parameters": 1452288
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "28b47c3f2fa98f40dbbb024f151267a0e52ee2f1d2fe7755265af97198c1e058",
+                "task_id": 1,
+                "old_hidden_features": 192,
+                "new_hidden_features": 128,
+                "old_parameters": 297152,
+                "new_parameters": 198784
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 20.12859395980835,
+            "distillation_loss_first": 219.3634490966797,
+            "distillation_loss_last": 14.207133293151855,
+            "validation": {
+              "scaled_mean": 85.3125,
+              "scaled_std": 3.703355741756387,
+              "raw_mean": 85.3125,
+              "raw_std": 3.703355741756387
+            },
+            "relative_raw_return_drop": 0.09,
+            "passed": false,
+            "world_model_parameters": 40700441
+          },
+          {
+            "width_fraction": 0.25,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "0db26eb82de4d82b4bef680b7f0760427ce154e95495c3039747f6dfb29d99e0",
+                "task_id": 1,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 263936,
+                "new_parameters": 132736
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "34b67f6163d9bcba38563589668a85b705bbcdc8b325df0fc04672023105808b",
+                "task_id": 1,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 1452288,
+                "new_parameters": 731264
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "e211ce9e5ef6076f492330078b4d62bab9e7451b21584fb985666be8f72955fd",
+                "task_id": 1,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 198784,
+                "new_parameters": 100416
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 28.555128227233887,
+            "distillation_loss_first": 160.07420349121094,
+            "distillation_loss_last": 19.127941131591797,
+            "validation": {
+              "scaled_mean": 58.125,
+              "scaled_std": 12.144314513384442,
+              "raw_mean": 58.125,
+              "raw_std": 12.144314513384442
+            },
+            "relative_raw_return_drop": 0.38,
+            "passed": false,
+            "world_model_parameters": 39749849
+          },
+          {
+            "width_fraction": 0.125,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "d311b0cee2ff5a759d5c2da16156f906376ea6100758daa2a20be22b8ef5ab9a",
+                "task_id": 1,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 132736,
+                "new_parameters": 67136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "bbc969facdf21df7d57ac992aad0aa410cc5f0116bc1ed90380782a403b7b8a2",
+                "task_id": 1,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 731264,
+                "new_parameters": 370752
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 32,
+                "selected_channel_count": 32,
+                "selected_channel_sha256": "a059c97415a9955521afb031e9c15e34ea9b5d193ec3cfcb1ad68fa731456be3",
+                "task_id": 1,
+                "old_hidden_features": 64,
+                "new_hidden_features": 32,
+                "old_parameters": 100416,
+                "new_parameters": 51232
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 34.87588903045654,
+            "distillation_loss_first": 205.29977416992188,
+            "distillation_loss_last": 24.05953598022461,
+            "validation": {
+              "scaled_mean": 15.6875,
+              "scaled_std": 24.873979250413473,
+              "raw_mean": 15.6875,
+              "raw_std": 24.873979250413473
+            },
+            "relative_raw_return_drop": 0.8326666666666667,
+            "passed": false,
+            "world_model_parameters": 39274553
+          }
+        ],
+        "evaluation_transitions_enter_replay": false,
+        "heldout_final_data_used": false
+      },
+      {
+        "completed_epochs": 270,
+        "completed_task_id": 2,
+        "optimizer_updates": 1000,
+        "selected_width_fraction": 1.0,
+        "selected_dense_fallback": true,
+        "dense_teacher_validation": {
+          "scaled_mean": 110.27500247955322,
+          "scaled_std": 10.32615085173398,
+          "raw_mean": 110275.00247955322,
+          "raw_std": 10326.150851733979
+        },
+        "selected_validation": {
+          "scaled_mean": 110.27500247955322,
+          "scaled_std": 10.32615085173398,
+          "raw_mean": 110275.00247955322,
+          "raw_std": 10326.150851733979
+        },
+        "selected_layout": {
+          "recurrent": [
+            512,
+            384,
+            512,
+            512,
+            512,
+            512
+          ],
+          "posterior": [
+            512,
+            384,
+            512,
+            512,
+            512,
+            512
+          ],
+          "prior": [
+            256,
+            192,
+            256,
+            256,
+            256,
+            256
+          ]
+        },
+        "world_model_parameters_before": 41651033,
+        "world_model_parameters_after": 41651033,
+        "candidates": [
+          {
+            "width_fraction": 0.75,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "ab3b64ad7dffbd14a780f34a30ebed63f1dc138c1036b2e98b7c19e4560e96a3",
+                "task_id": 2,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 526336,
+                "new_parameters": 395136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "c68ced831b18b861513fea7b89dbc930c8938959c9e6bf844c492b1672206e93",
+                "task_id": 2,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 2894336,
+                "new_parameters": 2173312
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 192,
+                "selected_channel_count": 192,
+                "selected_channel_sha256": "76733d7312bbaf06af846a3a7058b3d55e2b29261602bc28142ad2cefbceb822",
+                "task_id": 2,
+                "old_hidden_features": 256,
+                "new_hidden_features": 192,
+                "old_parameters": 395520,
+                "new_parameters": 297152
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 10.257964868545532,
+            "distillation_loss_first": 59.160823822021484,
+            "distillation_loss_last": 4.8678083419799805,
+            "validation": {
+              "scaled_mean": 49.712502002716064,
+              "scaled_std": 18.849035228443604,
+              "raw_mean": 49712.502002716064,
+              "raw_std": 18849.035228443605
+            },
+            "relative_raw_return_drop": 0.5491951858089184,
+            "passed": false,
+            "world_model_parameters": 40700441
+          },
+          {
+            "width_fraction": 0.5,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "74dab4d1314d9d973c74ee3c65f4ade07a05221d9b3fced99dd0869da21cd481",
+                "task_id": 2,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 395136,
+                "new_parameters": 263936
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "e0972f4a73ed5c843d7365ea730045ab71f9eeb2541462f529a36493105c45f4",
+                "task_id": 2,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 2173312,
+                "new_parameters": 1452288
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "bd559256ce633e903d578f891bb018bcb60247a1c7b1120ce213060a5023c88d",
+                "task_id": 2,
+                "old_hidden_features": 192,
+                "new_hidden_features": 128,
+                "old_parameters": 297152,
+                "new_parameters": 198784
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 19.341179498672485,
+            "distillation_loss_first": 77.34566497802734,
+            "distillation_loss_last": 7.141268730163574,
+            "validation": {
+              "scaled_mean": 1.0714285629136222,
+              "scaled_std": 1.2440880265347578,
+              "raw_mean": 1071.4285629136223,
+              "raw_std": 1244.0880265347578
+            },
+            "relative_raw_return_drop": 0.9902840304799604,
+            "passed": false,
+            "world_model_parameters": 39749849
+          },
+          {
+            "width_fraction": 0.25,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "1715b2083cb36de04e0e293e31dd39cb42be750c6cfe193c1b95fb33a62df513",
+                "task_id": 2,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 263936,
+                "new_parameters": 132736
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "007bfb7a0c2d11dcf7c34aa83c374a4fc2760a173552352ed3fa2f237fa2207f",
+                "task_id": 2,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 1452288,
+                "new_parameters": 731264
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "44f71f8be76b32266e94bac736c810436fa99ed348b0229efce92395d1ff7ae1",
+                "task_id": 2,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 198784,
+                "new_parameters": 100416
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 27.931660106658935,
+            "distillation_loss_first": 94.76740264892578,
+            "distillation_loss_last": 11.458073616027832,
+            "validation": {
+              "scaled_mean": 0.30000001192092896,
+              "scaled_std": 0.0,
+              "raw_mean": 300.00001192092896,
+              "raw_std": 0.0
+            },
+            "relative_raw_return_drop": 0.9972795284046667,
+            "passed": false,
+            "world_model_parameters": 38799257
+          },
+          {
+            "width_fraction": 0.125,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "9df5dd82321ff336f7ac46c7d619f152a978cde44936c338e1c44f13d7678804",
+                "task_id": 2,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 132736,
+                "new_parameters": 67136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "8acb3545cb0193c43434746f777db5520927a7ebe88c1184cdf2670417faf184",
+                "task_id": 2,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 731264,
+                "new_parameters": 370752
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 32,
+                "selected_channel_count": 32,
+                "selected_channel_sha256": "dd84dd3a0097ce5681eba5faf5d7a74bf88e0338bfedc2b22030e69cfaf93d5a",
+                "task_id": 2,
+                "old_hidden_features": 64,
+                "new_hidden_features": 32,
+                "old_parameters": 100416,
+                "new_parameters": 51232
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 40.555301460266115,
+            "distillation_loss_first": 133.0619354248047,
+            "distillation_loss_last": 13.933048248291016,
+            "validation": {
+              "scaled_mean": 0.20000000298023224,
+              "scaled_std": 0.0,
+              "raw_mean": 200.00000298023224,
+              "raw_std": 0.0
+            },
+            "relative_raw_return_drop": 0.9981863523148202,
+            "passed": false,
+            "world_model_parameters": 38323961
+          }
+        ],
+        "evaluation_transitions_enter_replay": false,
+        "heldout_final_data_used": false
+      },
+      {
+        "completed_epochs": 360,
+        "completed_task_id": 3,
+        "optimizer_updates": 1000,
+        "selected_width_fraction": 0.5,
+        "selected_dense_fallback": false,
+        "dense_teacher_validation": {
+          "scaled_mean": 747.625,
+          "scaled_std": 60.49883779875445,
+          "raw_mean": 3738.125,
+          "raw_std": 302.49418899377224
+        },
+        "selected_validation": {
+          "scaled_mean": 714.25,
+          "scaled_std": 170.2525697309735,
+          "raw_mean": 3571.25,
+          "raw_std": 851.2628486548675
+        },
+        "selected_layout": {
+          "recurrent": [
+            512,
+            384,
+            512,
+            256,
+            512,
+            512
+          ],
+          "posterior": [
+            512,
+            384,
+            512,
+            256,
+            512,
+            512
+          ],
+          "prior": [
+            256,
+            192,
+            256,
+            128,
+            256,
+            256
+          ]
+        },
+        "world_model_parameters_before": 41651033,
+        "world_model_parameters_after": 39749849,
+        "candidates": [
+          {
+            "width_fraction": 0.75,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "0f24a5fb2d75bf4f4d841db3752a94eac6ba85d0d8eb4c1c946b8d615388004a",
+                "task_id": 3,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 526336,
+                "new_parameters": 395136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "4a977789324d9421eda819a1576835685a84e3869d5830d08e73d80a4438ace2",
+                "task_id": 3,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 2894336,
+                "new_parameters": 2173312
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 192,
+                "selected_channel_count": 192,
+                "selected_channel_sha256": "113421d9b7051d19d229837132aa7db9d262ebfb2ee33e055ee211eb22f3e279",
+                "task_id": 3,
+                "old_hidden_features": 256,
+                "new_hidden_features": 192,
+                "old_parameters": 395520,
+                "new_parameters": 297152
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 10.092616008758545,
+            "distillation_loss_first": 57.90080642700195,
+            "distillation_loss_last": 5.726980209350586,
+            "validation": {
+              "scaled_mean": 749.0,
+              "scaled_std": 78.73690367292836,
+              "raw_mean": 3745.0,
+              "raw_std": 393.6845183646418
+            },
+            "relative_raw_return_drop": -0.001839157331549908,
+            "passed": true,
+            "world_model_parameters": 40700441
+          },
+          {
+            "width_fraction": 0.5,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "30843b7a29f4dc9e00865c2a9244b1def97813763d714a5ac134ecd05eea9ce2",
+                "task_id": 3,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 395136,
+                "new_parameters": 263936
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "9a03777fbfdbd71ca59361d8964b31b1a19b200d758b62dcdea3652b8712393d",
+                "task_id": 3,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 2173312,
+                "new_parameters": 1452288
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "a865c13d5c471d140c9ac7b8f0d9ef9945bc46b2a30b84c3f612295cf70a8070",
+                "task_id": 3,
+                "old_hidden_features": 192,
+                "new_hidden_features": 128,
+                "old_parameters": 297152,
+                "new_parameters": 198784
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 17.978610609054567,
+            "distillation_loss_first": 74.8041000366211,
+            "distillation_loss_last": 9.36662483215332,
+            "validation": {
+              "scaled_mean": 714.25,
+              "scaled_std": 170.2525697309735,
+              "raw_mean": 3571.25,
+              "raw_std": 851.2628486548675
+            },
+            "relative_raw_return_drop": 0.044641364320347765,
+            "passed": true,
+            "world_model_parameters": 39749849
+          },
+          {
+            "width_fraction": 0.25,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "c928ce0931ce28d4fb45c14ca8af379fd1076827332c2f12a44f27e236ab9b9c",
+                "task_id": 3,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 263936,
+                "new_parameters": 132736
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "6d627979a1e48ffa9c7c023769b76c933f4f132d71b9c15e38f13b62747e294d",
+                "task_id": 3,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 1452288,
+                "new_parameters": 731264
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "7d99097cc6b34ad637b531ea9180007139c6eba8ea7b86775a1c0f2feb37335c",
+                "task_id": 3,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 198784,
+                "new_parameters": 100416
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 30.18114643859863,
+            "distillation_loss_first": 88.91832733154297,
+            "distillation_loss_last": 19.098844528198242,
+            "validation": {
+              "scaled_mean": 508.75,
+              "scaled_std": 14.947825928876748,
+              "raw_mean": 2543.75,
+              "raw_std": 74.73912964438374
+            },
+            "relative_raw_return_drop": 0.319511787326534,
+            "passed": false,
+            "world_model_parameters": 38799257
+          },
+          {
+            "width_fraction": 0.125,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "23cf35a402da8f152f94f2c560a2febc8b5f35940d22d53dd2af0a02dc0cd515",
+                "task_id": 3,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 132736,
+                "new_parameters": 67136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "29cc5f199d03336069a2ca515042d70f82ce3c392a0483fa9146ecbc5759de57",
+                "task_id": 3,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 731264,
+                "new_parameters": 370752
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 32,
+                "selected_channel_count": 32,
+                "selected_channel_sha256": "123b9577987e2a2de90e9b524ca33bf8bb2ad65d17b71dfac36f355a34dc9d5f",
+                "task_id": 3,
+                "old_hidden_features": 64,
+                "new_hidden_features": 32,
+                "old_parameters": 100416,
+                "new_parameters": 51232
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 38.932621208190916,
+            "distillation_loss_first": 97.43328094482422,
+            "distillation_loss_last": 25.06406021118164,
+            "validation": {
+              "scaled_mean": 24.25,
+              "scaled_std": 0.9682458365518543,
+              "raw_mean": 121.25,
+              "raw_std": 4.841229182759271
+            },
+            "relative_raw_return_drop": 0.9675639525163017,
+            "passed": false,
+            "world_model_parameters": 38323961
+          }
+        ],
+        "evaluation_transitions_enter_replay": false,
+        "heldout_final_data_used": false
+      },
+      {
+        "completed_epochs": 450,
+        "completed_task_id": 4,
+        "optimizer_updates": 1000,
+        "selected_width_fraction": 0.5,
+        "selected_dense_fallback": false,
+        "dense_teacher_validation": {
+          "scaled_mean": 396.25,
+          "scaled_std": 69.81001002721601,
+          "raw_mean": 792.5,
+          "raw_std": 139.62002005443202
+        },
+        "selected_validation": {
+          "scaled_mean": 435.0,
+          "scaled_std": 113.63318177363512,
+          "raw_mean": 870.0,
+          "raw_std": 227.26636354727023
+        },
+        "selected_layout": {
+          "recurrent": [
+            512,
+            384,
+            512,
+            256,
+            256,
+            512
+          ],
+          "posterior": [
+            512,
+            384,
+            512,
+            256,
+            256,
+            512
+          ],
+          "prior": [
+            256,
+            192,
+            256,
+            128,
+            128,
+            256
+          ]
+        },
+        "world_model_parameters_before": 39749849,
+        "world_model_parameters_after": 37848665,
+        "candidates": [
+          {
+            "width_fraction": 0.75,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "e0050e0f1caaea9d54cb67f6156037c73f7285243088c17e1ba4717212b757e9",
+                "task_id": 4,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 526336,
+                "new_parameters": 395136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "1c6cf8990e63a54f48588dc14f120c365721e6682af489e1a21dddbe4bdf4f34",
+                "task_id": 4,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 2894336,
+                "new_parameters": 2173312
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 192,
+                "selected_channel_count": 192,
+                "selected_channel_sha256": "b0361304ca1772f2ea6ce4642714a3d574482e02eb811bb64a8829bf5c5e1aaf",
+                "task_id": 4,
+                "old_hidden_features": 256,
+                "new_hidden_features": 192,
+                "old_parameters": 395520,
+                "new_parameters": 297152
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 7.608175306320191,
+            "distillation_loss_first": 45.2548942565918,
+            "distillation_loss_last": 5.423285484313965,
+            "validation": {
+              "scaled_mean": 320.625,
+              "scaled_std": 55.1666509315184,
+              "raw_mean": 641.25,
+              "raw_std": 110.3333018630368
+            },
+            "relative_raw_return_drop": 0.19085173501577288,
+            "passed": false,
+            "world_model_parameters": 38799257
+          },
+          {
+            "width_fraction": 0.5,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "91d75cc28723c1f37534abe1188eb7f2c82eae5cc27747ab7dbc3a2d4f5475a9",
+                "task_id": 4,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 395136,
+                "new_parameters": 263936
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "c600f321b417f699c5eec7cb1d76e297b2999c8011aa755f277caf79e83d0480",
+                "task_id": 4,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 2173312,
+                "new_parameters": 1452288
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "807cd5b81b269a196ef5b14f4b78c1400d012bba87dc778cb76964269643c720",
+                "task_id": 4,
+                "old_hidden_features": 192,
+                "new_hidden_features": 128,
+                "old_parameters": 297152,
+                "new_parameters": 198784
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 13.290115747451782,
+            "distillation_loss_first": 62.453243255615234,
+            "distillation_loss_last": 7.6329827308654785,
+            "validation": {
+              "scaled_mean": 435.0,
+              "scaled_std": 113.63318177363512,
+              "raw_mean": 870.0,
+              "raw_std": 227.26636354727023
+            },
+            "relative_raw_return_drop": -0.09779179810725552,
+            "passed": true,
+            "world_model_parameters": 37848665
+          },
+          {
+            "width_fraction": 0.25,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "43f015c4dc4438c603c19aa5e08a95dd46e6b1dfb58dc9b354d58ed46ba6a2c7",
+                "task_id": 4,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 263936,
+                "new_parameters": 132736
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "e67676d09b3a3652822e31fd761b3013510ea2bc5470a1053bba490859386d0f",
+                "task_id": 4,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 1452288,
+                "new_parameters": 731264
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "bc8fff19b397588055579528cf9c8cacfb631f5173ceac3bddcb64c76918f60f",
+                "task_id": 4,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 198784,
+                "new_parameters": 100416
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 22.08257451248169,
+            "distillation_loss_first": 72.47537994384766,
+            "distillation_loss_last": 12.585529327392578,
+            "validation": {
+              "scaled_mean": 262.5,
+              "scaled_std": 79.25433742073679,
+              "raw_mean": 525.0,
+              "raw_std": 158.50867484147358
+            },
+            "relative_raw_return_drop": 0.33753943217665616,
+            "passed": false,
+            "world_model_parameters": 36898073
+          },
+          {
+            "width_fraction": 0.125,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "c6cd04db04b31a30782cda64a154de882bb7bee11742cb6c50372bfb5c5821ca",
+                "task_id": 4,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 132736,
+                "new_parameters": 67136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "e1632dbd892ee6bc88b71a1c8039b738830a330cfe37e957b193b0656ae7c399",
+                "task_id": 4,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 731264,
+                "new_parameters": 370752
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 32,
+                "selected_channel_count": 32,
+                "selected_channel_sha256": "ac9daa1e234b07cf9fb7299cc98bdfe6f6e01b9fa690585bc365762eb07391d7",
+                "task_id": 4,
+                "old_hidden_features": 64,
+                "new_hidden_features": 32,
+                "old_parameters": 100416,
+                "new_parameters": 51232
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 30.701163711547853,
+            "distillation_loss_first": 79.06275939941406,
+            "distillation_loss_last": 15.853325843811035,
+            "validation": {
+              "scaled_mean": 88.125,
+              "scaled_std": 25.792137852454186,
+              "raw_mean": 176.25,
+              "raw_std": 51.58427570490837
+            },
+            "relative_raw_return_drop": 0.777602523659306,
+            "passed": false,
+            "world_model_parameters": 36422777
+          }
+        ],
+        "evaluation_transitions_enter_replay": false,
+        "heldout_final_data_used": false
+      },
+      {
+        "completed_epochs": 540,
+        "completed_task_id": 5,
+        "optimizer_updates": 1000,
+        "selected_width_fraction": 1.0,
+        "selected_dense_fallback": true,
+        "dense_teacher_validation": {
+          "scaled_mean": 130.0,
+          "scaled_std": 55.79695332184366,
+          "raw_mean": 260.0,
+          "raw_std": 111.59390664368732
+        },
+        "selected_validation": {
+          "scaled_mean": 130.0,
+          "scaled_std": 55.79695332184366,
+          "raw_mean": 260.0,
+          "raw_std": 111.59390664368732
+        },
+        "selected_layout": {
+          "recurrent": [
+            512,
+            384,
+            512,
+            256,
+            256,
+            512
+          ],
+          "posterior": [
+            512,
+            384,
+            512,
+            256,
+            256,
+            512
+          ],
+          "prior": [
+            256,
+            192,
+            256,
+            128,
+            128,
+            256
+          ]
+        },
+        "world_model_parameters_before": 37848665,
+        "world_model_parameters_after": 37848665,
+        "candidates": [
+          {
+            "width_fraction": 0.75,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "899972e904f32b62085349ac86efd61ffdca972c2529765222cc69a6c0e4b5ed",
+                "task_id": 5,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 526336,
+                "new_parameters": 395136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 384,
+                "selected_channel_count": 384,
+                "selected_channel_sha256": "3111c6a6d98f0ba629b34f99df33ff7932e188ac57c09d1d0ae1558a9fd4dda8",
+                "task_id": 5,
+                "old_hidden_features": 512,
+                "new_hidden_features": 384,
+                "old_parameters": 2894336,
+                "new_parameters": 2173312
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 192,
+                "selected_channel_count": 192,
+                "selected_channel_sha256": "73e535f6b59fc3bcb27b16b0a887ef77db7284bb9d4131b62cee4a1322ce7e93",
+                "task_id": 5,
+                "old_hidden_features": 256,
+                "new_hidden_features": 192,
+                "old_parameters": 395520,
+                "new_parameters": 297152
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 14.879093086242676,
+            "distillation_loss_first": 77.08722686767578,
+            "distillation_loss_last": 9.979887962341309,
+            "validation": {
+              "scaled_mean": 108.4,
+              "scaled_std": 46.79038362740789,
+              "raw_mean": 216.8,
+              "raw_std": 93.58076725481578
+            },
+            "relative_raw_return_drop": 0.1661538461538461,
+            "passed": false,
+            "world_model_parameters": 36898073
+          },
+          {
+            "width_fraction": 0.5,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "fc0f5cc09226b6afe834b730b046889037a0da0da494bbee050bf51f92f1bbce",
+                "task_id": 5,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 395136,
+                "new_parameters": 263936
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 256,
+                "selected_channel_count": 256,
+                "selected_channel_sha256": "faba0d5b204f566c8d06d4757f7a4c8163f51e6cf39d71dc8eba5d4acfd69cf0",
+                "task_id": 5,
+                "old_hidden_features": 384,
+                "new_hidden_features": 256,
+                "old_parameters": 2173312,
+                "new_parameters": 1452288
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "2eb8ab709b179805b2d6e3d240e5fc03abefb36934afbc1b066f1100f6bcfd7d",
+                "task_id": 5,
+                "old_hidden_features": 192,
+                "new_hidden_features": 128,
+                "old_parameters": 297152,
+                "new_parameters": 198784
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 31.890463302612304,
+            "distillation_loss_first": 137.08543395996094,
+            "distillation_loss_last": 15.72139835357666,
+            "validation": {
+              "scaled_mean": 31.0,
+              "scaled_std": 31.299960063872287,
+              "raw_mean": 62.0,
+              "raw_std": 62.599920127744575
+            },
+            "relative_raw_return_drop": 0.7615384615384615,
+            "passed": false,
+            "world_model_parameters": 35947481
+          },
+          {
+            "width_fraction": 0.25,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "1ccbb2bfefb39111e76a2a0636a547a0fd6e659faa28429b3854f21da1e34fa9",
+                "task_id": 5,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 263936,
+                "new_parameters": 132736
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 128,
+                "selected_channel_count": 128,
+                "selected_channel_sha256": "532aed3da7cd84036dfa786316dc9402ee3f10deacece46944389f045b915a04",
+                "task_id": 5,
+                "old_hidden_features": 256,
+                "new_hidden_features": 128,
+                "old_parameters": 1452288,
+                "new_parameters": 731264
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "8f23529ee5da71e7ee3dcac1197202948bb171718c5d158edb42aca86477cf39",
+                "task_id": 5,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 198784,
+                "new_parameters": 100416
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 54.12275052642822,
+            "distillation_loss_first": 220.1402587890625,
+            "distillation_loss_last": 27.067167282104492,
+            "validation": {
+              "scaled_mean": 0.75,
+              "scaled_std": 1.3919410907075054,
+              "raw_mean": 1.5,
+              "raw_std": 2.7838821814150108
+            },
+            "relative_raw_return_drop": 0.9942307692307693,
+            "passed": false,
+            "world_model_parameters": 34996889
+          },
+          {
+            "width_fraction": 0.125,
+            "components": [
+              {
+                "component": "recurrent",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "513c5f2b969335146688723c371c7d8ebdc78e090824dadb53ecb2fae36aacfc",
+                "task_id": 5,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 132736,
+                "new_parameters": 67136
+              },
+              {
+                "component": "posterior",
+                "dense_hidden_features": 512,
+                "candidate_hidden_features": 64,
+                "selected_channel_count": 64,
+                "selected_channel_sha256": "ad414d17e40eeb707d956b2bdca63868972bded421bf762c2593e83eb0efa2e0",
+                "task_id": 5,
+                "old_hidden_features": 128,
+                "new_hidden_features": 64,
+                "old_parameters": 731264,
+                "new_parameters": 370752
+              },
+              {
+                "component": "prior",
+                "dense_hidden_features": 256,
+                "candidate_hidden_features": 32,
+                "selected_channel_count": 32,
+                "selected_channel_sha256": "8a600c120344ab8cd20e6d9fab2a600a589529f43df97b66c41c06bf8124f7a8",
+                "task_id": 5,
+                "old_hidden_features": 64,
+                "new_hidden_features": 32,
+                "old_parameters": 100416,
+                "new_parameters": 51232
+              }
+            ],
+            "optimizer_updates": 250,
+            "distillation_loss_mean": 67.37940644073487,
+            "distillation_loss_first": 280.94622802734375,
+            "distillation_loss_last": 33.20553207397461,
+            "validation": {
+              "scaled_mean": 0.0,
+              "scaled_std": 0.0,
+              "raw_mean": 0.0,
+              "raw_std": 0.0
+            },
+            "relative_raw_return_drop": 1.0,
+            "passed": false,
+            "world_model_parameters": 34521593
+          }
+        ],
+        "evaluation_transitions_enter_replay": false,
+        "heldout_final_data_used": false
+      }
+    ]
+  }
+}
