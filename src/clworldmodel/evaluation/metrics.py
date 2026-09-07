@@ -17,6 +17,27 @@ from typing import Any
 METRIC_SCHEMA_VERSION = "arrow-paper-v1"
 
 
+def task_id_trace_accuracy(traces: Sequence[Sequence[int]], labels: Sequence[int]) -> dict[str, Any]:
+    """Score the held route at every executed decision, including between checks.
+
+    Equal-episode mean is primary; micro accuracy weights long episodes more.
+    Labels are audit-only and must never be forwarded to the policy.
+    """
+    if not traces or len(traces) != len(labels) or any(not trace for trace in traces):
+        raise ValueError("Require aligned labels and nonempty complete-episode traces")
+    if any(type(k) is not int or k < 0 for k in labels) or any(
+        type(k) is not int or k < 0 for trace in traces for k in trace
+    ):
+        raise ValueError("Task IDs must be nonnegative integers")
+    counts = [sum(k == label for k in trace) for trace, label in zip(traces, labels)]
+    values = [correct / len(trace) for correct, trace in zip(counts, traces)]
+    return {"metric_schema_version": "task-id-execution-trace-v1", "episodes": len(traces),
+            "episode_accuracy": values, "episode_mean_accuracy": statistics.mean(values),
+            "decision_weighted_accuracy": sum(counts) / sum(map(len, traces)),
+            "initial_accuracy": sum(t[0] == y for t, y in zip(traces, labels)) / len(traces),
+            "final_accuracy": sum(t[-1] == y for t, y in zip(traces, labels)) / len(traces)}
+
+
 def paired_raw_return_summary(baseline: Sequence[float], candidate: Sequence[float]) -> dict[str, Any]:
     """Matched complete-episode returns; no normalization or seed inference."""
     if not baseline or len(baseline) != len(candidate):
