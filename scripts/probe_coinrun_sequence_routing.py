@@ -187,6 +187,8 @@ def collect(wm, actors, routes, cfg: ProbeConfig, task_names: tuple[str, ...], o
                         "valid_nonterminal_transitions": len(actions), "ended": done,
                         "raw_rewards": rewards, "partial_reward_sum_not_episode_return": sum(rewards),
                         "initial_policy_route": int(router.routes[0]) if router.routes is not None else None,
+                        "initial_policy_reconstruction_mse": (router.events[0]["reconstruction_mse"]
+                                                              if router.events else None),
                     })
                 finally:
                     env.close()
@@ -219,7 +221,7 @@ def shuffle_actions(actions: np.ndarray, valid: np.ndarray, seed: int) -> np.nda
 
 @torch.inference_mode()
 def score_history(wm, observations: torch.Tensor, actions: torch.Tensor, routes: tuple[int, ...],
-                  *, dummy_previous_action: int = 4):
+                  *, dummy_previous_action: int = 4, reconstruction_only: bool = False):
     """Inputs [B,T,C,H,W] and [B,T-1,A]; outputs [B,T,K]. No task labels.
 
     Posterior-mode filtering is candidate-private. Prior-mode predictions are
@@ -243,8 +245,9 @@ def score_history(wm, observations: torch.Tensor, actions: torch.Tensor, routes:
     for column, route in enumerate(routes):
         z, h = wm.rssm.initial_state(batch)
         for t in range(times):
-            if t == 0:
-                q, z, h = wm.rssm(z, dummy, h, observations[:, t], reset,
+            if t == 0 or reconstruction_only:
+                q, z, h = wm.rssm(z, dummy if t == 0 else actions[:, t - 1], h,
+                                  observations[:, t], reset if t == 0 else reset * 0,
                                   task_id=route, stochastic=False)
             else:
                 # Candidate state comes only from this candidate's earlier posteriors.
@@ -269,7 +272,7 @@ def score_history(wm, observations: torch.Tensor, actions: torch.Tensor, routes:
     return scores
 
 
-def score_dataset(wm, xs, actions, routes, cfg):
+def score_dataset(wm, xs, actions, routes, cfg, *, reconstruction_only: bool = False):
     from generate_trajectory import _autocast_context
     device = next(wm.parameters()).device
     parts = {key: [] for key in ("reconstruction", "prediction", "posterior_prior_kl")}
@@ -279,7 +282,7 @@ def score_dataset(wm, xs, actions, routes, cfg):
         x = torch.from_numpy(xs[start:start + cfg.batch_size]).permute(0, 1, 4, 2, 3).to(device).float() / 255
         a = torch.nn.functional.one_hot(torch.from_numpy(actions[start:start + cfg.batch_size]).to(device), wm.a_dim).float()
         with _autocast_context(device, wm.compute_dtype):
-            result = score_history(wm, x, a, routes)
+            result = score_history(wm, x, a, routes, reconstruction_only=reconstruction_only)
         for key, values in result.items(): parts[key].append(values.cpu().numpy())
     if device.type == "cuda": torch.cuda.synchronize(device)
     return {k: np.concatenate(v) for k, v in parts.items()}, time.perf_counter() - started

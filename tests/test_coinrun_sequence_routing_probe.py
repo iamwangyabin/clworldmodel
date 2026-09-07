@@ -101,6 +101,10 @@ class ProbeTests(unittest.TestCase):
         self.assertTrue(bool((scores["posterior_prior_kl"][0, 1:, 1] > 0).all()))
         changed = probe.score_history(model, x, a.flip(-1), (0, 1), dummy_previous_action=0)
         torch.testing.assert_close(changed["prediction"][0, 1:, 0], torch.ones(3))
+        reconstruction_only = probe.score_history(model, x, a, (0, 1), dummy_previous_action=0,
+                                                  reconstruction_only=True)
+        torch.testing.assert_close(reconstruction_only["reconstruction"], scores["reconstruction"], rtol=0, atol=0)
+        self.assertTrue(all(not c[1] for c in rssm.calls[-8:]))
 
     def test_terminal_autoreset_excluded_and_shuffle_keeps_valid_action_multiset(self):
         observations, actions, rewards = [np.array([7])], [], []
