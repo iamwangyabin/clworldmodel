@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import math
 import os
@@ -29,6 +30,7 @@ from run_dv3_fifo_atari import (
 
 
 METHOD = "Bounded-Dream-Rehearsal-v1-Atari"
+ARROW_MATCHED_METHOD = "Dream-Rehearsal-ArrowMatched-v1-Atari"
 DREAM_REHEARSAL_PAPER = "https://arxiv.org/abs/2607.19749"
 DREAM_REHEARSAL_REPOSITORY = "https://github.com/gurpnijjer/dream-rehearsal"
 DREAM_REHEARSAL_COMMIT = "7680778f798be3a27a17c320cc875b573c45f0e1"
@@ -40,6 +42,8 @@ DEFAULT_HORIZON = 15
 DEFAULT_TOP_FRACTION = 0.25
 DEFAULT_REALIZED_THRESHOLD = 0.3
 DEFAULT_REALIZED_BONUS = 10.0
+REFERENCE_BATCH_SEQUENCES = 16
+REFERENCE_CONTEXT_STEPS = 64
 
 
 def _positive_int(value: str) -> int:
@@ -49,23 +53,42 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
-def _parser() -> argparse.ArgumentParser:
+def _parser(*, arrow_matched: bool = False) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Launch actor-only graded Dream Rehearsal with a bounded, "
+            "Launch actor-only graded Dream Rehearsal with ARROW-matched base "
+            "budgets"
+            if arrow_matched
+            else "Launch actor-only graded Dream Rehearsal with a bounded, "
             "ARROW-capacity-matched trajectory reservoir"
         )
     )
     parser.add_argument("--seed", type=int, choices=range(5), default=0)
     parser.add_argument("--curriculum", choices=CURRICULUM_DIRS, default="original")
-    parser.add_argument(
-        "--replay-capacity-transitions",
-        type=_positive_int,
-        help=(
-            "Fixed replay sample capacity. The default is 524,288 transitions "
-            "(1,024 x 512), exactly matching total ARROW-50 capacity."
-        ),
-    )
+    if arrow_matched:
+        parser.add_argument(
+            "--history",
+            choices=("full", "bounded"),
+            required=True,
+            help=(
+                "Retain every trajectory in the declared run, or use ARROW's "
+                "524,288-transition capacity."
+            ),
+        )
+        parser.add_argument(
+            "--smoke",
+            action="store_true",
+            help="Two-task target-GPU wiring smoke; not a comparable result",
+        )
+    else:
+        parser.add_argument(
+            "--replay-capacity-transitions",
+            type=_positive_int,
+            help=(
+                "Fixed replay sample capacity. The default is 524,288 transitions "
+                "(1,024 x 512), exactly matching total ARROW-50 capacity."
+            ),
+        )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -89,7 +112,15 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolved_config(source: dict, *, replay_slots: int) -> dict:
+def _resolved_config(
+    source: dict,
+    *,
+    replay_slots: int,
+    batch_sequences: int = DEFAULT_BATCH_SEQUENCES,
+    context_steps: int = DEFAULT_CONTEXT_STEPS,
+    updates_per_prior_task: int = DEFAULT_UPDATES_PER_PRIOR_TASK,
+    bootstrap_last_imagined_feature: bool = False,
+) -> dict:
     config = copy.deepcopy(source)
     config.update(
         {
@@ -104,18 +135,37 @@ def _resolved_config(source: dict, *, replay_slots: int) -> dict:
             "dream_rehearsal_interval_agent_decisions": (
                 DEFAULT_INTERVAL_AGENT_DECISIONS
             ),
-            "dream_rehearsal_updates_per_prior_task": (
-                DEFAULT_UPDATES_PER_PRIOR_TASK
-            ),
-            "dream_rehearsal_batch_sequences": DEFAULT_BATCH_SEQUENCES,
-            "dream_rehearsal_context_steps": DEFAULT_CONTEXT_STEPS,
+            "dream_rehearsal_updates_per_prior_task": updates_per_prior_task,
+            "dream_rehearsal_batch_sequences": batch_sequences,
+            "dream_rehearsal_context_steps": context_steps,
             "dream_rehearsal_horizon": DEFAULT_HORIZON,
             "dream_rehearsal_top_fraction": DEFAULT_TOP_FRACTION,
             "dream_rehearsal_realized_threshold": DEFAULT_REALIZED_THRESHOLD,
             "dream_rehearsal_realized_bonus": DEFAULT_REALIZED_BONUS,
             "dream_rehearsal_grad_clip": 100.0,
+            "dream_rehearsal_bootstrap_last_imagined_feature": (
+                bootstrap_last_imagined_feature
+            ),
         }
     )
+    return config
+
+
+def _smoke_source_config(source: dict) -> dict:
+    """Keep the real model/path while crossing one task boundary cheaply."""
+
+    config = copy.deepcopy(source)
+    config.update(
+        {
+            "epochs": 2,
+            "steps_per_batch": 1,
+            "ac_train_steps": 1,
+            "gen_seq_len": 512,
+            "data_n": 4,
+        }
+    )
+    config["esc"]["env_configs"] = config["esc"]["env_configs"][:2]
+    config["esc"]["kwargs"]["swap_sched"] = 1
     return config
 
 
@@ -235,8 +285,8 @@ def _cuda_info(python: Path, env: dict[str, str]) -> dict:
     return json.loads(probe.stdout.strip())
 
 
-def main() -> int:
-    parser = _parser()
+def main(*, arrow_matched: bool = False) -> int:
+    parser = _parser(arrow_matched=arrow_matched)
     args = parser.parse_args()
     project_git = (
         git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
@@ -245,27 +295,62 @@ def main() -> int:
     source_config = _verify_control_config(
         source_config_path, args.curriculum, args.seed
     )
+    if arrow_matched and args.smoke:
+        source_config = _smoke_source_config(source_config)
     sequence_length = int(source_config["data_t"])
     matched_capacity = int(source_config["sac_dv3_data_n_max"]) * sequence_length
-    capacity = args.replay_capacity_transitions or matched_capacity
+    collected_capacity = (
+        int(source_config["epochs"])
+        * int(source_config["data_n"])
+        * sequence_length
+    )
+    if arrow_matched:
+        capacity = (
+            collected_capacity
+            if args.history == "full"
+            else min(matched_capacity, collected_capacity)
+        )
+    else:
+        capacity = args.replay_capacity_transitions or matched_capacity
     if capacity % sequence_length:
         parser.error(
             "--replay-capacity-transitions must be divisible by the fixed "
             f"sequence length ({sequence_length})"
         )
     replay_slots = capacity // sequence_length
-    config = _resolved_config(source_config, replay_slots=replay_slots)
+    config = _resolved_config(
+        source_config,
+        replay_slots=replay_slots,
+        batch_sequences=(
+            REFERENCE_BATCH_SEQUENCES
+            if arrow_matched
+            else DEFAULT_BATCH_SEQUENCES
+        ),
+        context_steps=(
+            REFERENCE_CONTEXT_STEPS if arrow_matched else DEFAULT_CONTEXT_STEPS
+        ),
+        updates_per_prior_task=(
+            1
+            if arrow_matched and args.smoke
+            else DEFAULT_UPDATES_PER_PRIOR_TASK
+        ),
+        bootstrap_last_imagined_feature=arrow_matched,
+    )
 
     capacity_suffix = "" if capacity == matched_capacity else f"_m{capacity}"
+    default_run_name = (
+        f"dream_rehearsal_arrow_matched_{args.history}_{args.curriculum}_s{args.seed}"
+        f"{'_smoke' if args.smoke else '_pilot'}"
+        if arrow_matched
+        else f"bounded_dream_rehearsal_{args.curriculum}_s{args.seed}"
+        f"{capacity_suffix}_analysis"
+    )
     output_dir = (
         args.output_dir.expanduser().resolve()
         if args.output_dir is not None
         else ROOT
         / "runs"
-        / (
-            f"bounded_dream_rehearsal_{args.curriculum}_s{args.seed}"
-            f"{capacity_suffix}_analysis"
-        )
+        / default_run_name
     )
     config_path = output_dir / "resolved_training_config.json"
     snapshot_dir = output_dir / "analysis_snapshots"
@@ -303,15 +388,23 @@ def main() -> int:
     base_actor_updates = int(config["epochs"]) * int(config["ac_train_steps"])
     projected_rehearsal = _project_rehearsal_compute(config)
     swap_sched = int(config["esc"]["kwargs"]["swap_sched"])
-    role = (
-        "bounded-baseline-capacity-matched-to-arrow-50"
-        if capacity == matched_capacity
-        else "bounded-storage-capacity-ablation"
-    )
+    if arrow_matched:
+        role = "gpu-smoke" if args.smoke else "arrow-matched-baseline"
+        method = ARROW_MATCHED_METHOD
+        protocol = ARROW_MATCHED_METHOD
+    else:
+        role = (
+            "bounded-baseline-capacity-matched-to-arrow-50"
+            if capacity == matched_capacity
+            else "bounded-storage-capacity-ablation"
+        )
+        method = METHOD
+        protocol = METHOD
     launch = {
-        "method": METHOD,
+        "method": method,
         "role": role,
-        "protocol": "Bounded-Dream-Rehearsal-v1-Atari",
+        "protocol": protocol,
+        "classification": "smoke" if arrow_matched and args.smoke else "pilot",
         "started_at_utc": None,
         "project_git": project_git,
         "upstream_arrow_commit": UPSTREAM_COMMIT,
@@ -340,6 +433,7 @@ def main() -> int:
                 "dream_rehearsal_realized_threshold",
                 "dream_rehearsal_realized_bonus",
                 "dream_rehearsal_grad_clip",
+                "dream_rehearsal_bootstrap_last_imagined_feature",
             )
         },
         "project_pythonpath_prepend": project_pythonpath,
@@ -357,12 +451,26 @@ def main() -> int:
             "world_model_updates": int(config["epochs"])
             * int(config["steps_per_batch"]),
             "base_actor_critic_updates": base_actor_updates,
+            "base_actor_updates": base_actor_updates,
+            "base_critic_updates": base_actor_updates,
             "actor_updates_total_including_rehearsal": (
                 base_actor_updates
                 + projected_rehearsal["extra_actor_only_updates"]
             ),
             "task_boundary_epochs": list(
                 range(swap_sched - 1, int(config["epochs"]), swap_sched)
+            ),
+            "periodic_evaluation_checkpoints": len(
+                range(0, int(config["epochs"]), 10)
+            ),
+            "evaluation_tasks_per_checkpoint": len(
+                config["esc"]["env_configs"]
+            ),
+            "evaluation_rollouts_per_task": 16,
+            "requested_periodic_evaluation_episodes": (
+                len(range(0, int(config["epochs"]), 10))
+                * len(config["esc"]["env_configs"])
+                * 16
             ),
         },
         "bounded_replay": {
@@ -379,10 +487,17 @@ def main() -> int:
             "task_id_exposed_to_world_model_or_actor": False,
             "policy": "single_shared_actor",
             "grading": "realized_first_reward_continuation_and_critic_bootstrap",
+            "bootstrap_feature": (
+                "last_imagined_pre_transition_feature"
+                if arrow_matched
+                else "post_horizon_feature"
+            ),
             "selection": "top_25_percent_by_score",
             "optimization": "actor_only_behavior_cloning_of_sampled_dream_actions",
             "interval_agent_decisions": DEFAULT_INTERVAL_AGENT_DECISIONS,
-            "updates_per_prior_task_per_interval": DEFAULT_UPDATES_PER_PRIOR_TASK,
+            "updates_per_prior_task_per_interval": int(
+                config["dream_rehearsal_updates_per_prior_task"]
+            ),
             "due_updates_batched_at_collection_epoch_boundary": True,
             **projected_rehearsal,
         },
@@ -407,6 +522,59 @@ def main() -> int:
         "environment": thread_env,
         "command": command,
     }
+    if arrow_matched:
+        common_config = copy.deepcopy(config)
+        common_config.pop("sac_dv3_data_n_max")
+        common_hash = hashlib.sha256(
+            json.dumps(common_config, sort_keys=True).encode()
+        ).hexdigest()
+        launch.pop("bounded_replay")
+        launch["replay"] = {
+            **_storage_budget(config),
+            "history_arm": args.history,
+            "matched_arrow_50_transition_capacity": matched_capacity,
+            "capacity_matches_arrow_50": (
+                not args.smoke and capacity == matched_capacity
+            ),
+            "retains_all_declared_training_history": (
+                capacity == collected_capacity
+            ),
+            "eviction_possible": capacity < collected_capacity,
+            "ordinary_world_model_and_actor_critic_sampling": (
+                "shared_retained_history"
+            ),
+            "separate_full_history_backup": False,
+            "task_specific_frozen_libraries": False,
+        }
+        launch["memory_comparison_contract"] = {
+            "arm": args.history,
+            "only_arm_specific_resolved_config_key": "sac_dv3_data_n_max",
+            "shared_algorithm_and_schedule_sha256": common_hash,
+            "full_history_capacity_equals_declared_collection": True,
+        }
+        launch["declared_deviations_from_reference_artifact"] = [
+            "Atari and the ARROW DreamerV3 stack replace the paper artifact's MiniGrid NM512 stack.",
+            "The fixed historical ARROW 541-epoch schedule includes its final task-0 revisit.",
+            "Due 2,000-decision rehearsal events are batched at the next 16,384-decision collection boundary while preserving the exact update count.",
+            "The bounded arm replaces full history by one ARROW-capacity random-key reservoir; the full arm has finite capacity equal to all declared collection.",
+        ]
+        if args.smoke:
+            launch["declared_deviations_from_reference_artifact"].insert(
+                0,
+                "This two-task smoke shortens collection and optimizer counts and is not a comparable result.",
+            )
+        launch["comparison_contract"].update(
+            {
+                "agent_decisions_match_arrow": not args.smoke,
+                "raw_environment_frames_match_arrow": not args.smoke,
+                "base_world_model_updates_match_arrow": not args.smoke,
+                "base_actor_critic_updates_match_arrow": not args.smoke,
+                "periodic_evaluation_schedule_matches_arrow": not args.smoke,
+                "only_memory_capacity_differs_between_pair_arms": True,
+                "dream_rehearsal_actor_only_compute_reported_separately": True,
+                "total_optimizer_compute_matches_arrow": False,
+            }
+        )
     print(json.dumps(launch, indent=2))
     rendered_env = [f"{key}={value}" for key, value in thread_env.items()]
     print(f"command: {shlex.join([*rendered_env, *command])}")

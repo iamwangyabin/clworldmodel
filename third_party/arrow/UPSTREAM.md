@@ -668,6 +668,22 @@ documented here, covered by focused parity tests, and followed by regenerating
     exact storage/compute accounting, deviations, launcher, and focused tests
     are documented outside this vendor directory.
 
+62. Add the separately named `Dream-Rehearsal-ArrowMatched-v1-Atari` profile.
+    It reuses the same DreamerV3 trainer, 541-epoch collection schedule, base
+    world-model/Actor-Critic update counts, and periodic evaluation path as the
+    ARROW/DV3 controls. Its full and bounded arms differ only in a finite
+    all-history capacity of 17,312 trajectories versus ARROW's 1,024-trajectory
+    capacity. Both ordinary training and rehearsal sample one shared retained
+    history. The profile corrects the historical smoke layout to the inspected
+    artifact's normal 16-by-64 start-state batch and optionally bootstraps
+    grading from its last imagined pre-transition feature. The old bounded-v1
+    default retains its recorded post-horizon behavior. Config/runtime and
+    launcher artifacts record the bootstrap choice and report Dream
+    Rehearsal's additional actor-only compute separately; total compute is not
+    claimed to match ARROW. Focused tests cover old-default isolation, the
+    bootstrap choice, exact ARROW base budgets, memory-only arm difference, and
+    the two-task target-GPU smoke contract.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from
