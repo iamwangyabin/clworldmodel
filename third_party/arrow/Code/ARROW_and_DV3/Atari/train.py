@@ -816,6 +816,49 @@ def _apply_evolving_checkpoint_retention(
     return artifact
 
 
+def _validate_d_autoroute_continuation(path: Path, payload, config: Config) -> None:
+    """Accept only completed post-compression AWM-AutoRoute acquisition boundaries.
+
+    Pre-consolidation weights cannot skip pending consolidation/compression.
+    Post-compression checkpoints intentionally retire every private WM optimizer;
+    the next task constructs its optimizer on the restored compact topology.
+    """
+    if config.continual_method != (
+        "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"
+    ) or config.data_parallel_world_size != 1:
+        raise ValueError("Boundary continuation currently supports single-GPU AWM-AutoRoute only")
+    schedule = payload["schedule"]
+    task_id = int(schedule["current_task_id"])
+    durations = _sequential_task_durations(config)
+    if not 0 <= task_id < len(durations):
+        raise ValueError("Continuation checkpoint task is outside the acquisition schedule")
+    completed = sum(durations[:task_id + 1])
+    if (path.name != f"task_{task_id:02d}_post_consolidation.pt"
+            or int(schedule["completed_epochs"]) != completed
+            or int(schedule["epoch"]) != completed - 1
+            or int(schedule["environment_step"]) != completed
+            or not 0 < completed < config.epochs):
+        raise ValueError("Continuation requires a post-consolidation boundary with pending epochs")
+    optimizers = payload["optimizers"]
+    if optimizers["private_by_task"] or optimizers["route_by_task"]:
+        raise ValueError("Post-compression private world-model optimizers must be retired")
+    bank_tasks = optimizers["actor_critic_bank"]["tasks"]
+    if sorted(map(int, bank_tasks)) != list(range(task_id + 1)):
+        raise ValueError("Continuation private actor bank does not match acquired tasks")
+    counters = payload["counters"]
+    expected_frames = completed * config.n_sync * config.gen_seq_len * config.env_repeat
+    if (int(counters["actor_critic_updates"]) != completed * config.ac_train_steps
+            or int(counters["raw_environment_frames"]) != expected_frames
+            or int(counters["world_model_updates"]) != (completed * config.steps_per_batch
+                + (task_id + 1) * (config.boundary_consolidation_steps
+                    + len(config.adaptive_compression_width_fractions) * config.adaptive_compression_steps_per_candidate))
+            or int(counters.get("adaptive_behavior_compression_updates", 0)) != 0):
+        raise ValueError("Continuation counters do not match the saved protocol boundary")
+    cuda_rng = payload["rng"]["torch_cuda"]
+    if cuda_rng is not None and len(cuda_rng) != torch.cuda.device_count():
+        raise ValueError("Continuation must expose the same number of CUDA RNG streams")
+
+
 def _restore_evolving_resumable_checkpoint(
     path: Path,
     *,
@@ -835,6 +878,7 @@ def _restore_evolving_resumable_checkpoint(
     collection_environment_seed_rng: np.random.Generator,
     validation_environment_seed_rng: np.random.Generator,
     final_environment_seed_rng: np.random.Generator,
+    require_post_boundary: bool = False,
 ) -> dict[str, Any]:
     """Restore a preconstructed Evolving-Core training topology exactly."""
 
@@ -849,7 +893,7 @@ def _restore_evolving_resumable_checkpoint(
         raise ValueError("Evolving-Core checkpoint checksum does not match")
     payload = torch.load(
         path,
-        map_location=next(wm.parameters()).device,
+        map_location="cpu",
         weights_only=False,
     )
     if not isinstance(payload, Mapping):
@@ -877,6 +921,8 @@ def _restore_evolving_resumable_checkpoint(
                 checkpoint_config.setdefault(name, default)
     if checkpoint_config != config.to_dict():
         raise ValueError("Resolved config changed across Evolving-Core resume")
+    if require_post_boundary:
+        _validate_d_autoroute_continuation(path, payload, config)
     if getattr(config, "uses_reconstruction_task_inference", False):
         routing = payload.get("inference_routing", {})
         completed_id = int(payload["schedule"]["current_task_id"])
@@ -2864,6 +2910,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Evaluate the final frozen policy after all configured training epochs.",
     )
+    parser.add_argument("--resume-evolving-checkpoint", type=Path)
     args = parser.parse_args()
 
     save_nets = False
@@ -3410,6 +3457,52 @@ if __name__ == "__main__":
         else (0)
     )  # gradient updates so far
     boundary_teacher: Optional[WorldModel] = None
+
+    if args.resume_evolving_checkpoint is not None:
+        if (distributed_context.enabled or actor_critic_bank is None
+                or evolving_shared_optimizer is None):
+            raise ValueError("Continuation requires single-GPU AWM-AutoRoute with private actors")
+        boundary_teacher = copy.deepcopy(wm).eval()
+        restored = _restore_evolving_resumable_checkpoint(
+            args.resume_evolving_checkpoint,
+            config=config, wm=wm, boundary_teacher=boundary_teacher,
+            shared_optimizer=evolving_shared_optimizer,
+            private_optimizers=evolving_private_optimizers,
+            route_optimizers=evolving_route_optimizers,
+            actor_critic_bank=actor_critic_bank,
+            actor_critic_factory=build_task_actor_critic,
+            replay_buffer=replay, environment_schedule=envs,
+            task_update_rng=task_update_rng,
+            collection_environment_seed_rng=collection_environment_seed_rng,
+            validation_environment_seed_rng=validation_environment_seed_rng,
+            final_environment_seed_rng=final_environment_seed_rng,
+            require_post_boundary=True,
+        )
+        boundary_teacher.requires_grad_(False)  # Loading may rebuild compact modules.
+        training_start_epoch = restored["completed_epochs"]
+        total_env_steps = restored["raw_environment_frames"]
+        total_agent_decisions = total_env_steps // config.env_repeat
+        global_step = restored["world_model_updates"]
+        aco = actor_critic_bank.get(restored["current_task_id"])
+        encountered_replay_task_ids = set(replay.available_task_ids())
+        _write_json_atomically(log_dir / "model_parameter_accounting.json",
+                               _world_model_parameter_accounting(wm))
+        _write_json_atomically(log_dir / "replay_mmap_storage_accounting.json",
+                               _mapped_replay_storage_accounting(authoritative_replay))
+        _write_json_atomically(log_dir / "resume_restored.json", {
+            "schema_version": 1, "artifact_kind": "d_autoroute_boundary_continuation",
+            "source_checkpoint": str(args.resume_evolving_checkpoint.resolve()),
+            "source_checkpoint_sha256": _sha256(args.resume_evolving_checkpoint),
+            "project_git_commit": args.project_git_commit,
+            **restored,
+            "remaining_epochs": config.epochs - training_start_epoch,
+            "replay_task_ids": sorted(encountered_replay_task_ids),
+            "adaptive_compression_layout": wm.rssm.adaptive_compression_layout(),
+            "environment_resume": "fresh resets at the saved boundary, not mid-episode",
+            "optimizer_replay_rng_restored": True,
+        })
+        print(f"[boundary-resume] completed_epochs={training_start_epoch} "
+              f"world_model_updates={global_step} remaining_epochs={config.epochs - training_start_epoch}")
 
     for epoch in range(training_start_epoch, config.epochs):
         print("Starting Epoch ", epoch)

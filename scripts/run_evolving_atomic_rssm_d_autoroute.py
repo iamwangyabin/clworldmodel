@@ -34,6 +34,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, choices=range(len(SEEDS)), default=0)
     parser.add_argument("--classification", choices=("pilot",), default="pilot")
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--resume-from", type=Path)
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
@@ -58,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         "--python", resolved(args.python),
         "--cpu-threads", str(args.cpu_threads),
     ]
-    for name in ("output_dir", "replay_mmap_root"):
+    for name in ("output_dir", "replay_mmap_root", "resume_from"):
         value = getattr(args, name)
         if value is not None:
             command.extend(("--" + name.replace("_", "-"), resolved(value)))

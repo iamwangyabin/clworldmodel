@@ -806,6 +806,24 @@ complete by this change. See Decision 0058 for the validation scope.
     they require recorded source revisions, not compatibility execution.
     See Decision 0062. Upstream pin and MIT notices remain unchanged.
 
+67. On 2026-09-08, repair AWM-AutoRoute's first compact/dense task boundary:
+    native RSSM outputs can differ in dtype under BF16 autocast. Assemble the
+    routed policy batch using dtype promotion, preserving each expert's values
+    rather than choosing the first route's dtype or forcing all networks to a
+    different precision. Homogeneous batches, router scores, task eligibility,
+    reset semantics and training budgets are unchanged. A regression exercises
+    both route/dtype orders and recurrent steps. Restore the retained method's
+    post-boundary continuation plumbing using the historical project-owned
+    recovery helpers, now rejecting retired first-frame configs. Validate full
+    counters, retired private-optimizer ownership and acquired actor IDs before
+    restoring; deserialize checkpoint tensors on CPU and let model/optimizer/
+    replay loaders place owned state. The opt-in launcher preserves the failed
+    suffix and records inherited result provenance in a new attempt. No retired
+    algorithm is reinstated. Tests cover lineage and checkpoint round trips;
+    the target recovery smoke compares all model, optimizer, replay and RNG
+    state and exercises mixed compact/dense BF16 inference without a simulator.
+    See the two-seed 2026-09-08 experiment record for the failure and validation.
+
 ## Method retirement in progress — 2026-09-06
 
 User-authorized retirement removes historical representation/KARROW/task-bank,

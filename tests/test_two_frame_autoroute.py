@@ -73,6 +73,33 @@ class TwoFrameRouterTests(unittest.TestCase):
 
 @unittest.skipUnless(vendor_available, "requires pinned vendor imports")
 class TwoFrameAdapterTests(unittest.TestCase):
+    def test_policy_batch_promotes_mixed_route_output_dtypes(self):
+        from test_reconstruction_router import fixed_models
+        for low_precision_route in (0, 1):
+            wm, ac = fixed_models()
+            original = wm.rssm.forward
+
+            def mixed_forward(*args, **kwargs):
+                q, z, h = original(*args, **kwargs)
+                dtype = (torch.bfloat16 if kwargs["task_id"] == low_precision_route
+                         else torch.float32)
+                return q, z.to(dtype), h.to(dtype)
+
+            router = TwoFrameReconstructionRouter((0, 1))
+            z, h = wm.rssm.initial_state(2)
+            obs = torch.stack((torch.zeros(3, 2, 2), torch.ones(3, 2, 2)))
+            with mock.patch.object(wm.rssm, "forward", side_effect=mixed_forward):
+                for t in range(3):
+                    z, h, action = trajectory._routed_policy_step(
+                        wm, ac, router, obs, z, h,
+                        torch.nn.functional.one_hot(torch.zeros(2, dtype=torch.long), 18),
+                        torch.full((2, 1), float(t == 0)), stochastic=False,
+                    )
+                    self.assertEqual(z.dtype, torch.float32)
+                    self.assertEqual(h.dtype, torch.float32)
+                    self.assertEqual(action.tolist(), [0, 1])
+                    torch.testing.assert_close(h[:, 1], torch.full((2,), float(t + 1)))
+
     def test_historical_mode_rejected_before_environment_creation(self):
         for mode in ("first_frame_reconstruction", "unknown"):
             with mock.patch.object(trajectory, "AsyncVectorEnv") as environment:

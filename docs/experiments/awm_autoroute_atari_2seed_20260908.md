@@ -84,8 +84,7 @@ available RAM/disk and task-boundary artifacts, not just a stale running flag.
 Do not treat slow evaluation/compression as a hang or restart based on SSH loss.
 Any recovery must validate complete model/optimizer/replay/RNG/schedule state
 and record a new attempt and discarded-work accounting. Boundary checkpoints
-exist, but the current standalone launcher has no resume CLI: monitor recovery
-must not pretend that restarting from weights is equivalent continuation.
+are required for continuation; restarting from weights alone is not equivalent.
 Do not modify old jobs, silently change the protocol, repeatedly retry an
 unexplained native crash, or delete prior experiment artifacts to make space.
 
@@ -93,3 +92,42 @@ Normal unchanged progress should remain quiet; report new failures, meaningful
 boundaries, completion or required user action. Runtime evidence and current
 state are stored in the ignored campaign directory rather than this prelaunch
 record. No performance result is asserted here.
+
+## First compact/dense boundary failure and continuation
+
+Seed 0 at `021563eb97ef1fe38e3450e5d76d1b03d7dfdf33` completed task 0,
+including consolidation and compression to width fraction 0.5. Its durable
+post-boundary checkpoint contains 90 completed epochs, 92,000 world-model
+updates, 72,000 AC updates and 5,898,240 protocol-counted raw frames. During
+epoch 90 evaluation, a batch containing compact and dense routes failed at
+indexed hidden-state assembly: BF16 destination versus FP32 source. This is
+a heterogeneous-output assembly error, not evidence of insufficient BF16
+precision or a hardware fault. The failed epoch's collection/evaluation work
+is retained as overhead; it is not a completed update epoch.
+
+The repair promotes the batch buffer to the common output dtype, retaining
+each route's values independently of route ordering. A regression fails on
+the original implementation. Restore only the existing retained-method
+post-boundary continuation mechanism, adapted to strict v3 configs, not the
+retired router or any KAN algorithm. New recovery attempts must validate the
+target GPU with the immutable real boundary checkpoint, including full
+model/target/optimizer/Replay/RNG/scheduler restoration and mixed-dtype policy
+steps, before continuing:
+
+```sh
+"$PYTHON" scripts/smoke_d_autoroute_resume.py \
+  --checkpoint "$BOUNDARY_CHECKPOINT" --output-dir "$NEW_SMOKE_DIRECTORY"
+"$PYTHON" -u scripts/run_evolving_atomic_rssm_d_autoroute.py \
+  --seed "$SEED_INDEX" --cpu-threads 8 --classification pilot \
+  --python "$PYTHON" --output-dir "$NEW_RUN_DIRECTORY" \
+  --resume-from "$BOUNDARY_CHECKPOINT"
+```
+
+The source must be a confirmed failed attempt, the config/seed/protocol must
+match exactly, and both checkpoint SHA256 and post-compression ownership and
+counters must validate. Inherited logs and routing/boundary records retain their
+old commit provenance; failed suffixes remain in the parent. This is boundary
+continuation with fresh environment resets, not bitwise mid-episode recovery.
+Never hot-edit the still-running other seed's source tree. Runtime smoke and
+deployment outcomes belong in the ignored campaign manifest, not an advance
+claim that a repaired run has completed.

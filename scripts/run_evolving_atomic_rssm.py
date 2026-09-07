@@ -394,6 +394,7 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--resume-from", type=Path)
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
@@ -975,6 +976,11 @@ def main(argv: list[str] | None = None) -> int:
         task_snapshot_dir=task_snapshot_dir,
         project_commit=str(project_git["commit"]),
     )
+    resume_lineage = None
+    if args.resume_from is not None:
+        from d_autoroute_resume import inspect_resume
+        resume_lineage = inspect_resume(args.resume_from, config, protocol)
+        command.extend(("--resume-evolving-checkpoint", resume_lineage["source_checkpoint"]))
     env = os.environ.copy()
     thread_env = {key: str(args.cpu_threads) for key in THREAD_ENV_KEYS}
     env.update(thread_env)
@@ -1156,6 +1162,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "checkpoint_retention": config["evolving_checkpoint_retention"],
         "command": command,
+        "resume_lineage": resume_lineage,
     }
     print(json.dumps(launch, indent=2))
     rendered_env = [f"{key}={value}" for key, value in thread_env.items()]
@@ -1182,11 +1189,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     _write_json(output_dir / "launch.json", launch)
 
+    resume_log_options = {}
+    if resume_lineage is not None:
+        from d_autoroute_resume import stage_resume_prefix
+        resume_log_options["prefix_log_path"] = stage_resume_prefix(output_dir, resume_lineage)
     return_code = _run_and_tee(
         command,
         cwd=ARROW_ROOT,
         env=env,
         log_path=output_dir / "train.log",
+        **resume_log_options,
     )
     required = [
         "save_wm.pt",

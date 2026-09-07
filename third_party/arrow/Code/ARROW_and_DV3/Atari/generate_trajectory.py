@@ -115,8 +115,12 @@ def _routed_policy_step(
             if next_z is None:
                 next_z = route_z.new_empty((len(obs), *route_z.shape[1:]))
                 next_h = route_h.new_empty((len(obs), *route_h.shape[1:]))
-            next_z[rows] = route_z
-            next_h[rows] = route_h
+            # Compact and dense experts can return different autocast dtypes.
+            # Preserve both outputs, independently of which route is visited first.
+            next_z = next_z.to(torch.promote_types(next_z.dtype, route_z.dtype))
+            next_h = next_h.to(torch.promote_types(next_h.dtype, route_h.dtype))
+            next_z[rows] = route_z.to(next_z)
+            next_h[rows] = route_h.to(next_h)
         features = zh_to_ac_state(next_z, next_h)
         logits = (ac(features, route_ids) if isinstance(ac, RoutedActorBank)
                   else ac.actor(features)).float()
