@@ -4,7 +4,27 @@ This directory contains runnable launchers and offline analysis tools. Test
 modules live in the repository-level `tests/` directory so this folder only
 contains experiment-facing code.
 
-## Launchers
+## Retained launchers (cleanup in progress)
+
+- `run_arrow_ar50_atari.py`: ARROW-50 with MLP behavior.
+- `run_evolving_atomic_rssm.py`: AWM by default; `--behavior-profile
+  private_mlp_autoroute` selects AWM-AutoRoute.
+- `run_evolving_atomic_rssm_d_autoroute.py`: AWM with private-policy inference routing.
+- `run_dv3_fifo_atari.py`, `run_r2dreamer_arrow_atari.py`, and the Dream Rehearsal
+  launchers remain independent reference paths.
+
+Only use `--dry-run` until the cleanup's retained-method test and checkpoint
+migration has been validated. Deleted launcher descriptions below document
+historical experiments; use the recorded Git revision to reproduce those runs.
+Shared replay placement now lives in `launcher_support.py`, not a retired LoRA
+launcher.
+
+StableTargets and F/D-AutoKAN are retired; their old selectors are rejected.
+The shared reconstruction router remains owned by AWM-AutoRoute.
+AWM means **Accumulative World Modeling** (formerly D); existing launcher paths
+and machine-readable protocol/method identifiers are unchanged (Decision 0060).
+
+## Historical launcher inventory
 
 - `run_arrow_ar50_atari.py`: canonical ARROW-50 launcher and named ARROW actor/objective ablations.
 - `run_dv3_fifo_atari.py`: matched DreamerV3/FIFO control.
@@ -142,6 +162,10 @@ python scripts/run_moe_arrow_atari.py --method dino-convbank ...
 
 ## Shared Support
 
+- `run_evolving_atomic_rssm_d_autoroute.py`: independent AWM-AutoRoute entry point;
+  fixes AWM's private MLP Actor-Critics and adaptive Q/F/P, adding label-free
+  first-frame inference while retaining AWM's oracle return gates. It delegates
+  to the shared launcher/trainer rather than copying them. Start with `--dry-run`.
 - `artifact_io.py`: dependency-free checksums and atomic artifact writers used
   by audits and post-hoc probes.
 - `git_provenance.py`: clean-commit and upstream-sync checks used by training

@@ -17,7 +17,7 @@ import torch
 from torch import nn
 from torch.optim.lr_scheduler import LambdaLR
 
-from clworldmodel.models.r2 import barlow_twins_loss
+from .objective import barlow_twins_loss
 from third_party.r2dreamer import networks
 from third_party.r2dreamer.optim import LaProp, clip_grad_agc_
 from third_party.r2dreamer.rssm import RSSM

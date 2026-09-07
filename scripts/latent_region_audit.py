@@ -50,7 +50,7 @@ class _SupportAccumulator:
         self.sums: dict[str, Any] = {}
         self.counts: dict[str, int] = {}
         self.handles = [
-            residual.register_forward_pre_hook(self._hook(name))
+            None.register_forward_pre_hook(self._hook(name))
             for name, residual in residuals.items()
         ]
 
@@ -141,16 +141,8 @@ def _exercise_post_burnin_heads(
     wm = model.world_model
     prior_log_probs = wm.rssm.transition(hiddens)
     zhs = wm.zh_transform(posterior_z, hiddens)
-    for residual in (wm.reward_residual, wm.continue_residual):
-        if residual is not None:
-            residual(zhs)
-    if wm.feature_predictor_residual is not None:
-        feature_state = (
-            wm.zh_transform(prior_log_probs.exp(), hiddens)
-            if wm.observation_objective == "dinov3_next_feature"
-            else zhs
-        )
-        wm.feature_predictor_residual(feature_state)
+    for residual in (None, None):
+        pass
     state = model.vendor.zh_to_ac_state(posterior_z, hiddens)
     model.actor_critic.actor(state)
     model.actor_critic.critic(state)
@@ -393,7 +385,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--checkpoint", default="final")
     parser.add_argument("--dataset-role", choices=("natural", "event"), default="natural")
-    parser.add_argument("--dinov3-model-path", type=Path)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--burn-in", type=int)
@@ -418,7 +409,7 @@ def main() -> int:
     audit_dir = args.audit_dir.expanduser().resolve()
     specs = load_snapshot_specs(run_dir / "analysis_snapshots")
     snapshot = _select_snapshot(specs, args.checkpoint)
-    model = _model_bundle(snapshot, args.device, args.dinov3_model_path)
+    model = _model_bundle(snapshot, args.device, None)
     manifest_path = audit_dir / "collection_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not manifest.get("complete"):

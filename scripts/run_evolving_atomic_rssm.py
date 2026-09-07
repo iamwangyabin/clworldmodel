@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch Evolving-Core Atomic RSSM from scratch on a declared Atari order."""
+"""Launch AWM (Accumulative World Modeling) or AWM-AutoRoute on Atari."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ from launcher_support import (
 )
 from run_arrow_ar50_atari import (
     ARROW_ROOT,
-    FASTKAN_AC_STABLE_CONFIG_OVERRIDES,
     ROOT,
     SEEDS,
     THREAD_ENV_KEYS,
@@ -31,29 +30,21 @@ from run_arrow_ar50_atari import (
     _config_path,
     _verify_primary_config,
 )
-from run_cnn_projector_lora_incremental import _prepare_replay_symlink
+from launcher_support import prepare_replay_symlink as _prepare_replay_symlink
 from summarize_continual_metrics import build_run_report
 
 
-FORMAL_TASK0_PROFILE = "fixed_v2"
+FORMAL_TASK0_PROFILE = 'fixed_v1'
 PRIVATE_MLP_BEHAVIOR = "private_mlp"
-SHARED_FASTKAN_STABLE_BEHAVIOR = "shared_fastkan_stable"
+PRIVATE_MLP_AUTOROUTE_BEHAVIOR = "private_mlp_autoroute"
+
+
 ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR = "shared_adaptive_residual_mlp"
-BEHAVIOR_PROFILES = (
-    PRIVATE_MLP_BEHAVIOR,
-    SHARED_FASTKAN_STABLE_BEHAVIOR,
-    ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
-)
+BEHAVIOR_PROFILES = ('private_mlp', 'private_mlp_autoroute')
 PRIVATE_PREDICTION_HEADS_PROFILE = "private"
 SHARED_DISTILLED_HEADS_PROFILE = "shared_distilled"
-PREDICTION_HEAD_PROFILES = (
-    PRIVATE_PREDICTION_HEADS_PROFILE,
-    SHARED_DISTILLED_HEADS_PROFILE,
-)
-FIXED_TASK0_PROFILE_LRS = {
-    "fixed_v1": 2e-4,
-    "fixed_v2": 3e-4,
-}
+PREDICTION_HEAD_PROFILES = ('shared_distilled',)
+FIXED_TASK0_PROFILE_LRS = {'fixed_v1': 0.0002}
 PROTOCOLS = {
     "fixed_v1": "Evolving-Core-Atomic-RSSM-ARROW-v1-Atari-TaskAware",
     "fixed_v2": "Evolving-Core-Atomic-RSSM-ARROW-v2-Atari-TaskAware",
@@ -70,10 +61,7 @@ SHARED_DOWN_ORIGINAL_SIX_PROTOCOL = (
     "Evolving-Core-Atomic-RSSM-SharedFrozenDown-FiLM-ARROW-v1-"
     "OriginalSix-Atari-TaskAware-Pilot"
 )
-SHARED_FASTKAN_PROTOCOL = (
-    "Evolving-Core-SharedFrozenDown-SharedFastKANAC-StableTargets-ARROW-v1-"
-    "ThreeTask-Atari-TaskAware-Pilot"
-)
+
 SHARED_DISTILLED_HEADS_THREE_TASK_PROTOCOL = (
     "Evolving-Core-DenseQFP-SharedDistilledHeads-PrivateMLPAC-ARROW-v1-"
     "ThreeTask-Atari-TaskAware-Pilot"
@@ -97,188 +85,76 @@ ADAPTIVE_QFP_AC_COMPRESSION_PROTOCOL = (
 ADAPTIVE_QFP_AC_COMPRESSION_METHOD = (
     "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow"
 )
+
+
+D_AUTOROUTE_METHOD = (
+    "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"
+)
+D_AUTOROUTE_PROTOCOL = (
+    "Evolving-Core-DenseAcquire-AdaptiveQFP-SharedHeads-PrivateMLPAC-"
+    "FirstFrameRouter-ARROWParity-v2-OriginalSix-Atari-"
+    "TaskAwareTraining-TaskIDFreeInference-Pilot"
+)
+AUTOROUTE_METHODS = (D_AUTOROUTE_METHOD,)
+AUTOROUTE_BEHAVIORS = (PRIVATE_MLP_AUTOROUTE_BEHAVIOR,)
 ADAPTIVE_QFP_WIDTH_FRACTIONS = (0.75, 0.5, 0.25, 0.125)
 ADAPTIVE_QFP_STEPS_PER_CANDIDATE = 250
 ADAPTIVE_QFP_LEARNING_RATE = 2e-4
 ADAPTIVE_QFP_VALIDATION_ROLLOUTS = 16
 ADAPTIVE_QFP_MAXIMUM_RETURN_DROP = 0.05
 ADAPTIVE_QFP_DISTILL_SCALE = 1.0
-TASK_ORDERS = {
-    "mspacman-boxing-crazyclimber": (
-        "ALE/MsPacman-v5",
-        "ALE/Boxing-v5",
-        "ALE/CrazyClimber-v5",
-    ),
-    "boxing-mspacman-crazyclimber": (
-        "ALE/Boxing-v5",
-        "ALE/MsPacman-v5",
-        "ALE/CrazyClimber-v5",
-    ),
-    "crazyclimber-boxing-mspacman": (
-        "ALE/CrazyClimber-v5",
-        "ALE/Boxing-v5",
-        "ALE/MsPacman-v5",
-    ),
-    "arrow-original-six": (
-        "ALE/MsPacman-v5",
-        "ALE/Boxing-v5",
-        "ALE/CrazyClimber-v5",
-        "ALE/Frostbite-v5",
-        "ALE/Seaquest-v5",
-        "ALE/Enduro-v5",
-    ),
-}
+TASK_ORDERS = {'arrow-original-six': ('ALE/MsPacman-v5',
+                        'ALE/Boxing-v5',
+                        'ALE/CrazyClimber-v5',
+                        'ALE/Frostbite-v5',
+                        'ALE/Seaquest-v5',
+                        'ALE/Enduro-v5')}
 TASK_DURATION_EPOCHS = 90
 DEFAULT_MECHANISM_PROFILE = "matched_512"
 COMPACT_MECHANISM_PROFILE = "compact_128_128_64"
 DENSE_PRIVATE_PARAMETERIZATION = "dense_private"
 ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION = "adaptive_dense_width"
 SHARED_DOWN_PARAMETERIZATION = "shared_frozen_down_film"
-MECHANISM_PARAMETERIZATIONS = (
-    DENSE_PRIVATE_PARAMETERIZATION,
-    SHARED_DOWN_PARAMETERIZATION,
-)
-MECHANISM_PROFILE_WIDTHS = {
-    DEFAULT_MECHANISM_PROFILE: (512, 512, 256),
-    COMPACT_MECHANISM_PROFILE: (128, 128, 64),
-}
+MECHANISM_PARAMETERIZATIONS = ('dense_private',)
+MECHANISM_PROFILE_WIDTHS = {'matched_512': (512, 512, 256)}
 ORIGINAL_SIX_MINIMUM_FREE_BYTES = 48 * 1024**3
 
 
-def _task0_profile_for_order(
-    task_order: str, task0_profile: str | None = None
-) -> str:
-    if task_order not in TASK_ORDERS:
-        raise ValueError(f"Unknown Evolving-Core task order: {task_order!r}")
-    resolved = task0_profile
-    if resolved is None:
-        resolved = (
-            "fixed_v1"
-            if task_order == "arrow-original-six"
-            else FORMAL_TASK0_PROFILE
-        )
-    if resolved not in FIXED_TASK0_PROFILE_LRS:
-        raise ValueError(
-            f"Unknown full-curriculum Task-0 profile: {resolved!r}"
-        )
-    if task_order == "arrow-original-six" and resolved != "fixed_v1":
-        raise ValueError(
-            "The named original-six pilot preserves the fixed_v1 Task-0 profile"
-        )
-    return resolved
+def _task0_profile_for_order(task_order: str, task0_profile: str | None = None) -> str:
+    if task_order != "arrow-original-six":
+        raise ValueError("AWM-family protocols require the original-six task order")
+    if task0_profile not in (None, "fixed_v1"):
+        raise ValueError("AWM-family protocols preserve the fixed_v1 Task-0 profile")
+    return "fixed_v1"
 
 
 def _validate_mechanism_profile(
-    task_order: str,
-    mechanism_profile: str,
+    task_order: str, mechanism_profile: str,
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
 ) -> None:
-    if task_order not in TASK_ORDERS:
-        raise ValueError(f"Unknown Evolving-Core task order: {task_order!r}")
-    if mechanism_profile not in MECHANISM_PROFILE_WIDTHS:
-        raise ValueError(
-            f"Unknown Evolving-Core mechanism profile: {mechanism_profile!r}"
-        )
-    if mechanism_parameterization not in MECHANISM_PARAMETERIZATIONS:
-        raise ValueError(
-            "Unknown Evolving-Core mechanism parameterization: "
-            f"{mechanism_parameterization!r}"
-        )
-    if (
-        mechanism_profile == COMPACT_MECHANISM_PROFILE
-        and task_order != "arrow-original-six"
-    ):
-        raise ValueError(
-            "The compact 128/128/64 mechanism capacity ablation is fixed to "
-            "the complete ARROW original-six order"
-        )
-    if mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION:
-        if mechanism_profile != DEFAULT_MECHANISM_PROFILE:
-            raise ValueError(
-                "The shared-frozen-down parameterization preserves matched_512 widths"
-            )
-        if task_order != "arrow-original-six":
-            raise ValueError(
-                "The shared-frozen-down pilot is fixed to the complete ARROW "
-                "original-six route allocation"
-            )
+    _task0_profile_for_order(task_order)
+    if mechanism_profile != DEFAULT_MECHANISM_PROFILE or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION:
+        raise ValueError("AWM-family acquisition requires dense matched_512 mechanisms")
 
 
 def _protocol_for_task_order(
-    task_order: str,
-    mechanism_profile: str = DEFAULT_MECHANISM_PROFILE,
+    task_order: str, mechanism_profile: str = DEFAULT_MECHANISM_PROFILE,
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
     task0_profile: str | None = None,
-    prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
+    prediction_head_profile: str = SHARED_DISTILLED_HEADS_PROFILE,
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
-    adaptive_qfp_compression: bool = False,
+    adaptive_qfp_compression: bool = True,
 ) -> str:
-    _validate_mechanism_profile(
-        task_order, mechanism_profile, mechanism_parameterization
-    )
-    resolved_task0_profile = _task0_profile_for_order(task_order, task0_profile)
-    if prediction_head_profile not in PREDICTION_HEAD_PROFILES:
-        raise ValueError(
-            f"Unknown prediction-head profile: {prediction_head_profile!r}"
-        )
-    if behavior_profile not in BEHAVIOR_PROFILES:
-        raise ValueError(f"Unknown behavior profile: {behavior_profile!r}")
-    if adaptive_qfp_compression:
-        if task_order != "arrow-original-six":
-            raise ValueError(
-                "Adaptive Q/F/P compression v1 is fixed to the ARROW "
-                "original-six order"
-            )
-        if prediction_head_profile != SHARED_DISTILLED_HEADS_PROFILE:
-            raise ValueError(
-                "Adaptive Q/F/P compression requires shared distilled "
-                "prediction heads"
-            )
-        if (
-            mechanism_profile != DEFAULT_MECHANISM_PROFILE
-            or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
-        ):
-            raise ValueError(
-                "Adaptive Q/F/P compression acquires dense matched_512 mechanisms"
-            )
-        if behavior_profile not in {
-            PRIVATE_MLP_BEHAVIOR,
-            ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
-        }:
-            raise ValueError(
-                "Adaptive Q/F/P compression supports private MLP behavior or "
-                "the separately named adaptive shared-residual MLP behavior"
-            )
-        return (
-            ADAPTIVE_QFP_AC_COMPRESSION_PROTOCOL
-            if behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
-            else ADAPTIVE_QFP_COMPRESSION_PROTOCOL
-        )
-    if behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR:
-        raise ValueError(
-            "Adaptive shared-residual MLP behavior requires adaptive Q/F/P "
-            "compression under its separately named protocol"
-        )
-    if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
-        if (
-            mechanism_profile != DEFAULT_MECHANISM_PROFILE
-            or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
-        ):
-            raise ValueError(
-                "Shared distilled heads require dense matched_512 Q/F/P mechanisms"
-            )
-        return (
-            SHARED_DISTILLED_HEADS_ORIGINAL_SIX_PROTOCOL
-            if task_order == "arrow-original-six"
-            else SHARED_DISTILLED_HEADS_THREE_TASK_PROTOCOL
-        )
-    if mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION:
-        return SHARED_DOWN_ORIGINAL_SIX_PROTOCOL
-    if mechanism_profile == COMPACT_MECHANISM_PROFILE:
-        return COMPACT_MECHANISM_ORIGINAL_SIX_PROTOCOL
-    if task_order == "arrow-original-six":
-        return ORIGINAL_SIX_TASK_PROTOCOL
-    return PROTOCOLS[resolved_task0_profile]
+    _validate_mechanism_profile(task_order, mechanism_profile, mechanism_parameterization)
+    _task0_profile_for_order(task_order, task0_profile)
+    if prediction_head_profile != SHARED_DISTILLED_HEADS_PROFILE:
+        raise ValueError("AWM-family protocols require shared distilled prediction heads")
+    if not adaptive_qfp_compression:
+        raise ValueError("AWM-family protocols require adaptive Q/F/P compression")
+    protocols = {PRIVATE_MLP_BEHAVIOR: ADAPTIVE_QFP_COMPRESSION_PROTOCOL, PRIVATE_MLP_AUTOROUTE_BEHAVIOR: D_AUTOROUTE_PROTOCOL}
+    if behavior_profile not in protocols:
+        raise ValueError(f"Unsupported AWM-family behavior profile: {behavior_profile!r}")
+    return protocols[behavior_profile]
 
 
 def _residual_mechanism_parameters(
@@ -293,23 +169,6 @@ def _residual_mechanism_parameters(
         + hidden_features * out_features
         + out_features
     )
-
-
-def _shared_down_private_parameters(
-    *, in_features: int, out_features: int, hidden_features: int
-) -> int:
-    """Return private LayerNorm/FiLM/up parameters for one task."""
-
-    return (
-        2 * in_features
-        + 2 * hidden_features
-        + hidden_features * out_features
-        + out_features
-    )
-
-
-def _shared_down_parameters(*, in_features: int, hidden_features: int) -> int:
-    return in_features * hidden_features + hidden_features
 
 
 def _mechanism_capacity_manifest(
@@ -333,21 +192,10 @@ def _mechanism_capacity_manifest(
         raise ValueError(
             f"Unknown mechanism parameterization: {mechanism_parameterization!r}"
         )
-    if (
-        mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION
-        and mechanism_profile != DEFAULT_MECHANISM_PROFILE
-    ):
-        raise ValueError(
-            "Shared-frozen-down accounting requires matched_512 hidden widths"
-        )
     recurrent_width, representation_width, transition_width = (
         MECHANISM_PROFILE_WIDTHS[mechanism_profile]
     )
-    parameter_counter = (
-        _shared_down_private_parameters
-        if mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION
-        else _residual_mechanism_parameters
-    )
+    parameter_counter = (_residual_mechanism_parameters)
     per_task = {
         "recurrent": parameter_counter(
             in_features=512,
@@ -371,18 +219,6 @@ def _mechanism_capacity_manifest(
         "representation_posterior": 0,
         "transition_prior": 0,
     }
-    if mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION:
-        shared = {
-            "recurrent": _shared_down_parameters(
-                in_features=512, hidden_features=recurrent_width
-            ),
-            "representation_posterior": _shared_down_parameters(
-                in_features=4096 + 512, hidden_features=representation_width
-            ),
-            "transition_prior": _shared_down_parameters(
-                in_features=512, hidden_features=transition_width
-            ),
-        }
     shared_total = sum(shared.values())
     route_parameters = 3 * 4 * sum(range(task_count))
     result = {
@@ -481,8 +317,8 @@ TASK_SHARED_DOWN_PRIVATE_MECHANISM_PARAMETERS = 1_064_960
 TASK_PRIVATE_HEAD_ADDITION_PARAMETERS = 8_562_629
 MLP_ACTOR_PARAMETERS = 797_202
 MLP_CRITIC_PARAMETERS = 918_783
-FASTKAN_ACTOR_PARAMETERS = 793_692
-FASTKAN_CRITIC_PARAMETERS = 906_978
+
+
 ADAPTIVE_BEHAVIOR_HIDDEN_FEATURES = 512
 ADAPTIVE_BEHAVIOR_NUM_ATOMS = 4
 ADAPTIVE_BEHAVIOR_RESIDUAL_SCALE = 0.1
@@ -500,12 +336,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--task-order",
         choices=tuple(TASK_ORDERS),
-        default="mspacman-boxing-crazyclimber",
+        default="arrow-original-six",
     )
     parser.add_argument(
         "--prediction-head-profile",
         choices=PREDICTION_HEAD_PROFILES,
-        default=PRIVATE_PREDICTION_HEADS_PROFILE,
+        default=SHARED_DISTILLED_HEADS_PROFILE,
         help=(
             "private reproduces Dense Evolving-Core; shared_distilled keeps one "
             "replay-protected decoder/reward/continue set while retaining private "
@@ -515,6 +351,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--adaptive-qfp-compression",
         action="store_true",
+        default=True,
         help=(
             "Use the separately named original-six protocol that acquires each "
             "task at Dense 512/512/256 width, evaluates all fixed structured-"
@@ -551,11 +388,9 @@ def _parser() -> argparse.ArgumentParser:
         choices=BEHAVIOR_PROFILES,
         default=PRIVATE_MLP_BEHAVIOR,
         help=(
-            "private_mlp exactly reproduces Evolving-Core v1/v2 behavior banks; "
-            "shared_fastkan_stable selects the separately named shared-frozen-"
-            "down world model plus shared FastKAN Actor/Critic with replay rehearsal; "
-            "shared_adaptive_residual_mlp stores one shared MLP Actor/Critic base "
-            "plus return-gated task residuals and requires adaptive Q/F/P compression."
+            "private_mlp selects AWM (Accumulative World Modeling, formerly D); "
+            "private_mlp_autoroute selects AWM-AutoRoute, preserving AWM's private "
+            "MLPs and adding first-frame reconstruction routing."
         ),
     )
     parser.add_argument("--output-dir", type=Path)
@@ -567,287 +402,86 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _resolved_config(
-    source: dict,
-    *,
-    task_order: str,
+    source: dict, *, task_order: str = "arrow-original-six",
     task0_profile: str | None = None,
     mechanism_profile: str = DEFAULT_MECHANISM_PROFILE,
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
-    prediction_head_profile: str = PRIVATE_PREDICTION_HEADS_PROFILE,
-    adaptive_qfp_compression: bool = False,
+    prediction_head_profile: str = SHARED_DISTILLED_HEADS_PROFILE,
+    adaptive_qfp_compression: bool = True,
 ) -> dict:
-    """Compose the fixed named protocol without changing existing baselines."""
-
-    _validate_mechanism_profile(
-        task_order, mechanism_profile, mechanism_parameterization
+    """Compose AWM or AWM-AutoRoute without inheriting any retired method preset."""
+    _protocol_for_task_order(
+        task_order, mechanism_profile, mechanism_parameterization,
+        task0_profile, prediction_head_profile, behavior_profile,
+        adaptive_qfp_compression,
     )
-    resolved_task0_profile = _task0_profile_for_order(task_order, task0_profile)
-    mechanism_widths = MECHANISM_PROFILE_WIDTHS[mechanism_profile]
-    if behavior_profile not in BEHAVIOR_PROFILES:
-        raise ValueError(f"Unknown behavior profile: {behavior_profile!r}")
-    if prediction_head_profile not in PREDICTION_HEAD_PROFILES:
-        raise ValueError(
-            f"Unknown prediction-head profile: {prediction_head_profile!r}"
-        )
-    if adaptive_qfp_compression:
-        if task_order != "arrow-original-six":
-            raise ValueError(
-                "Adaptive Q/F/P compression v1 is fixed to the ARROW "
-                "original-six order"
-            )
-        if behavior_profile not in {
-            PRIVATE_MLP_BEHAVIOR,
-            ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
-        }:
-            raise ValueError(
-                "Adaptive Q/F/P compression supports private MLP Actor-Critics "
-                "or the named adaptive shared-residual MLP Actor-Critic"
-            )
-        if prediction_head_profile != SHARED_DISTILLED_HEADS_PROFILE:
-            raise ValueError(
-                "Adaptive Q/F/P compression requires shared distilled "
-                "prediction heads"
-            )
-        if (
-            mechanism_profile != DEFAULT_MECHANISM_PROFILE
-            or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
-        ):
-            raise ValueError(
-                "Adaptive Q/F/P compression acquires dense matched_512 mechanisms"
-            )
-    if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
-        if behavior_profile not in {
-            PRIVATE_MLP_BEHAVIOR,
-            ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
-        }:
-            raise ValueError(
-                "Shared distilled prediction heads support the private MLP bank "
-                "or the named adaptive shared-residual MLP Actor-Critic"
-            )
-        if (
-            mechanism_profile != DEFAULT_MECHANISM_PROFILE
-            or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
-        ):
-            raise ValueError(
-                "Shared distilled prediction heads require dense matched_512 "
-                "Q/F/P mechanisms"
-            )
-    if behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR:
-        if resolved_task0_profile != "fixed_v2":
-            raise ValueError(
-                "Shared-Frozen-Down + Shared FastKAN inherits the fixed_v2 "
-                "Task-0 world-model optimizer profile"
-            )
-        if task_order == "arrow-original-six":
-            raise ValueError(
-                "Shared FastKAN v1 is a separately named three-task pilot"
-            )
-        if (
-            mechanism_profile != DEFAULT_MECHANISM_PROFILE
-            or mechanism_parameterization != DENSE_PRIVATE_PARAMETERIZATION
-        ):
-            raise ValueError(
-                "Shared FastKAN v1 fixes matched_512 capacity and owns its "
-                "shared-frozen-down parameterization"
-            )
-    if behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR:
-        if not adaptive_qfp_compression:
-            raise ValueError(
-                "Adaptive shared-residual MLP behavior requires --adaptive-qfp-compression"
-            )
-        if task_order != "arrow-original-six":
-            raise ValueError(
-                "Adaptive Q/F/P + Actor-Critic compression v1 is fixed to the "
-                "ARROW original-six order"
-            )
     config = copy.deepcopy(source)
-    by_name = {
-        task["name"]: task for task in config["esc"]["env_configs"]
-    }
+    by_name = {task["name"]: task for task in config["esc"]["env_configs"]}
     missing = [name for name in TASK_ORDERS[task_order] if name not in by_name]
     if missing:
         raise ValueError(f"Source config is missing required Atari tasks: {missing}")
     if config["esc"]["kwargs"].get("swap_sched") != TASK_DURATION_EPOCHS:
-        raise ValueError("Evolving-Core v1 fixes every task at 90 epochs")
-    config["esc"]["env_configs"] = [
-        copy.deepcopy(by_name[name]) for name in TASK_ORDERS[task_order]
-    ]
-    task_count = len(TASK_ORDERS[task_order])
-    config["epochs"] = task_count * TASK_DURATION_EPOCHS
-    config.update(
-        {
-            "continual_method": "evolving_atomic_rssm_arrow",
-            "rssm_num_experts": task_count,
-            "dino_fullbank_current_task_fraction": 1.0,
-            "observation_objective": "reconstruction",
-            "observation_encoder": "cnn",
-            "task_banked_image_encoder": False,
-            "task_projected_image_encoder": True,
-            "task_projector_bottleneck_features": 64,
-            "task_lora_recurrent_rank": 0,
-            "task_lora_representation_rank": 0,
-            "task_lora_transition_rank": 0,
-            "task_recurrent_output_adapter_features": 0,
-            "task_mechanism_bank": True,
-            "task_mechanism_reuse": True,
-            "task_mechanism_capacity_profile": mechanism_profile,
-            "task_mechanism_parameterization": mechanism_parameterization,
-            "task_mechanism_recurrent_width": mechanism_widths[0],
-            "task_mechanism_representation_width": mechanism_widths[1],
-            "task_mechanism_transition_width": mechanism_widths[2],
-            "task_mechanism_residual_scale": 0.1,
-            "task_mechanism_num_atoms": 4,
-            "task_mechanism_reuse_probe_epochs": 0,
-            "task_mechanism_route_lr_scale": 1.0,
-            "task_mechanism_consolidation_batches": 8,
-            "task_mechanism_min_contribution": 0.01,
-            "task_mechanism_max_validation_drop": 0.05,
-            "data_parallel_world_size": 1,
-            "compute_dtype": "bfloat16",
-            "replay_observation_dtype": "uint8",
-            "random_policy": "new",
-            "actor_network": "mlp",
-            "ac_lr": 1e-4,
-            "fresh_ac": False,
-            "evaluation_seed_protocol": "fixed_validation_heldout_final",
-            "evaluation_task_seed_offset": 0,
-            "residual_correction": "none",
-            "residual_consolidation": "none",
-            "shared_core_mode": "evolving_replay_protected",
-            "independent_expert_original_task_index": None,
-            "evolving_task0_profile": resolved_task0_profile,
-            "evolving_shared_core": True,
-            "evolving_checkpoint_retention": (
-                "latest_boundary"
-                if task_order == "arrow-original-six"
-                else "all_boundaries"
-            ),
-            "first_task_shared_core_lr": FIXED_TASK0_PROFILE_LRS[
-                resolved_task0_profile
-            ],
-            "shared_core_lr": 1e-4,
-            "task_private_lr": 2e-4,
-            "task_route_lr": 1e-3,
-            "current_batch_n": 12,
-            "memory_batch_n": 4,
-            "memory_loss_scale": 1.0,
-            "interface_q_scale": 0.1,
-            "interface_h_scale": 0.05,
-            "interface_actor_scale": 0.05,
-            "component_gradient_projection": True,
-            "task_atom_output_regularization": 1e-4,
-            "boundary_consolidation_steps": 1000,
-            "boundary_consolidation_lr": 2e-5,
-            "boundary_max_return_drop": 0.05,
-            "evolving_shared_behavior_current_task_fraction": 1.0,
-            "task_private_heads": True,
-            "task_shared_prediction_heads": False,
-            "shared_prediction_distill_scale": 0.0,
-            "task_private_actor_critic": True,
-            "task_atomic_routes": True,
-            "full_task_rssm_experts": False,
-            "adaptive_behavior_residuals": False,
-            "adaptive_behavior_hidden_features": 512,
-            "adaptive_behavior_residual_scale": 0.1,
-            "adaptive_behavior_num_atoms": 4,
-            "adaptive_behavior_reuse": True,
-            "adaptive_behavior_width_fractions": [],
-            "adaptive_behavior_steps_per_candidate": 0,
-            "adaptive_behavior_lr": 0.0,
-            "adaptive_behavior_rollouts": 0,
-            "adaptive_behavior_max_return_drop": 0.0,
-            "adaptive_behavior_actor_distill_scale": 0.0,
-            "adaptive_behavior_critic_distill_scale": 0.0,
-        }
-    )
-    if behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR:
-        config.update(FASTKAN_AC_STABLE_CONFIG_OVERRIDES)
-        config.update(
-            {
-                "continual_method": "evolving_atomic_rssm_shared_fastkan_arrow",
-                "task_mechanism_parameterization": "shared_frozen_down_film",
-                "fresh_ac": False,
-                "task_private_actor_critic": False,
-                "evolving_shared_behavior_current_task_fraction": 0.75,
-                "shared_actor_imagination_distillation": False,
-                "shared_actor_distill_scale": 0.0,
-                "shared_actor_distill_interval": 1,
-                "shared_actor_distill_n_sync": 1,
-                "shared_actor_distill_burnin_steps": 0,
-                "shared_actor_distill_steps": 1,
-            }
-        )
-    if prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE:
-        config.update(
-            {
-                "continual_method": "evolving_atomic_rssm_shared_heads_arrow",
-                "task_private_heads": False,
-                "task_shared_prediction_heads": True,
-                "shared_prediction_distill_scale": 0.1,
-            }
-        )
-    if adaptive_qfp_compression:
-        config.update(
-            {
-                "continual_method": ADAPTIVE_QFP_COMPRESSION_METHOD,
-                "task_mechanism_parameterization": (
-                    ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION
-                ),
-                "adaptive_compression_width_fractions": list(
-                    ADAPTIVE_QFP_WIDTH_FRACTIONS
-                ),
-                "adaptive_compression_steps_per_candidate": (
-                    ADAPTIVE_QFP_STEPS_PER_CANDIDATE
-                ),
-                "adaptive_compression_lr": ADAPTIVE_QFP_LEARNING_RATE,
-                "adaptive_compression_rollouts": (
-                    ADAPTIVE_QFP_VALIDATION_ROLLOUTS
-                ),
-                "adaptive_compression_max_return_drop": (
-                    ADAPTIVE_QFP_MAXIMUM_RETURN_DROP
-                ),
-                "adaptive_compression_qfp_distill_scale": (
-                    ADAPTIVE_QFP_DISTILL_SCALE
-                ),
-            }
-        )
-    if behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR:
-        config.update(
-            {
-                "continual_method": ADAPTIVE_QFP_AC_COMPRESSION_METHOD,
-                "task_private_actor_critic": False,
-                "evolving_shared_behavior_current_task_fraction": 0.75,
-                "adaptive_behavior_residuals": True,
-                "adaptive_behavior_hidden_features": (
-                    ADAPTIVE_BEHAVIOR_HIDDEN_FEATURES
-                ),
-                "adaptive_behavior_residual_scale": (
-                    ADAPTIVE_BEHAVIOR_RESIDUAL_SCALE
-                ),
-                "adaptive_behavior_num_atoms": ADAPTIVE_BEHAVIOR_NUM_ATOMS,
-                "adaptive_behavior_reuse": True,
-                "adaptive_behavior_width_fractions": list(
-                    ADAPTIVE_QFP_WIDTH_FRACTIONS
-                ),
-                "adaptive_behavior_steps_per_candidate": (
-                    ADAPTIVE_BEHAVIOR_STEPS_PER_CANDIDATE
-                ),
-                "adaptive_behavior_lr": ADAPTIVE_BEHAVIOR_LEARNING_RATE,
-                "adaptive_behavior_rollouts": (
-                    ADAPTIVE_BEHAVIOR_VALIDATION_ROLLOUTS
-                ),
-                "adaptive_behavior_max_return_drop": (
-                    ADAPTIVE_BEHAVIOR_MAXIMUM_RETURN_DROP
-                ),
-                "adaptive_behavior_actor_distill_scale": (
-                    ADAPTIVE_BEHAVIOR_ACTOR_DISTILL_SCALE
-                ),
-                "adaptive_behavior_critic_distill_scale": (
-                    ADAPTIVE_BEHAVIOR_CRITIC_DISTILL_SCALE
-                ),
-            }
-        )
+        raise ValueError("AWM-family protocols fix every task at 90 epochs")
+    config["esc"]["env_configs"] = [copy.deepcopy(by_name[name]) for name in TASK_ORDERS[task_order]]
+    config["epochs"] = len(TASK_ORDERS[task_order]) * TASK_DURATION_EPOCHS
+    config.update({'random_policy': 'new',
+ 'continual_method': 'evolving_atomic_rssm_adaptive_compression_shared_heads_arrow',
+ 'rssm_num_experts': 6,
+ 'observation_objective': 'reconstruction',
+ 'observation_encoder': 'cnn',
+ 'task_projected_image_encoder': True,
+ 'task_projector_bottleneck_features': 64,
+ 'task_mechanism_bank': True,
+ 'task_mechanism_reuse': True,
+ 'task_mechanism_capacity_profile': 'matched_512',
+ 'task_mechanism_parameterization': 'adaptive_dense_width',
+ 'task_mechanism_recurrent_width': 512,
+ 'task_mechanism_representation_width': 512,
+ 'task_mechanism_transition_width': 256,
+ 'task_mechanism_residual_scale': 0.1,
+ 'task_mechanism_num_atoms': 4,
+ 'data_parallel_world_size': 1,
+ 'compute_dtype': 'bfloat16',
+ 'replay_observation_dtype': 'uint8',
+ 'actor_network': 'mlp',
+ 'ac_lr': 0.0001,
+ 'evaluation_seed_protocol': 'fixed_validation_heldout_final',
+ 'evaluation_task_seed_offset': 0,
+ 'shared_core_mode': 'evolving_replay_protected',
+ 'evolving_task0_profile': 'fixed_v1',
+ 'evolving_shared_core': True,
+ 'evolving_checkpoint_retention': 'latest_boundary',
+ 'first_task_shared_core_lr': 0.0002,
+ 'shared_core_lr': 0.0001,
+ 'task_private_lr': 0.0002,
+ 'task_route_lr': 0.001,
+ 'current_batch_n': 12,
+ 'memory_batch_n': 4,
+ 'memory_loss_scale': 1.0,
+ 'interface_q_scale': 0.1,
+ 'interface_h_scale': 0.05,
+ 'interface_actor_scale': 0.05,
+ 'component_gradient_projection': True,
+ 'task_atom_output_regularization': 0.0001,
+ 'boundary_consolidation_steps': 1000,
+ 'boundary_consolidation_lr': 2e-05,
+ 'boundary_max_return_drop': 0.05,
+ 'evolving_shared_behavior_current_task_fraction': 1.0,
+ 'task_shared_prediction_heads': True,
+ 'shared_prediction_distill_scale': 0.1,
+ 'task_private_actor_critic': True,
+ 'task_atomic_routes': True,
+ 'adaptive_compression_width_fractions': [0.75, 0.5, 0.25, 0.125],
+ 'adaptive_compression_steps_per_candidate': 250,
+ 'adaptive_compression_lr': 0.0002,
+ 'adaptive_compression_rollouts': 16,
+ 'adaptive_compression_max_return_drop': 0.05,
+ 'adaptive_compression_qfp_distill_scale': 1.0})
+    if behavior_profile in AUTOROUTE_BEHAVIORS:
+        if behavior_profile == PRIVATE_MLP_AUTOROUTE_BEHAVIOR:
+            config["continual_method"] = D_AUTOROUTE_METHOD
+        config["task_route_inference"] = "first_frame_reconstruction"
     for replay_config in config["replay_buffers"]:
         replay_config["rb_device"] = "cpu"
     return config
@@ -914,12 +548,7 @@ def _parameter_manifest(config: dict) -> dict:
     if task_count < 1:
         raise ValueError("Evolving-Core parameter accounting requires tasks")
     mechanism_parameterization = config["task_mechanism_parameterization"]
-    if mechanism_parameterization == "shared_frozen_down_film":
-        shared_mechanism_parameters = SHARED_FROZEN_DOWN_PARAMETERS
-        private_mechanism_parameters = (
-            TASK_SHARED_DOWN_PRIVATE_MECHANISM_PARAMETERS
-        )
-    elif mechanism_parameterization in {
+    if mechanism_parameterization in {
         "dense_private",
         ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION,
     }:
@@ -947,16 +576,10 @@ def _parameter_manifest(config: dict) -> dict:
             else (task_count - 1) * TASK_PRIVATE_HEAD_ADDITION_PARAMETERS
         )
     )
-    shared_fastkan = (
-        config["continual_method"]
-        == "evolving_atomic_rssm_shared_fastkan_arrow"
-    )
-    adaptive_behavior = (
-        config["continual_method"] == ADAPTIVE_QFP_AC_COMPRESSION_METHOD
-    )
+
     mlp_pair = MLP_ACTOR_PARAMETERS + MLP_CRITIC_PARAMETERS
-    fastkan_pair = FASTKAN_ACTOR_PARAMETERS + FASTKAN_CRITIC_PARAMETERS
-    adaptive_hidden = int(config.get("adaptive_behavior_hidden_features", 512))
+
+    adaptive_hidden = 512
     adaptive_actor_residual = _residual_mechanism_parameters(
         in_features=1536,
         out_features=18,
@@ -969,18 +592,10 @@ def _parameter_manifest(config: dict) -> dict:
     )
     adaptive_residual_pair = adaptive_actor_residual + adaptive_critic_residual
     adaptive_route_parameters = (
-        2 * int(config.get("adaptive_behavior_num_atoms", 4))
+        2 * 4
         * sum(range(task_count))
     )
-    behavior_parameters = (
-        mlp_pair
-        + task_count * adaptive_residual_pair
-        + adaptive_route_parameters
-        if adaptive_behavior
-        else fastkan_pair
-        if shared_fastkan
-        else task_count * mlp_pair
-    )
+    behavior_parameters = ((task_count * mlp_pair))
     online_parameters = world_model_parameters + behavior_parameters
     matched_world_model_private_mlp_parameters = (
         world_model_parameters + task_count * mlp_pair
@@ -1015,10 +630,6 @@ def _parameter_manifest(config: dict) -> dict:
         "model_parameter_accounting.json",
         "actor_critic_parameter_accounting.json",
     ]
-    if shared_fastkan or adaptive_behavior:
-        runtime_verification_artifacts.append(
-            "shared_behavior_replay_accounting.json"
-        )
     result = {
         "schema_version": 1,
         "scope": (
@@ -1036,24 +647,13 @@ def _parameter_manifest(config: dict) -> dict:
         ),
         "mechanism_parameterization": mechanism_parameterization,
         "shared_frozen_down_parameters": shared_mechanism_parameters,
-        "behavior_topology": (
-            "single_shared_mlp_plus_task_adaptive_residuals"
-            if adaptive_behavior
-            else "single_shared_fastkan"
-            if shared_fastkan
-            else "per_task_private_mlp"
-        ),
+        "behavior_topology": (("per_task_private_mlp")),
         "behavior_parameters": behavior_parameters,
+        "learned_router_parameters": 0,
         "online_parameters": online_parameters,
         "fp32_parameter_bytes": online_parameters * 4,
         "per_task_world_model_additions": per_task_world_model_additions,
-        "per_later_task_behavior_growth": (
-            "outcome-dependent adaptive residual plus route"
-            if adaptive_behavior
-            else 0
-            if shared_fastkan
-            else mlp_pair
-        ),
+        "per_later_task_behavior_growth": ((mlp_pair)),
         "runtime_verification_artifacts": runtime_verification_artifacts,
         "comparison_to_matched_world_model_private_mlp": {
             "reference_parameters": matched_world_model_private_mlp_parameters,
@@ -1078,62 +678,6 @@ def _parameter_manifest(config: dict) -> dict:
             "relative_difference": online_parameters / arrow_online_parameters - 1.0,
         },
     }
-    if shared_fastkan:
-        result["training_only_behavior_copies"] = {
-            "ema_slow_critic_parameters": FASTKAN_CRITIC_PARAMETERS,
-            "transient_previous_boundary_actor_parameters": (
-                FASTKAN_ACTOR_PARAMETERS
-            ),
-            "peak_behavior_parameters_excluding_optimizer": (
-                fastkan_pair + FASTKAN_CRITIC_PARAMETERS + FASTKAN_ACTOR_PARAMETERS
-            ),
-            "common_evolving_boundary_world_model_teacher_excluded": True,
-        }
-    if adaptive_behavior:
-        fractions = [
-            float(value)
-            for value in config["adaptive_behavior_width_fractions"]
-        ]
-        minimum_hidden = int(round(adaptive_hidden * fractions[-1]))
-        minimum_actor_residual = _residual_mechanism_parameters(
-            in_features=1536,
-            out_features=18,
-            hidden_features=minimum_hidden,
-        )
-        minimum_critic_residual = _residual_mechanism_parameters(
-            in_features=1536,
-            out_features=255,
-            hidden_features=minimum_hidden,
-        )
-        minimum_behavior_parameters = (
-            mlp_pair
-            + task_count
-            * (minimum_actor_residual + minimum_critic_residual)
-            + adaptive_route_parameters
-        )
-        result["adaptive_behavior_compression"] = {
-            "outcome_dependent": True,
-            "shared_mlp_base_parameters": mlp_pair,
-            "dense_private_actor_residual_parameters_per_task": (
-                adaptive_actor_residual
-            ),
-            "dense_private_critic_residual_parameters_per_task": (
-                adaptive_critic_residual
-            ),
-            "reuse_route_parameters": adaptive_route_parameters,
-            "dense_acquisition_hidden_width": adaptive_hidden,
-            "candidate_width_fractions": fractions,
-            "candidate_hidden_widths": [
-                int(round(adaptive_hidden * fraction)) for fraction in fractions
-            ],
-            "minimum_final_behavior_parameters": minimum_behavior_parameters,
-            "maximum_final_behavior_parameters": behavior_parameters,
-            "maximum_acquisition_behavior_parameters": behavior_parameters,
-            "dense_fallback_retained_when_no_candidate_passes": True,
-            "selection_metric": "current-task raw episodic return",
-            "final_heldout_cohort_used_for_selection": False,
-            "full_dense_behavior_teacher_persistent": False,
-        }
     if shared_prediction_heads:
         result["training_only_prediction_head_teacher"] = {
             "parameters": TASK_PRIVATE_HEAD_ADDITION_PARAMETERS,
@@ -1202,27 +746,10 @@ def _parameter_manifest(config: dict) -> dict:
             "maximum_final_online_parameters": online_parameters,
             "maximum_acquisition_online_parameters": online_parameters,
             "dense_fallback_retained_when_no_candidate_passes": True,
-            "selection_metric": "current-task raw episodic return",
+            "selection_metric": "current-task oracle raw episodic return",
             "final_heldout_cohort_used_for_selection": False,
             "full_dense_teacher_persistent": False,
         }
-        if adaptive_behavior:
-            minimum_behavior_parameters = int(
-                result["adaptive_behavior_compression"][
-                    "minimum_final_behavior_parameters"
-                ]
-            )
-            result["adaptive_joint_compression"] = {
-                "outcome_dependent": True,
-                "minimum_final_online_parameters": (
-                    minimum_final_world_model_parameters
-                    + minimum_behavior_parameters
-                ),
-                "maximum_final_online_parameters": online_parameters,
-                "maximum_acquisition_online_parameters": online_parameters,
-                "dense_fallback_can_exceed_private_mlp_d": True,
-                "parameter_reduction_is_not_guaranteed": True,
-            }
     return result
 
 
@@ -1234,12 +761,9 @@ def _budget_manifest(config: dict) -> dict:
     consolidation_updates = task_count * int(
         config["boundary_consolidation_steps"]
     )
-    adaptive_compression = config.get("continual_method") in {
-        ADAPTIVE_QFP_COMPRESSION_METHOD,
-        ADAPTIVE_QFP_AC_COMPRESSION_METHOD,
-    }
+    adaptive_compression = config.get("continual_method") in {ADAPTIVE_QFP_COMPRESSION_METHOD, D_AUTOROUTE_METHOD}
     adaptive_behavior_compression = (
-        config.get("continual_method") == ADAPTIVE_QFP_AC_COMPRESSION_METHOD
+        config.get("continual_method") == 'evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow'
     )
     adaptive_compression_updates = (
         task_count
@@ -1253,13 +777,13 @@ def _budget_manifest(config: dict) -> dict:
     )
     adaptive_behavior_compression_updates = (
         task_count
-        * len(config.get("adaptive_behavior_width_fractions", ()))
-        * int(config.get("adaptive_behavior_steps_per_candidate", 0))
+        * 0
+        * 0
         if adaptive_behavior_compression
         else 0
     )
     adaptive_behavior_compression_imagined_states = (
-        adaptive_behavior_compression_updates
+        0
         * int(config["mb_n_size"])
         * int(config.get("ac_dream_steps", 16))
     )
@@ -1291,9 +815,12 @@ def _budget_manifest(config: dict) -> dict:
             if adaptive_compression
             else 0
         ),
-        "adaptive_behavior_compression_updates": (
-            adaptive_behavior_compression_updates
+        "adaptive_compression_validation_scope": (
+            "current_task_oracle" if adaptive_compression else None
         ),
+        "inference_router_adds_compute": config.get("continual_method") in AUTOROUTE_METHODS,
+        "evaluation_episode_count_mode": config.get("evaluation_episode_count_mode", "legacy"),
+        "adaptive_behavior_compression_updates": 0,
         "adaptive_behavior_compression_imagined_states": (
             adaptive_behavior_compression_imagined_states
         ),
@@ -1301,9 +828,9 @@ def _budget_manifest(config: dict) -> dict:
             task_count
             * (
                 1
-                + len(config.get("adaptive_behavior_width_fractions", ()))
+                + 0
             )
-            * int(config.get("adaptive_behavior_rollouts", 0))
+            * 0
             if adaptive_behavior_compression
             else 0
         ),
@@ -1314,7 +841,7 @@ def _budget_manifest(config: dict) -> dict:
         * int(config["ac_train_steps"]),
         "total_actor_critic_optimizer_steps": (
             int(config["epochs"]) * int(config["ac_train_steps"])
-            + adaptive_behavior_compression_updates
+            + 0
         ),
         "online_current_sequences": task_updates * int(config["mb_n_size"])
         + (task_count - 1) * task_updates * int(config["current_batch_n"]),
@@ -1368,8 +895,8 @@ def _budget_manifest(config: dict) -> dict:
     }
 
 
-def main() -> int:
-    args = _parser().parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
     if args.cpu_threads < 1:
         raise ValueError("--cpu-threads must be positive")
     project_git = (
@@ -1460,32 +987,21 @@ def main() -> int:
     launch = {
         "schema_version": 1,
         "method": (
-            "Evolving-Core Dense Acquire + Return-Gated Adaptive Q/F/P and "
-            "Shared-Base Task-Residual MLP Actor-Critic Compression + Shared "
-            "Distilled Prediction Heads"
-            if args.behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
+            "AWM-AutoRoute (Accumulative World Modeling with "
+            "First-Frame Reconstruction Routing)"
+            if args.behavior_profile == PRIVATE_MLP_AUTOROUTE_BEHAVIOR
             else
-            "Evolving-Core Dense Acquire + Return-Gated Adaptive Q/F/P "
-            "Compression + Shared Distilled Prediction Heads + Private MLP "
-            "Actor-Critic"
+            ("AWM (Accumulative World Modeling)"
             if args.adaptive_qfp_compression
-            else "Evolving-Core Shared Frozen Down + Shared FastKAN Actor-Critic"
-            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
-            else "Evolving-Core Dense Q/F/P + Shared Distilled Prediction Heads "
+            else ("Evolving-Core Dense Q/F/P + Shared Distilled Prediction Heads "
             "+ Private MLP Actor-Critic"
             if args.prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE
             else
-            "Evolving-Core Atomic RSSM Shared Frozen Down + Private FiLM/Up"
-            if args.mechanism_parameterization == SHARED_DOWN_PARAMETERIZATION
-            else "Evolving-Core Atomic RSSM"
+            ("Evolving-Core Atomic RSSM"
             if args.mechanism_profile == DEFAULT_MECHANISM_PROFILE
-            else "Evolving-Core Atomic RSSM Compact Mechanism 128/128/64"
+            else "Evolving-Core Atomic RSSM Compact Mechanism 128/128/64")))
         ),
-        "protocol": (
-            SHARED_FASTKAN_PROTOCOL
-            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
-            else protocol
-        ),
+        "protocol": (protocol),
         "classification": args.classification,
         "status": "dry_run" if args.dry_run else "launching",
         "project_git": project_git,
@@ -1496,37 +1012,36 @@ def main() -> int:
         "task_order": list(TASK_ORDERS[args.task_order]),
         "task_identity_exposed_to_agent": True,
         "task_agnostic_claimed": False,
+        "task_identity_exposed_during_training": True,
+        "task_identity_exposed_during_action_selection": (
+            args.behavior_profile not in AUTOROUTE_BEHAVIORS
+        ),
+        "inference_routing": {
+            "mode": config.get("task_route_inference", "oracle"),
+            "eligible_routes": "acquired slots plus currently acquiring slot; never future slots",
+            "episode_lock": args.behavior_profile in AUTOROUTE_BEHAVIORS,
+            "learned_router_parameters": 0,
+            "evaluation_episode_count_mode": config.get("evaluation_episode_count_mode", "legacy"),
+            "extra_inference_compute": "one RSSM posterior plus decoder per eligible route at episode start",
+        },
         "from_scratch": True,
         "behavior_profile": args.behavior_profile,
         "prediction_head_profile": args.prediction_head_profile,
         "adaptive_qfp_compression": args.adaptive_qfp_compression,
         "source_task1_snapshot": None,
-        "shared_core": (
-            "CNN plus posterior/recurrent/prior RSSM stays plastic; each Q/F/P "
-            "bank also owns one frozen full-width down basis"
-            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
-            else "CNN, posterior/recurrent/prior RSSM, and one shared "
+        "shared_core": ("CNN, posterior/recurrent/prior RSSM, and one shared "
             "decoder/reward/continue set; always plastic and replay protected"
             if args.prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE
-            else "CNN plus posterior/recurrent/prior RSSM; always plastic"
-        ),
+            else "CNN plus posterior/recurrent/prior RSSM; always plastic"),
         "private_state": (
-            "per-task projector, physically width-adaptive Dense Q/F/P atoms, "
-            "Q/F/P routes, and physically width-adaptive Actor/Critic residuals; "
-            "decoder/reward/continue and Actor/Critic MLP bases are shared"
-            if args.behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
-            else
-            "per-task projector, physically width-adaptive Dense Q/F/P atoms, "
+            ("per-task projector, physically width-adaptive Dense Q/F/P atoms, "
             "routes, and independent MLP actor-critic; decoder/reward/continue "
             "are shared"
             if args.adaptive_qfp_compression
-            else "per-task projector, Q/F/P LayerNorm-FiLM-up modules, and heads; "
-            "no task-private behavior"
-            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
-            else "per-task projector, dense Q/F/P atoms, routes, and independent "
+            else ("per-task projector, dense Q/F/P atoms, routes, and independent "
             "MLP actor-critic; decoder/reward/continue are shared"
             if args.prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE
-            else "per-task projector, Q/F/P atoms, heads, actor-critic"
+            else "per-task projector, Q/F/P atoms, heads, actor-critic"))
         ),
         "mechanism_capacity": _mechanism_capacity_manifest(
             task_count=task_count,
@@ -1561,46 +1076,12 @@ def main() -> int:
                 "distillation_scale": 0.0,
             }
         ),
-        "behavior_topology": (
-            {
-                "actor_critic": (
-                    "one shared MLP base pair plus one routed adaptive residual "
-                    "pair per task"
-                ),
-                "acquisition_hidden_width": config[
-                    "adaptive_behavior_hidden_features"
-                ],
-                "candidate_width_fractions": config[
-                    "adaptive_behavior_width_fractions"
-                ],
-                "current_old_update_split": [0.75, 0.25],
-                "old_task_selection": "uniform over completed task routes",
-                "boundary_selection": "smallest candidate within 5% raw-return gate",
-                "dense_fallback": True,
-                "online_extra_optimizer_updates": 0,
-                "compression_extra_optimizer_updates": (
-                    len(config["adaptive_behavior_width_fractions"])
-                    * config["adaptive_behavior_steps_per_candidate"]
-                    * task_count
-                ),
-            }
-            if args.behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
-            else
-            {
-                "actor_critic": "one cross-task width-53 FastKAN pair",
-                "stable_targets": True,
-                "current_old_update_split": [0.75, 0.25],
-                "old_task_selection": "uniform over completed task routes",
-                "extra_optimizer_updates": 0,
-            }
-            if args.behavior_profile == SHARED_FASTKAN_STABLE_BEHAVIOR
-            else {
+        "behavior_topology": (({
                 "actor_critic": "one independent MLP pair per task",
                 "stable_targets": False,
                 "current_old_update_split": [1.0, 0.0],
                 "extra_optimizer_updates": 0,
-            }
-        ),
+            })),
         "gradient_rule": "per-component conflicting-current-direction projection",
         "interface_distillation": {
             "posterior_kl": config["interface_q_scale"],
@@ -1631,14 +1112,16 @@ def main() -> int:
                     "adaptive_compression_max_return_drop"
                 ],
                 "selection": "smallest passing candidate after evaluating all candidates",
+                "validation_scope": (
+                    "every seen task under automatic routing"
+                    if args.behavior_profile in AUTOROUTE_BEHAVIORS
+                    else "completed task with oracle routing"
+                ),
                 "fallback": "retain full Dense Q/F/P when no candidate passes",
                 "candidate_replay": "completed-task LTDM only",
                 "selection_cohort": "dedicated fixed pruning validation",
                 "final_heldout_cohort_used_for_selection": False,
-                "actor_critic_compression": (
-                    args.behavior_profile
-                    == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR
-                ),
+                "actor_critic_compression": False,
             }
             if args.adaptive_qfp_compression
             else None
@@ -1703,21 +1186,10 @@ def main() -> int:
         "model_parameter_accounting.json",
         "actor_critic_parameter_accounting.json",
     ]
-    if args.behavior_profile in {
-        SHARED_FASTKAN_STABLE_BEHAVIOR,
-        ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
-    }:
-        required.append("shared_behavior_replay_accounting.json")
-    else:
-        required.append("save_ac_bank.pt")
+    required.append("save_ac_bank.pt")
     if args.adaptive_qfp_compression:
         required.extend(
             f"adaptive_qfp_compression/task_{task_id:02d}_boundary.json"
-            for task_id in range(task_count)
-        )
-    if args.behavior_profile == ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR:
-        required.extend(
-            f"adaptive_behavior_compression/task_{task_id:02d}_boundary.json"
             for task_id in range(task_count)
         )
     required_checkpoint_task_ids = (

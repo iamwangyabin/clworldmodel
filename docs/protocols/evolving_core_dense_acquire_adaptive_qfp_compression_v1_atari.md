@@ -1,4 +1,8 @@
-# Dense-Acquire Adaptive Q/F/P Compression v1 (Atari)
+# AWM: Accumulative World Modeling — Atari v1
+
+Formerly D / Dense-Acquire Adaptive Q/F/P Compression v1. Decision 0060 adopts
+the formal method name on 2026-09-07; the protocol, method key and historical
+records below are unchanged.
 
 ## Scope
 
@@ -10,7 +14,7 @@ Its config method key is
 This is a separately named, from-scratch, seed-0-capable pilot derived from
 experiment A. It is not a redefinition of A. A complete 540-epoch seed-0 run
 with held-out final evaluation is now preserved in the
-[curated D record](../experiments/records/evolving-d-adaptive-qfp-original-s0/record.json).
+[curated AWM record (historical D ID)](../experiments/records/evolving-d-adaptive-qfp-original-s0/record.json).
 This is single-seed pilot evidence, not a validated multi-seed performance claim;
 see the [2026-09-06 archive](../experiments/retained_methods_20260906.md) for
 evaluation/budget differences and provenance.

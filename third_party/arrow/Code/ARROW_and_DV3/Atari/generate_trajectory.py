@@ -1,7 +1,7 @@
 from bisect import bisect_right
 from contextlib import nullcontext
 from functools import partial
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 import cv2
 import gymnasium as gym
@@ -15,6 +15,69 @@ from tqdm import tqdm
 from ac import ActorCritic, zh_to_ac_state
 from rssm import ActionT, ContT, ImageT, ResetT
 from wm import RewardT, WorldModel
+
+if TYPE_CHECKING:
+    from clworldmodel.routing import RoutedActorBank
+
+
+@torch.no_grad()
+def _routed_policy_step(
+    wm,
+    ac,
+    router,
+    obs,
+    z,
+    h,
+    previous_action,
+    reset,
+    *,
+    stochastic,
+    route_reset=None,
+):
+    """Route each worker's RSSM and, when private, Actor by the same inferred ID.
+
+    Candidate probes always start from zero state and a dummy no-op action. They
+    use posterior mode and cannot advance the executed trajectory's state/RNG.
+    No environment/task label is accepted by this boundary.
+    """
+    from clworldmodel.routing import EpisodeReconstructionRouter, RoutedActorBank
+
+    if not isinstance(router, EpisodeReconstructionRouter):
+        raise TypeError("Expected an episode reconstruction router")
+    if isinstance(ac, RoutedActorBank) and ac.route_ids != router.eligible_route_ids:
+        raise ValueError("Private actor and world-model eligibility registries must match")
+
+    def reconstruct(route_id, frames):
+        probe_z, probe_h = wm.rssm.initial_state(len(frames))
+        probe_action = torch.zeros(len(frames), previous_action.shape[-1], device=z.device)
+        probe_action[:, 0] = 1
+        _, probe_z, probe_h = wm.rssm(
+            probe_z, probe_action, probe_h, frames,
+            torch.ones(len(frames), 1, device=z.device),
+            task_id=route_id, stochastic=False,
+        )
+        return wm.decoder_for(route_id)(zh_to_ac_state(probe_z, probe_h))
+
+    with _autocast_context(z.device, getattr(wm, "compute_dtype", "float32")):
+        route_reset = reset if route_reset is None else route_reset
+        route_ids = router.route(obs, route_reset.bool().reshape(-1), reconstruct)
+        next_z, next_h = None, None
+        for route_id in route_ids.unique(sorted=True).tolist():
+            rows = torch.where(route_ids == route_id)[0]
+            _, route_z, route_h = wm.rssm(
+                z[rows], previous_action[rows], h[rows], obs[rows], reset[rows],
+                task_id=route_id, stochastic=stochastic,
+            )
+            if next_z is None:
+                next_z = route_z.new_empty((len(obs), *route_z.shape[1:]))
+                next_h = route_h.new_empty((len(obs), *route_h.shape[1:]))
+            next_z[rows] = route_z
+            next_h[rows] = route_h
+        features = zh_to_ac_state(next_z, next_h)
+        logits = (ac(features, route_ids) if isinstance(ac, RoutedActorBank)
+                  else ac.actor(features)).float()
+    action = td.Categorical(logits=logits).sample() if stochastic else logits.argmax(-1)
+    return next_z, next_h, action
 
 
 def _autocast_context(device: torch.device, compute_dtype: str):
@@ -187,14 +250,19 @@ class SyncVectorEnvAtHome:
 def evaluate(
     n_sync: int,
     wm: Optional[WorldModel] = None,
-    ac: Optional[ActorCritic] = None,
+    ac: Optional[Union[ActorCritic, "RoutedActorBank"]] = None,
     env_fns: Optional[list[Callable[[], Any]]] = None,
     env_repeat: int = 4,
     n_rollouts: int = 10,
     seed: Optional[int] = None,
     task_id: Optional[int] = None,
     deterministic_policy: bool = False,
+    eligible_route_ids: Optional[tuple[int, ...]] = None,
+    diagnostics: Optional[dict[str, Any]] = None,
 ) -> tuple[float, float]:
+    if eligible_route_ids is not None:
+        if task_id is not None or not deterministic_policy:
+            raise ValueError("Auto-routed evaluation forbids oracle task IDs and requires deterministic policy")
     _, _, rews, conts, resets = generate_trajectories(
         n_rollouts * 2**13 // n_sync,
         n_sync,
@@ -207,6 +275,8 @@ def evaluate(
         seed=seed,
         task_id=task_id,
         deterministic_policy=deterministic_policy,
+        eligible_route_ids=eligible_route_ids,
+        routing_diagnostics=diagnostics,
     )
     terms = torch.where(conts == 0)[0]
     starts = torch.where(resets == 1)[0]
@@ -218,6 +288,11 @@ def evaluate(
         if s == "S" and e == "E":
             where_se.append((si, ei))
     eps_rews = [rews[s : e + 1].sum().item() for s, e in where_se]
+    if diagnostics is not None and eligible_route_ids is not None:
+        diagnostics.update({
+            "episode_count_mode": "legacy",
+            "completed_episodes": len(eps_rews),
+        })
     if not eps_rews:
         n_eps = resets.sum().item()
         var = rews.var().item() * rews.numel() / n_eps**2
@@ -230,7 +305,7 @@ def generate_trajectories(
     n: int,
     n_sync: int,
     wm: Optional[WorldModel] = None,
-    ac: Optional[ActorCritic] = None,
+    ac: Optional[Union[ActorCritic, "RoutedActorBank"]] = None,
     env_fns: Optional[list[Callable[[], Any]]] = None,
     env_repeat: int = 4,
     target_terminals: Optional[int] = None,
@@ -238,12 +313,21 @@ def generate_trajectories(
     seed: Optional[int] = None,
     task_id: Optional[int] = None,
     deterministic_policy: bool = False,
+    eligible_route_ids: Optional[tuple[int, ...]] = None,
+    routing_diagnostics: Optional[dict[str, Any]] = None,
 ) -> tuple[ActionT, Optional[ImageT], RewardT, ContT, ResetT]:
     # Returns [ X ... ] packed as [ N*T ... ] (sort of)
     # To change to [ T N ... ], do reshape and swapaxes
     # `target_terminals` if not None, forces at least some number of environment resets
     # (not including initial resets)
 
+    router = None
+    if eligible_route_ids is not None:
+        from clworldmodel.routing import EpisodeReconstructionRouter
+
+        if task_id is not None:
+            raise ValueError("Auto-routed collection forbids oracle task IDs")
+        router = EpisodeReconstructionRouter(eligible_route_ids)
     if ac is not None and task_id is not None:
         ac.set_task_route(task_id)
 
@@ -287,82 +371,111 @@ def generate_trajectories(
         post = " (+WM/AC)"
     else:
         post = ""
-    with tqdm(total=n, desc=f"Generating trajectories{post}",disable = True) as progbar:
-        while n_samples < n:
-            _n_samples = n_samples
-            if target_terminals is not None and n_terminals >= target_terminals:
-                break
-            if n_samples == 0:  # First step
+    try:
+        with tqdm(total=n, desc=f"Generating trajectories{post}",disable = True) as progbar:
+            while n_samples < n:
+                _n_samples = n_samples
+                if target_terminals is not None and n_terminals >= target_terminals:
+                    break
+                if n_samples == 0:  # First step
+                    n_samples += n_sync
+                    obs, _ = env.reset(seed=reset_seeds)
+                    for i in range(n_sync):
+                        acts[i].append(0)
+                        obss[i].append(obs[i])
+                        rews[i].append(0)
+                        conts[i].append(True)
+                        resets[i].append(True)
+                    reset = np.zeros(n_sync, dtype=bool)
+                    route_reset = np.ones(n_sync, dtype=bool)
+                    continue
+
                 n_samples += n_sync
-                obs, _ = env.reset(seed=reset_seeds)
-                for i in range(n_sync):
-                    acts[i].append(0)
-                    obss[i].append(obs[i])
-                    rews[i].append(0)
-                    conts[i].append(True)
-                    resets[i].append(True)
-                reset = np.zeros(n_sync, dtype=bool)
-                continue
-
-            n_samples += n_sync
-            if wm is None or ac is None:
-                act = np.random.randint(0, 18, size=n_sync)
-            else:
-                if z is None:
-                    z, h = wm.rssm.initial_state(n_sync)
-                    act_t = torch.zeros(n_sync, 18, device=z.device)
-                    act_t[:, 0] = 1  # Previous move would have been all 0s
-                # Follow a stochastic policy
-                rssm_kwargs = {}
-                if task_id is not None:
-                    rssm_kwargs["task_id"] = task_id
-                if deterministic_policy:
-                    rssm_kwargs["stochastic"] = False
-                with _autocast_context(
-                    z.device, getattr(wm, "compute_dtype", "float32")
-                ):
-                    _, z, h = wm.rssm(
-                        z,
-                        act_t,
-                        h,
-                        torch.from_numpy(obs / 255)
-                        .float()
-                        .permute(0, 3, 1, 2)
-                        .to(z.device),
+                if wm is None or ac is None:
+                    act = np.random.randint(0, 18, size=n_sync)
+                elif router is not None:
+                    if z is None:
+                        z, h = wm.rssm.initial_state(n_sync)
+                        act_t = torch.zeros(n_sync, 18, device=z.device)
+                        act_t[:, 0] = 1
+                    z, h, act = _routed_policy_step(
+                        wm, ac, router,
+                        torch.from_numpy(obs).float().permute(0, 3, 1, 2).to(z.device) / 255,
+                        z, h, act_t,
                         torch.from_numpy(reset).float().unsqueeze(-1).to(z.device),
-                        **rssm_kwargs,
+                        stochastic=not deterministic_policy,
+                        route_reset=torch.from_numpy(route_reset).to(z.device),
                     )
-                    ac_state = zh_to_ac_state(z, h)
-                    act_prob = ac.actor(ac_state).float()
-                if deterministic_policy:
-                    act = act_prob.argmax(dim=-1)
+                    act_t = torch.nn.functional.one_hot(act, 18)
+                    act = act.cpu().numpy()
                 else:
-                    act_prob_dist = td.Categorical(logits=act_prob)
-                    act = act_prob_dist.sample()
-                act_t = torch.nn.functional.one_hot(act, 18)
-                act = act.cpu().numpy()
+                    if z is None:
+                        z, h = wm.rssm.initial_state(n_sync)
+                        act_t = torch.zeros(n_sync, 18, device=z.device)
+                        act_t[:, 0] = 1  # Previous move would have been all 0s
+                    # Follow a stochastic policy
+                    rssm_kwargs = {}
+                    if task_id is not None:
+                        rssm_kwargs["task_id"] = task_id
+                    if deterministic_policy:
+                        rssm_kwargs["stochastic"] = False
+                    with _autocast_context(
+                        z.device, getattr(wm, "compute_dtype", "float32")
+                    ):
+                        _, z, h = wm.rssm(
+                            z,
+                            act_t,
+                            h,
+                            torch.from_numpy(obs / 255)
+                            .float()
+                            .permute(0, 3, 1, 2)
+                            .to(z.device),
+                            torch.from_numpy(reset).float().unsqueeze(-1).to(z.device),
+                            **rssm_kwargs,
+                        )
+                        ac_state = zh_to_ac_state(z, h)
+                        act_prob = ac.actor(ac_state).float()
+                    if deterministic_policy:
+                        act = act_prob.argmax(dim=-1)
+                    else:
+                        act_prob_dist = td.Categorical(logits=act_prob)
+                        act = act_prob_dist.sample()
+                    act_t = torch.nn.functional.one_hot(act, 18)
+                    act = act.cpu().numpy()
 
-            obs, rew, term, trunc, _ = env.step(act)
-            reset = term | trunc
-            # When there is an episode termination (`reset`):
-            # `obs` is of the new episode
-            # `rew` is of the previous episode
-            # Final observation information not used due to inconsistency with procgen
-            # This loses a frame but this change is insignificant
-            for i in range(n_sync):
-                acts[i].append(act[i])
-                obss[i].append(obs[i])
-                rews[i].append(rew[i])
-                conts[i].append(True)
-                resets[i].append(reset[i])
-                if reset[i]:
-                    conts[i][-2] = False
-                    rews[i][-2] = rew[i]
-                    rews[i][-1] = 0
-                    n_terminals += 1
+                # NEXT_STEP resets a finished worker on the following step. The
+                # action on that step is ignored; route its returned reset frame
+                # one loop later without changing ARROW's reset/RSSM bookkeeping.
+                route_reset = reset.copy()
+                obs, rew, term, trunc, _ = env.step(act)
+                reset = term | trunc
+                # When there is an episode termination (`reset`):
+                # `obs` is of the new episode
+                # `rew` is of the previous episode
+                # Final observation information not used due to inconsistency with procgen
+                # This loses a frame but this change is insignificant
+                for i in range(n_sync):
+                    acts[i].append(act[i])
+                    obss[i].append(obs[i])
+                    rews[i].append(rew[i])
+                    conts[i].append(True)
+                    resets[i].append(reset[i])
+                    if reset[i]:
+                        conts[i][-2] = False
+                        rews[i][-2] = rew[i]
+                        rews[i][-1] = 0
+                        n_terminals += 1
 
-            progbar.update(n_samples - _n_samples)
+                progbar.update(n_samples - _n_samples)
 
+    finally:
+        env.close()
+    if routing_diagnostics is not None and router is not None:
+        routing_diagnostics.update({
+            "random_policy": wm is None or ac is None,
+            "eligible_route_ids": list(eligible_route_ids),
+            "routing_events": router.events,
+        })
     acts = [np.stack(e) for e in acts]
     obss = [np.stack(e) for e in obss] if not no_images else None
     rews = [np.stack(e) for e in rews]

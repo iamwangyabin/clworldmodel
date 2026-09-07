@@ -17,7 +17,29 @@ documented here, covered by focused parity tests, and followed by regenerating
 `MANIFEST.sha256`. Clean project-owned implementations still belong under
 `src/clworldmodel/`.
 
-## Local changes
+## Current retirement update (2026-09-07)
+
+Decision 0058 retires FastKAN StableTargets and F/D-AutoKAN at the user's
+request. Atari's typed config and CLI reject those selectors; the FastKAN
+constructor arguments, branches, preset validation and shared-FastKAN training
+and checkpoint path are removed. D and D-AutoRoute retain private MLP behavior;
+D-AutoRoute retains the reconstruction router, D's current-task oracle
+compression gate and private-bank checkpoint schema. Generic actor-critic
+numerical/optimizer helpers remain; neutral historical manifest fields do not
+enable retired code.
+
+The pinned commit and MIT notices are unchanged. Baseline/D fixed-input losses
+and gradients still match the pre-retirement fixture; a second fixture checks
+MLP initialization and outputs against the actual pre-change source hash.
+Focused D-AutoRoute tests exercise private-bank compact checkpoint reload and
+RNG restoration without simulator interaction or optimizer updates. ARROW,
+DV3, D and D-AutoRoute default dry-run manifests are unchanged. Historical
+cross-revision configs may contain retired neutral fields and are not claimed
+resume-equivalent; use the recorded revision pending explicit migration.
+The broader repository's unfinished historical-test migration is not declared
+complete by this change. See Decision 0058 for the validation scope.
+
+## Local changes (chronological history; retired entries are not active paths)
 
 1. Add the seven fields present in every published Atari configuration to the
    typed configuration model.
@@ -667,6 +689,94 @@ documented here, covered by focused parity tests, and followed by regenerating
     under Apache-2.0. No reference source file is vendored. Project primitives,
     exact storage/compute accounting, deviations, launcher, and focused tests
     are documented outside this vendor directory.
+
+62. Add the separately named D-AutoKAN original-six pilot, preserving D's
+    adaptive Dense Q/F/P and shared prediction heads while replacing the private
+    behavior bank with the existing single FastKAN StableTargets pair. Task
+    labels remain on training/Replay paths; interaction and evaluation instead
+    use project-owned first-frame reconstruction MSE selection over the acquired
+    route registry, with independent per-worker episode locks and grouped RSSM
+    inference. No private decoders, behavior adapters, or learned router are
+    added. The new profile alone specifies same-step vector autoreset/reset
+    no-op actions and exact independently seeded episode evaluation; legacy D's
+    evaluator and policy semantics are retained. Collector vector resources are
+    now closed in a `finally` block for all profiles. Every compression candidate
+    must preserve auto-routed raw return on every seen task, with 1,680 rather
+    than 480 nominal selector episodes explicitly budgeted. New artifacts retain
+    route scores, margins, confusion, episode returns/lengths, and acquired route
+    metadata; checkpoint loading validates eligibility and accepts absent new
+    default-off inference fields in historical old-method checkpoints. New-method
+    consolidation failures abort after rollback. Config, fixed-tensor inference,
+    mocked collection/evaluation, parameter counts, physical compaction/reload,
+    and raw-return gates have focused coverage. No training run or Atari accuracy
+    claim is attached to this integration. See the project D-AutoKAN v1 protocol.
+
+63. Add D-AutoRoute as a separate original-six method, with the standalone
+    project launcher `scripts/run_evolving_atomic_rssm_d_autoroute.py`. Preserve
+    D's independent MLP Actor/Critic bank, task-labelled training and Q/F/P
+    learning/compression, without shared behavior or AC compression. Generalize
+    the opt-in reconstruction policy adapter to a temporary project-owned
+    private-Actor view: each worker uses the Actor corresponding to its inferred
+    RSSM route, never the current scheduler Actor or true evaluation label.
+    Acquired eligibility is identical for every evaluated task and excludes
+    future slots. Existing exact evaluation/mode/RNG restoration, same-step
+    autoreset, all-seen compression gates and eligibility checkpoint metadata
+    now serve either private D-AutoRoute or shared D-AutoKAN behavior. Old D and
+    F settings remain separate. New tests cover per-worker private policy
+    identity, ownership, mock collection/evaluation, strict compact private-bank
+    checkpoint reload, config isolation, manifests and standalone dry runs.
+    World-model/AC update counts and parameter bounds stay D's; 1,680 exact
+    selector episodes and route probes are explicitly additional to legacy D.
+    No training, CUDA smoke or performance claim accompanies this change.
+
+64. Supersede the maintained D-AutoRoute entry point with the separately named
+    ARROW-parity v2 protocol. The previous same-step autoreset, exact-complete-
+    episode evaluator and all-seen auto-routed compression gate remain recorded
+    as historical v1 behavior; they are not silently attributed to D. V2 leaves
+    `AsyncVectorEnv` in pinned ARROW's implicit next-step mode, uses D's legacy
+    trajectory budget and S/E return extraction, validates shared consolidation
+    with all-seen oracle routes, and validates Q/F/P candidates only on the
+    completed task's oracle route. Its selector budget is therefore D's 480
+    nominal rollouts. A separate delayed route-reset signal selects from the
+    reset observation returned after Gymnasium's ignored next-step autoreset
+    action without altering D's RSSM reset mask, stored actions, reward shifts,
+    or Replay labels. Focused tests require single-route deterministic actions
+    and trajectory tensors to match D. The upstream collector's actual
+    next-step behavior remains inconsistent with its same-step comment; v2
+    preserves the executable behavior and records the issue rather than fixing
+    it in only one method. See Decision 0059 and the D-AutoRoute v2 protocol.
+
+65. Add the separately named `Dream-Rehearsal-ArrowMatched-v1-Atari` profile.
+    It reuses the same DreamerV3 trainer, 541-epoch collection schedule, base
+    world-model/Actor-Critic update counts, and periodic evaluation path as the
+    ARROW/DV3 controls. Its full and bounded arms differ only in a finite
+    all-history capacity of 17,312 trajectories versus ARROW's 1,024-trajectory
+    capacity. Both ordinary training and rehearsal sample one shared retained
+    history. The profile corrects the historical smoke layout to the inspected
+    artifact's normal 16-by-64 start-state batch and optionally bootstraps
+    grading from its last imagined pre-transition feature. The old bounded-v1
+    default retains its recorded post-horizon behavior. Config/runtime and
+    launcher artifacts record the bootstrap choice and report Dream
+    Rehearsal's additional actor-only compute separately; total compute is not
+    claimed to match ARROW. Focused tests cover old-default isolation, the
+    bootstrap choice, exact ARROW base budgets, memory-only arm difference, and
+    the two-task target-GPU smoke contract.
+
+## Method retirement in progress — 2026-09-06
+
+User-authorized retirement removes historical representation/KARROW/task-bank,
+frozen-first-task and non-D Evolving-Core branches from the maintained Atari
+runtime. StableTargets, D, D-AutoRoute and F remain, alongside baseline and
+independent reference work. Shared project primitives are moved to neutral
+modules instead of being deleted with their original experimental launchers.
+The pinned upstream commit and MIT notices are unchanged.
+
+This cleanup is not yet accepted for training: bulk test migration is pending
+confirmation and historical test discovery still fails. The retained launcher
+dry runs and fixed-input initialization/loss/gradient parity fixture pass.
+Cross-revision checkpoint compatibility needs additional validation because
+obsolete configuration fields have been removed. See Decision 0057; neither
+dry runs nor the new tensor fixture establish a reproduced result.
 
 ## Known issues at import
 

@@ -227,18 +227,13 @@ def _load_snapshot_state(module: Any, state: Mapping[str, Any]) -> None:
 def _model_bundle(
     spec: SnapshotSpec,
     device_name: str,
-    dinov3_model_path: Path | None = None,
-) -> ModelBundle:
+    ) -> ModelBundle:
     torch = _torch()
     vendor = _vendor_modules()
     config = spec.payload["config"]
     device = torch.device(device_name)
     configured_dinov3_path = config.get("dinov3_model_path")
-    resolved_dinov3_path = (
-        str(dinov3_model_path.expanduser().resolve())
-        if dinov3_model_path is not None
-        else configured_dinov3_path
-    )
+    resolved_dinov3_path = (configured_dinov3_path)
     world_model = vendor.WorldModel(
         3,
         (32, 32),
@@ -249,66 +244,15 @@ def _model_bundle(
         int(config["mlp_layers"]),
         bool(config["wall_time_optimisation"]),
         observation_objective=str(config.get("observation_objective", "reconstruction")),
-        r2_barlow_loss_scale=float(config.get("r2_barlow_loss_scale", 0.05)),
-        r2_redundancy_scale=float(config.get("r2_redundancy_scale", 5e-4)),
-        r2_normalization_eps=float(config.get("r2_normalization_eps", 1e-8)),
         observation_encoder=str(config.get("observation_encoder", "cnn")),
-        dinov3_model_path=resolved_dinov3_path,
-        dinov3_input_size=int(config.get("dinov3_input_size", 256)),
-        dinov3_max_batch_size=int(config.get("dinov3_max_batch_size", 128)),
-        dinov3_feature_loss_scale=float(config.get("dinov3_feature_loss_scale", 1.0)),
-        dinov3_feature_mode=str(config.get("dinov3_feature_mode", "cls")),
-        dinov3_patch_pool_size=int(config.get("dinov3_patch_pool_size", 4)),
-        dinov3_patch_feature_dim=int(config.get("dinov3_patch_feature_dim", 384)),
-        dinov3_patch_projection=str(config.get("dinov3_patch_projection", "none")),
-        dinov3_feature_loss_kind=str(config.get("dinov3_feature_loss_kind", "cosine")),
-        dinov3_feature_std_floor=float(config.get("dinov3_feature_std_floor", 0.05)),
-        residual_correction=str(config.get("residual_correction", "none")),
-        residual_bottleneck_features=int(config.get("residual_bottleneck_features", 64)),
-        residual_grid_size=int(config.get("residual_grid_size", 8)),
-        residual_input_min=float(config.get("residual_input_min", -2.0)),
-        residual_input_max=float(config.get("residual_input_max", 2.0)),
-        residual_rms_norm_epsilon=float(
-            config.get("residual_rms_norm_epsilon", 1e-4)
-        ),
-        residual_alpha=float(config.get("residual_alpha", 0.1)),
-        residual_input_mode=str(config.get("residual_input_mode", "base_output")),
-        residual_consolidation=str(config.get("residual_consolidation", "none")),
-    ).to(device)
+        ).to(device)
     _load_snapshot_state(world_model, spec.payload["world_model_state_dict"])
     actor_critic = vendor.ActorCritic(
         int(np.prod(world_model.ls)) + world_model.h_dim,
         world_model.a_dim,
         actor_network=str(config.get("actor_network", "mlp")),
         h_dim=world_model.h_dim,
-        kan_hidden_features=int(config.get("actor_kan_hidden_features", 64)),
-        kan_grid_size=int(config.get("actor_kan_grid_size", 5)),
-        kan_spline_order=int(config.get("actor_kan_spline_order", 3)),
-        kan_input_min=float(config.get("actor_kan_input_min", 0.0)),
-        kan_input_max=float(config.get("actor_kan_input_max", 1.0)),
-        kan_normalize_recurrent_state=bool(
-            config.get("actor_kan_normalize_recurrent_state", True)
-        ),
-        fastkan_hidden_features=int(config.get("fastkan_hidden_features", 34)),
-        fastkan_hidden_layers=int(config.get("fastkan_hidden_layers", 3)),
-        fastkan_grid_size=int(config.get("fastkan_grid_size", 8)),
-        fastkan_input_min=float(config.get("fastkan_input_min", -2.0)),
-        fastkan_input_max=float(config.get("fastkan_input_max", 2.0)),
-        fastkan_rms_norm_epsilon=float(config.get("fastkan_rms_norm_epsilon", 1e-4)),
-        fastkan_actor_output_scale=float(config.get("fastkan_actor_output_scale", 0.01)),
-        fastkan_actor_unimix=float(config.get("fastkan_actor_unimix", 0.01)),
-        residual_correction=str(config.get("residual_correction", "none")),
-        residual_bottleneck_features=int(config.get("residual_bottleneck_features", 64)),
-        residual_grid_size=int(config.get("residual_grid_size", 8)),
-        residual_input_min=float(config.get("residual_input_min", -2.0)),
-        residual_input_max=float(config.get("residual_input_max", 2.0)),
-        residual_rms_norm_epsilon=float(
-            config.get("residual_rms_norm_epsilon", 1e-4)
-        ),
-        residual_alpha=float(config.get("residual_alpha", 0.1)),
-        residual_input_mode=str(config.get("residual_input_mode", "base_output")),
-        residual_consolidation=str(config.get("residual_consolidation", "none")),
-    ).to(device)
+        ).to(device)
     _load_snapshot_state(actor_critic, spec.payload["actor_critic_state_dict"])
     world_model.eval()
     actor_critic.eval()
@@ -588,7 +532,7 @@ def collect_diagnostic_sets(args: argparse.Namespace) -> None:
     for task_index, boundary in enumerate(boundaries):
         if boundary.task_index != task_index:
             raise ValueError("Boundary/task order changed while collecting audit data")
-        model = _model_bundle(boundary, args.device, args.dinov3_model_path)
+        model = _model_bundle(boundary, args.device, None)
         task = tasks[task_index]
         selector = np.random.default_rng(args.chunk_selection_seed + task_index)
         natural_candidates: list[dict[str, np.ndarray | int]] = []
@@ -1422,11 +1366,6 @@ def _parser() -> argparse.ArgumentParser:
     collect.add_argument("--output-dir", type=Path, required=True)
     collect.add_argument("--label", default="dv3_fifo_pilot_p1")
     collect.add_argument("--device", default="cuda")
-    collect.add_argument(
-        "--dinov3-model-path",
-        type=Path,
-        help="Override the local DINOv3 directory recorded by the source run",
-    )
     collect.add_argument("--chunks", type=_positive_int, default=DEFAULT_DIAGNOSTIC_CHUNKS)
     collect.add_argument("--event-chunks", type=int, default=DEFAULT_EVENT_CHUNKS)
     collect.add_argument("--chunk-length", type=_positive_int, default=DEFAULT_CHUNK_LENGTH)

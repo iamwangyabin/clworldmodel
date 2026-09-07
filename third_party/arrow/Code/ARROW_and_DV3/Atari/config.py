@@ -14,75 +14,15 @@ from replay import FifoReplay, LongTermReplay, MultiTypeReplay, Replay
 T = TypeVar("T", bound="Serialisable")
 
 ArrowReplayCapacityRatio = Literal["50-50", "25-75", "75-25"]
-ObservationObjective = Literal[
-    "reconstruction",
-    "r2",
-    "dinov3_next_feature",
-    "dinov3_posterior_feature",
-]
-ObservationEncoder = Literal["cnn", "dinov3_vits16"]
-DinoV3FeatureMode = Literal["cls", "patch_grid"]
-DinoV3FeatureLoss = Literal["cosine", "batch_standardized_smooth_l1"]
-DinoV3PatchProjection = Literal["none", "task1_pca", "fixed_orthogonal"]
-DinoV3ReplayFeatureMode = Literal["cached", "on_the_fly"]
-DinoV3PatchAdapter = Literal["none", "conv_3x3_stride2"]
-ContinualMethod = Literal[
-    "none",
-    "bounded_dream_rehearsal",
-    "moe_arrow",
-    "cnn_fullbank_arrow",
-    "cnn_projector_lora_arrow",
-    "cnn_compact_shared_actor_arrow",
-    "cnn_mechanism_bank_arrow",
-    "rec_rssm_arrow",
-    "evolving_atomic_rssm_arrow",
-    "evolving_atomic_rssm_shared_heads_arrow",
-    "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-    "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-    "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
-    "evolving_atomic_rssm_learned_base_adapters_arrow",
-    "evolving_atomic_rssm_shared_fastkan_arrow",
-    "dino_fullbank_arrow",
-    "dino_patchbank_arrow",
-    "dino_convbank_arrow",
-]
-ResidualCorrection = Literal["none", "mlp", "kan"]
-ResidualInputMode = Literal["base_output", "module_input"]
-ResidualConsolidation = Literal["none", "replay_functional"]
-SharedCoreMode = Literal[
-    "trainable",
-    "freeze_after_first_task",
-    "snapshot_adaptation",
-    "task_isolated",
-    "task_banked_shared_adapter",
-    "task1_frozen_projector_lora",
-    "task1_frozen_projector_compact_rssm",
-    "task1_frozen_mechanism_bank",
-    "evolving_replay_protected",
-]
-ActorNetwork = Literal[
-    "mlp",
-    "relu_kan",
-    "relu_kan_bounded",
-    "relu_kan_adaptive",
-    "fast_kan_ac",
-    "fast_kan_ac_param_matched",
-    "fast_kan_ac_stable",
-]
+ObservationObjective = Literal["reconstruction"]
+ObservationEncoder = Literal["cnn"]
+ContinualMethod = Literal[("none", "bounded_dream_rehearsal", "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow")]
+SharedCoreMode = Literal["trainable", "evolving_replay_protected"]
+ActorNetwork = Literal[("mlp",)]
 ActorCriticOptimizer = Literal["adam", "laprop"]
 ActorCriticSchedule = Literal["constant", "task_cosine_decay"]
-TaskMechanismCapacityProfile = Literal[
-    "matched_512",
-    "expanded_640",
-    "compact_128_128_64",
-]
-TaskMechanismParameterization = Literal[
-    "dense_private",
-    "adaptive_dense_width",
-    "shared_frozen_down_film",
-    "learned_task0_low_rank",
-    "dense_task0_low_rank_atoms",
-]
+TaskMechanismCapacityProfile = Literal["matched_512"]
+TaskMechanismParameterization = Literal["dense_private", "adaptive_dense_width"]
 EvaluationSeedProtocol = Literal[
     "advancing",
     "fixed_validation_heldout_final",
@@ -90,18 +30,7 @@ EvaluationSeedProtocol = Literal[
 ComputeDType = Literal["float32", "bfloat16"]
 ReplayObservationDType = Literal["float32", "uint8"]
 DataParallelWorldSize = Literal[1, 2, 4]
-EvolvingTask0Profile = Literal[
-    "fixed_v1",
-    "fixed_v2",
-    "task0_shared_lr_1e4",
-    "task0_shared_lr_3e4",
-    "task0_private_lr_3e4",
-    "task0_actor_lr_2e4",
-    "task0_epochs_120",
-    "task0_epochs_150",
-    "task0_epochs_180",
-    "task0_epochs_240",
-]
+EvolvingTask0Profile = Literal["fixed_v1"]
 EvolvingCheckpointRetention = Literal["all_boundaries", "latest_boundary"]
 
 
@@ -249,8 +178,6 @@ class Config(Serialisable):
 
     continual_method: ContinualMethod = "none"
     rssm_num_experts: int = 1
-    moe_arrow_current_task_fraction: float = 0.5
-    dino_fullbank_current_task_fraction: float = 1.0
 
     n_sync: int = 2
     gen_seq_len: int = 4096
@@ -278,25 +205,12 @@ class Config(Serialisable):
     compute_dtype: ComputeDType = "float32"
     data_parallel_world_size: DataParallelWorldSize = 1
     evaluation_seed_protocol: EvaluationSeedProtocol = "advancing"
+    task_route_inference: Literal["oracle", "first_frame_reconstruction"] = "oracle"
+    evaluation_episode_count_mode: Literal["legacy", "exact"] = "legacy"
+    evaluation_max_agent_decisions_per_episode: int = 32768
     evaluation_task_seed_offset: int = 0
-    independent_expert_original_task_index: Optional[int] = None
 
     actor_network: ActorNetwork = "mlp"
-    actor_kan_hidden_features: int = 64
-    actor_kan_grid_size: int = 5
-    actor_kan_spline_order: int = 3
-    actor_kan_input_min: float = 0.0
-    actor_kan_input_max: float = 1.0
-    actor_kan_trainable_grid: bool = False
-    actor_kan_normalize_recurrent_state: bool = True
-    fastkan_hidden_features: int = 34
-    fastkan_hidden_layers: int = 3
-    fastkan_grid_size: int = 8
-    fastkan_input_min: float = -2.0
-    fastkan_input_max: float = 2.0
-    fastkan_rms_norm_epsilon: float = 1e-4
-    fastkan_actor_output_scale: float = 0.01
-    fastkan_actor_unimix: float = 0.01
 
     ac_optimizer: ActorCriticOptimizer = "adam"
     ac_lr: float = 1e-4
@@ -325,32 +239,18 @@ class Config(Serialisable):
     ac_corrected_imagination_bootstrap: bool = False
 
     observation_objective: ObservationObjective = "reconstruction"
-    r2_barlow_loss_scale: float = 0.05
-    r2_redundancy_scale: float = 5e-4
-    r2_normalization_eps: float = 1e-8
     observation_encoder: ObservationEncoder = "cnn"
-    task_banked_image_encoder: bool = False
     task_projected_image_encoder: bool = False
     task_projector_bottleneck_features: int = 64
-    task_lora_recurrent_rank: int = 0
-    task_lora_representation_rank: int = 0
-    task_lora_transition_rank: int = 0
-    task_recurrent_output_adapter_features: int = 0
     task_mechanism_bank: bool = False
     task_mechanism_reuse: bool = True
     task_mechanism_capacity_profile: TaskMechanismCapacityProfile = "matched_512"
     task_mechanism_parameterization: TaskMechanismParameterization = "dense_private"
-    task_mechanism_low_rank: int = 0
     task_mechanism_recurrent_width: int = 512
     task_mechanism_representation_width: int = 512
     task_mechanism_transition_width: int = 256
     task_mechanism_residual_scale: float = 0.1
     task_mechanism_num_atoms: int = 1
-    task_mechanism_reuse_probe_epochs: int = 0
-    task_mechanism_route_lr_scale: float = 1.0
-    task_mechanism_consolidation_batches: int = 8
-    task_mechanism_min_contribution: float = 0.01
-    task_mechanism_max_validation_drop: float = 0.05
     # Evolving-Core Atomic RSSM is intentionally configured independently of
     # the frozen-base MB/REC methods above.
     evolving_task0_profile: EvolvingTask0Profile = "fixed_v1"
@@ -377,35 +277,11 @@ class Config(Serialisable):
     adaptive_compression_rollouts: int = 0
     adaptive_compression_max_return_drop: float = 0.0
     adaptive_compression_qfp_distill_scale: float = 0.0
-    adaptive_behavior_residuals: bool = False
-    adaptive_behavior_hidden_features: int = 512
-    adaptive_behavior_residual_scale: float = 0.1
-    adaptive_behavior_num_atoms: int = 4
-    adaptive_behavior_reuse: bool = True
-    adaptive_behavior_width_fractions: list[float] = field(default_factory=list)
-    adaptive_behavior_steps_per_candidate: int = 0
-    adaptive_behavior_lr: float = 0.0
-    adaptive_behavior_rollouts: int = 0
-    adaptive_behavior_max_return_drop: float = 0.0
-    adaptive_behavior_actor_distill_scale: float = 0.0
-    adaptive_behavior_critic_distill_scale: float = 0.0
     evolving_shared_behavior_current_task_fraction: float = 1.0
-    task_private_heads: bool = False
     task_shared_prediction_heads: bool = False
-    task_private_prediction_adapters: bool = False
-    prediction_adapter_rank: int = 0
-    prediction_adapter_residual_scale: float = 0.1
-    freeze_shared_prediction_heads_after_task0: bool = False
     shared_prediction_distill_scale: float = 0.0
     task_private_actor_critic: bool = False
     task_atomic_routes: bool = False
-    full_task_rssm_experts: bool = False
-    shared_actor_imagination_distillation: bool = False
-    shared_actor_distill_scale: float = 0.0
-    shared_actor_distill_interval: int = 1
-    shared_actor_distill_n_sync: int = 1
-    shared_actor_distill_burnin_steps: int = 0
-    shared_actor_distill_steps: int = 1
     dream_rehearsal_interval_agent_decisions: int = 2_000
     dream_rehearsal_updates_per_prior_task: int = 50
     dream_rehearsal_batch_sequences: int = 4
@@ -415,38 +291,7 @@ class Config(Serialisable):
     dream_rehearsal_realized_threshold: float = 0.3
     dream_rehearsal_realized_bonus: float = 10.0
     dream_rehearsal_grad_clip: float = 100.0
-    dinov3_model_path: Optional[str] = None
-    dinov3_input_size: int = 256
-    dinov3_max_batch_size: int = 128
-    dinov3_feature_cache_dtype: Literal[
-        "float16", "bfloat16", "float32"
-    ] = "float16"
-    dinov3_replay_feature_mode: DinoV3ReplayFeatureMode = "cached"
-    dinov3_feature_loss_scale: float = 1.0
-    dinov3_feature_mode: DinoV3FeatureMode = "cls"
-    dinov3_patch_pool_size: int = 4
-    dinov3_patch_feature_dim: int = 384
-    dinov3_patch_projection: DinoV3PatchProjection = "none"
-    dinov3_patch_projection_frames: int = 0
-    dinov3_patch_projection_seed: int = 0
-    dinov3_patch_adapter: DinoV3PatchAdapter = "none"
-    dinov3_feature_loss_kind: DinoV3FeatureLoss = "cosine"
-    dinov3_feature_std_floor: float = 0.05
-
-    residual_correction: ResidualCorrection = "none"
-    residual_bottleneck_features: int = 64
-    residual_grid_size: int = 8
-    residual_input_min: float = -2.0
-    residual_input_max: float = 2.0
-    residual_rms_norm_epsilon: float = 1e-4
-    residual_alpha: float = 0.1
-    residual_input_mode: ResidualInputMode = "base_output"
-    residual_consolidation: ResidualConsolidation = "none"
-    residual_consolidation_batches: int = 16
-    residual_consolidation_imagination_horizon: int = 8
-    residual_consolidation_gradient_power: float = 2.0
-    residual_consolidation_min_plasticity: float = 0.01
-    residual_consolidation_anchor_loss_scale: float = 1.0
+    dream_rehearsal_bootstrap_last_imagined_feature: bool = False
     shared_core_mode: SharedCoreMode = "trainable"
 
     action_space: int = 18
@@ -462,6 +307,8 @@ class Config(Serialisable):
         return cls(**data)
 
     def __post_init__(self) -> None:
+        if self.evolving_task0_profile != "fixed_v1":
+            raise ValueError("Only the retained D-family fixed_v1 profile is supported")
         if self.epochs < 1:
             raise ValueError("epochs must be positive")
         if self.compute_dtype not in {"float32", "bfloat16"}:
@@ -506,226 +353,93 @@ class Config(Serialisable):
                         "task_durations must contain positive integers"
                     )
                 sequential_task_durations = tuple(task_durations)
-        if self.continual_method not in {
-            "none",
-            "bounded_dream_rehearsal",
-            "moe_arrow",
-            "cnn_fullbank_arrow",
-            "cnn_projector_lora_arrow",
-            "cnn_compact_shared_actor_arrow",
-            "cnn_mechanism_bank_arrow",
-            "rec_rssm_arrow",
-            "evolving_atomic_rssm_arrow",
-            "evolving_atomic_rssm_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
-            "evolving_atomic_rssm_learned_base_adapters_arrow",
-            "evolving_atomic_rssm_shared_fastkan_arrow",
-            "dino_fullbank_arrow",
-            "dino_patchbank_arrow",
-            "dino_convbank_arrow",
-        }:
+        if self.continual_method not in {"none", "bounded_dream_rehearsal", "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}:
             raise ValueError(f"Unknown continual method: {self.continual_method!r}")
         is_bounded_dream_rehearsal = (
             self.continual_method == "bounded_dream_rehearsal"
         )
-        is_moe_arrow = self.continual_method == "moe_arrow"
-        is_cnn_fullbank = self.continual_method == "cnn_fullbank_arrow"
-        is_cnn_projector_lora = (
-            self.continual_method == "cnn_projector_lora_arrow"
+        is_moe_arrow = False
+        is_cnn_fullbank = False
+        is_cnn_projector_lora = False
+        is_cnn_compact_shared_actor = False
+        is_cnn_mechanism_bank = False
+        is_rec_rssm = False
+        is_evolving_autoroute = self.uses_reconstruction_task_inference
+
+        expected_inference = (
+            "first_frame_reconstruction" if is_evolving_autoroute else "oracle"
         )
-        is_cnn_compact_shared_actor = (
-            self.continual_method == "cnn_compact_shared_actor_arrow"
-        )
-        is_cnn_mechanism_bank = (
-            self.continual_method == "cnn_mechanism_bank_arrow"
-        )
-        is_rec_rssm = self.continual_method == "rec_rssm_arrow"
-        is_evolving_shared_fastkan = (
-            self.continual_method
-            == "evolving_atomic_rssm_shared_fastkan_arrow"
-        )
-        is_evolving_shared_heads = (
-            self.continual_method
-            == "evolving_atomic_rssm_shared_heads_arrow"
-        )
-        is_evolving_adaptive_compression_shared_heads = (
+        expected_episode_mode = "legacy"
+        if self.task_route_inference != expected_inference:
+            raise ValueError("Task route inference must match the separately named protocol")
+        if self.evaluation_episode_count_mode != expected_episode_mode:
+            raise ValueError("Evaluation episode counting must match the named protocol")
+        if (
+            type(self.evaluation_max_agent_decisions_per_episode) is not int
+            or self.evaluation_max_agent_decisions_per_episode != 32768
+        ):
+            raise ValueError("The exact evaluation episode safety cap is fixed at 32768 decisions")
+        if is_evolving_autoroute and (
+            self.evolving_task0_profile != "fixed_v1" or len(self.esc.env_configs) != 6
+            or self.epochs != 540 or self.esc.kwargs.get("swap_sched") != 90
+            or tuple(task.name for task in self.esc.env_configs) != (
+                "ALE/MsPacman-v5", "ALE/Boxing-v5", "ALE/CrazyClimber-v5",
+                "ALE/Frostbite-v5", "ALE/Seaquest-v5", "ALE/Enduro-v5",
+            )
+        ):
+            raise ValueError(
+                "Autoroute requires the original-six fixed_v1 540-epoch protocol"
+            )
+
+        is_evolving_shared_heads = False
+        is_evolving_adaptive_compression_shared_heads = is_evolving_autoroute or (
             self.continual_method
             == "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow"
         )
-        is_evolving_adaptive_qfp_ac_compression_shared_heads = (
-            self.continual_method
-            == "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow"
-        )
-        is_evolving_atomic_lora_shared_heads = (
-            self.continual_method
-            == "evolving_atomic_rssm_atomic_lora_shared_heads_arrow"
-        )
-        is_evolving_learned_base_adapters = (
-            self.continual_method
-            == "evolving_atomic_rssm_learned_base_adapters_arrow"
-        )
-        uses_evolving_shared_heads = (
-            is_evolving_shared_heads
-            or is_evolving_adaptive_compression_shared_heads
-            or is_evolving_adaptive_qfp_ac_compression_shared_heads
-            or is_evolving_atomic_lora_shared_heads
-            or is_evolving_learned_base_adapters
-        )
-        is_evolving_atomic = self.continual_method in {
-            "evolving_atomic_rssm_arrow",
-            "evolving_atomic_rssm_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
-            "evolving_atomic_rssm_learned_base_adapters_arrow",
-            "evolving_atomic_rssm_shared_fastkan_arrow",
-        }
+        is_evolving_adaptive_qfp_ac_compression_shared_heads = False
+        is_evolving_atomic_lora_shared_heads = False
+        is_evolving_learned_base_adapters = False
+        uses_evolving_shared_heads = (is_evolving_adaptive_compression_shared_heads)
+        is_evolving_atomic = self.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}
         if not isinstance(self.task_shared_prediction_heads, bool):
             raise ValueError("task_shared_prediction_heads must be a boolean")
-        if not isinstance(self.task_private_prediction_adapters, bool):
-            raise ValueError(
-                "task_private_prediction_adapters must be a boolean"
-            )
-        if not isinstance(
-            self.freeze_shared_prediction_heads_after_task0, bool
-        ):
-            raise ValueError(
-                "freeze_shared_prediction_heads_after_task0 must be a boolean"
-            )
-        if self.prediction_adapter_rank < 0:
-            raise ValueError("prediction_adapter_rank must be non-negative")
-        if self.prediction_adapter_residual_scale <= 0:
-            raise ValueError(
-                "prediction_adapter_residual_scale must be positive"
-            )
         if self.task_shared_prediction_heads and not uses_evolving_shared_heads:
             raise ValueError(
                 "Task-shared prediction heads require the separately named "
                 "shared prediction heads Evolving-Core method"
             )
-        uses_mechanism_bank = (
-            is_cnn_mechanism_bank or is_rec_rssm or is_evolving_atomic
-        )
+        uses_mechanism_bank = (is_evolving_atomic)
         if self.task_mechanism_capacity_profile not in {
             "matched_512",
-            "expanded_640",
-            "compact_128_128_64",
+
         }:
             raise ValueError(
                 "Unknown mechanism capacity profile: "
                 f"{self.task_mechanism_capacity_profile!r}"
             )
-        if (
-            self.task_mechanism_capacity_profile == "compact_128_128_64"
-            and not is_evolving_atomic
-        ):
-            raise ValueError(
-                "compact_128_128_64 is validated only for Evolving-Core"
-            )
         if self.task_mechanism_parameterization not in {
             "dense_private",
             "adaptive_dense_width",
-            "shared_frozen_down_film",
-            "learned_task0_low_rank",
-            "dense_task0_low_rank_atoms",
+
         }:
             raise ValueError(
                 "Unknown mechanism parameterization: "
                 f"{self.task_mechanism_parameterization!r}"
             )
-        if self.task_mechanism_parameterization == "shared_frozen_down_film":
-            if not is_evolving_atomic:
-                raise ValueError(
-                    "shared_frozen_down_film is validated only for Evolving-Core"
-                )
-            if self.task_mechanism_capacity_profile != "matched_512":
-                raise ValueError(
-                    "shared_frozen_down_film preserves the matched_512 hidden widths"
-                )
         if (
             self.task_mechanism_parameterization == "adaptive_dense_width"
-            and not (
-                is_evolving_adaptive_compression_shared_heads
-                or is_evolving_adaptive_qfp_ac_compression_shared_heads
-            )
+            and not (is_evolving_adaptive_compression_shared_heads)
         ):
             raise ValueError(
                 "adaptive_dense_width is validated only for the separately named "
                 "adaptive-compression shared-head method"
             )
-        if self.task_mechanism_low_rank < 0:
-            raise ValueError("task_mechanism_low_rank must be non-negative")
         if not isinstance(self.task_mechanism_num_atoms, int) or (
             self.task_mechanism_num_atoms < 1
         ):
             raise ValueError("task_mechanism_num_atoms must be a positive integer")
-        if self.task_mechanism_parameterization in {
-            "learned_task0_low_rank",
-            "dense_task0_low_rank_atoms",
-        }:
-            expected_method = (
-                is_evolving_learned_base_adapters
-                if self.task_mechanism_parameterization
-                == "learned_task0_low_rank"
-                else is_evolving_atomic_lora_shared_heads
-            )
-            if not expected_method:
-                raise ValueError(
-                    "The selected low-rank mechanism parameterization is "
-                    "validated only for its separately named method"
-                )
-            if self.task_mechanism_low_rank < 1:
-                raise ValueError(
-                    "Low-rank mechanisms require a positive rank"
-                )
-            if (
-                self.task_mechanism_parameterization
-                == "learned_task0_low_rank"
-                and self.task_mechanism_reuse
-            ):
-                raise ValueError(
-                    "learned_task0_low_rank disables old-atom reuse"
-                )
-            if (
-                self.task_mechanism_parameterization
-                == "dense_task0_low_rank_atoms"
-                and not self.task_mechanism_reuse
-            ):
-                raise ValueError(
-                    "dense_task0_low_rank_atoms requires old-atom reuse"
-                )
-            if self.task_mechanism_low_rank % self.task_mechanism_num_atoms:
-                raise ValueError(
-                    "task_mechanism_low_rank must be divisible by atom count"
-                )
-        elif self.task_mechanism_low_rank:
-            raise ValueError(
-                "task_mechanism_low_rank requires a named low-rank parameterization"
-            )
         if (
-            is_evolving_shared_fastkan
-            and self.task_mechanism_parameterization
-            != "shared_frozen_down_film"
-        ):
-            raise ValueError(
-                "The named Evolving-Core method requires mechanism "
-                "parameterization='shared_frozen_down_film'"
-            )
-        if (
-            is_evolving_shared_heads
-            and self.task_mechanism_parameterization != "dense_private"
-        ):
-            raise ValueError(
-                "The shared-prediction-head Evolving-Core method requires "
-                "mechanism parameterization='dense_private'"
-            )
-        if (
-            (
-                is_evolving_adaptive_compression_shared_heads
-                or is_evolving_adaptive_qfp_ac_compression_shared_heads
-            )
+            (is_evolving_adaptive_compression_shared_heads)
             and self.task_mechanism_parameterization != "adaptive_dense_width"
         ):
             raise ValueError(
@@ -733,76 +447,20 @@ class Config(Serialisable):
                 "mechanism parameterization='adaptive_dense_width'"
             )
         if (
-            (
-                is_evolving_shared_heads
-                or is_evolving_adaptive_compression_shared_heads
-                or is_evolving_adaptive_qfp_ac_compression_shared_heads
-            )
+            (is_evolving_adaptive_compression_shared_heads)
             and self.task_mechanism_capacity_profile != "matched_512"
         ):
             raise ValueError(
                 "The shared-prediction-head Evolving-Core method requires "
                 "dense matched_512 Q/F/P mechanisms"
             )
-        if is_evolving_learned_base_adapters:
-            if self.task_mechanism_capacity_profile != "matched_512":
-                raise ValueError(
-                    "The learned-base adapter method preserves matched_512 widths"
-                )
-            if self.task_mechanism_parameterization != "learned_task0_low_rank":
-                raise ValueError(
-                    "The learned-base adapter method requires "
-                    "parameterization='learned_task0_low_rank'"
-                )
-            if self.task_mechanism_low_rank != 32:
-                raise ValueError(
-                    "The learned-base adapter pilot fixes Q/F/P low-rank size to 32"
-                )
-        if is_evolving_atomic_lora_shared_heads:
-            if self.task_mechanism_capacity_profile != "matched_512":
-                raise ValueError(
-                    "The atomic-LoRA shared-head method preserves matched_512 widths"
-                )
-            if (
-                self.task_mechanism_parameterization
-                != "dense_task0_low_rank_atoms"
-            ):
-                raise ValueError(
-                    "The atomic-LoRA shared-head method requires "
-                    "parameterization='dense_task0_low_rank_atoms'"
-                )
-            if self.task_mechanism_low_rank != 128:
-                raise ValueError(
-                    "The atomic-LoRA shared-head pilot fixes Q/F/P rank to 128"
-                )
-        if (
-            self.continual_method == "evolving_atomic_rssm_arrow"
-            and self.task_mechanism_parameterization
-            == "shared_frozen_down_film"
-            and self.rssm_num_experts != 6
-        ):
-            raise ValueError(
-                "The named Evolving-Core method requires mechanism "
-                "parameterization='dense_private' outside the separately "
-                "named six-task shared-down pilot"
-            )
         if not isinstance(self.task_mechanism_bank, bool) or not isinstance(
             self.task_mechanism_reuse, bool
         ):
             raise ValueError("Mechanism-bank enable/reuse settings must be booleans")
-        if not isinstance(self.task_mechanism_reuse_probe_epochs, int) or (
-            self.task_mechanism_reuse_probe_epochs < 0
-        ):
-            raise ValueError(
-                "task_mechanism_reuse_probe_epochs must be a non-negative integer"
-            )
-        if self.task_mechanism_route_lr_scale <= 0:
-            raise ValueError("task_mechanism_route_lr_scale must be positive")
-        if self.task_mechanism_consolidation_batches < 1:
-            raise ValueError("task_mechanism_consolidation_batches must be positive")
-        if not 0 <= self.task_mechanism_min_contribution < 1:
+        if not 0 <= 0.01 < 1:
             raise ValueError("task_mechanism_min_contribution must lie in [0, 1)")
-        if not 0 <= self.task_mechanism_max_validation_drop < 1:
+        if not 0 <= 0.05 < 1:
             raise ValueError("task_mechanism_max_validation_drop must lie in [0, 1)")
         evolving_defaults = {
             "evolving_task0_profile": "fixed_v1",
@@ -828,29 +486,12 @@ class Config(Serialisable):
             "adaptive_compression_rollouts": 0,
             "adaptive_compression_max_return_drop": 0.0,
             "adaptive_compression_qfp_distill_scale": 0.0,
-            "adaptive_behavior_residuals": False,
-            "adaptive_behavior_hidden_features": 512,
-            "adaptive_behavior_residual_scale": 0.1,
-            "adaptive_behavior_num_atoms": 4,
-            "adaptive_behavior_reuse": True,
-            "adaptive_behavior_width_fractions": [],
-            "adaptive_behavior_steps_per_candidate": 0,
-            "adaptive_behavior_lr": 0.0,
-            "adaptive_behavior_rollouts": 0,
-            "adaptive_behavior_max_return_drop": 0.0,
-            "adaptive_behavior_actor_distill_scale": 0.0,
-            "adaptive_behavior_critic_distill_scale": 0.0,
             "evolving_shared_behavior_current_task_fraction": 1.0,
-            "task_private_heads": False,
             "task_shared_prediction_heads": False,
-            "task_private_prediction_adapters": False,
-            "prediction_adapter_rank": 0,
-            "prediction_adapter_residual_scale": 0.1,
-            "freeze_shared_prediction_heads_after_task0": False,
             "shared_prediction_distill_scale": 0.0,
             "task_private_actor_critic": False,
             "task_atomic_routes": False,
-            "full_task_rssm_experts": False,
+
         }
         if is_evolving_atomic:
             if self.evolving_checkpoint_retention not in {
@@ -892,38 +533,15 @@ class Config(Serialisable):
                 **evolving_defaults,
                 "evolving_task0_profile": self.evolving_task0_profile,
                 "evolving_shared_core": True,
-                "task_private_heads": not uses_evolving_shared_heads,
                 "task_shared_prediction_heads": uses_evolving_shared_heads,
                 "shared_prediction_distill_scale": (
                     0.1 if uses_evolving_shared_heads else 0.0
                 ),
-                "task_private_actor_critic": not (
-                    is_evolving_shared_fastkan
-                    or is_evolving_adaptive_qfp_ac_compression_shared_heads
-                ),
+                "task_private_actor_critic": True,
                 "task_atomic_routes": True,
-                "ac_lr": 4e-5 if is_evolving_shared_fastkan else 1e-4,
+                "ac_lr": (1e-4),
             }
-            if (
-                is_evolving_shared_fastkan
-                or is_evolving_adaptive_qfp_ac_compression_shared_heads
-            ):
-                expected_evolving[
-                    "evolving_shared_behavior_current_task_fraction"
-                ] = 0.75
-            if is_evolving_learned_base_adapters:
-                expected_evolving.update(
-                    {
-                        "task_private_prediction_adapters": True,
-                        "prediction_adapter_rank": 32,
-                        "prediction_adapter_residual_scale": 0.1,
-                        "freeze_shared_prediction_heads_after_task0": True,
-                    }
-                )
-            if (
-                is_evolving_adaptive_compression_shared_heads
-                or is_evolving_adaptive_qfp_ac_compression_shared_heads
-            ):
+            if (is_evolving_adaptive_compression_shared_heads):
                 expected_evolving.update(
                     {
                         "adaptive_compression_width_fractions": [
@@ -937,28 +555,6 @@ class Config(Serialisable):
                         "adaptive_compression_rollouts": 16,
                         "adaptive_compression_max_return_drop": 0.05,
                         "adaptive_compression_qfp_distill_scale": 1.0,
-                    }
-                )
-            if is_evolving_adaptive_qfp_ac_compression_shared_heads:
-                expected_evolving.update(
-                    {
-                        "adaptive_behavior_residuals": True,
-                        "adaptive_behavior_hidden_features": 512,
-                        "adaptive_behavior_residual_scale": 0.1,
-                        "adaptive_behavior_num_atoms": 4,
-                        "adaptive_behavior_reuse": True,
-                        "adaptive_behavior_width_fractions": [
-                            0.75,
-                            0.5,
-                            0.25,
-                            0.125,
-                        ],
-                        "adaptive_behavior_steps_per_candidate": 250,
-                        "adaptive_behavior_lr": 2e-4,
-                        "adaptive_behavior_rollouts": 16,
-                        "adaptive_behavior_max_return_drop": 0.05,
-                        "adaptive_behavior_actor_distill_scale": 1.0,
-                        "adaptive_behavior_critic_distill_scale": 1.0,
                     }
                 )
             expected_evolving.update(
@@ -1029,11 +625,6 @@ class Config(Serialisable):
                     "Evolving-Core shared-behavior current-task fraction must lie "
                     "in (0, 1]"
                 )
-            if is_evolving_shared_fastkan and self.evolving_task0_profile != "fixed_v2":
-                raise ValueError(
-                    "Evolving-Core Shared-Frozen-Down + Shared FastKAN inherits "
-                    "the fixed_v2 Task-0 profile"
-                )
             if min(
                 self.interface_q_scale,
                 self.interface_h_scale,
@@ -1044,10 +635,7 @@ class Config(Serialisable):
                     "Evolving-Core interface and atom regularization scales "
                     "must be non-negative"
                 )
-            if (
-                is_evolving_adaptive_compression_shared_heads
-                or is_evolving_adaptive_qfp_ac_compression_shared_heads
-            ):
+            if (is_evolving_adaptive_compression_shared_heads):
                 fractions = self.adaptive_compression_width_fractions
                 if (
                     not isinstance(fractions, list)
@@ -1144,68 +732,6 @@ class Config(Serialisable):
                             "Adaptive compression candidates must map to unique "
                             "atom-divisible Q/F/P widths"
                         )
-            if is_evolving_adaptive_qfp_ac_compression_shared_heads:
-                behavior_fractions = self.adaptive_behavior_width_fractions
-                if (
-                    not isinstance(behavior_fractions, list)
-                    or behavior_fractions
-                    != self.adaptive_compression_width_fractions
-                ):
-                    raise ValueError(
-                        "Adaptive behavior compression uses the fixed Q/F/P width grid"
-                    )
-                if not self.adaptive_behavior_residuals:
-                    raise ValueError(
-                        "Adaptive behavior compression requires routed residual heads"
-                    )
-                if (
-                    self.actor_network != "mlp"
-                    or self.ac_optimizer != "adam"
-                    or self.fresh_ac is not False
-                ):
-                    raise ValueError(
-                        "Adaptive behavior compression requires one persistent "
-                        "Dreamer MLP Actor-Critic with Adam"
-                    )
-                if (
-                    self.adaptive_behavior_hidden_features != 512
-                    or self.adaptive_behavior_num_atoms != 4
-                    or not self.adaptive_behavior_reuse
-                    or self.adaptive_behavior_residual_scale != 0.1
-                ):
-                    raise ValueError(
-                        "Adaptive behavior compression requires full-width four-atom "
-                        "shared-base residual acquisition"
-                    )
-                if self.adaptive_behavior_steps_per_candidate < 1:
-                    raise ValueError(
-                        "Adaptive behavior compression steps must be positive"
-                    )
-                if self.adaptive_behavior_lr <= 0:
-                    raise ValueError("Adaptive behavior compression LR must be positive")
-                if self.adaptive_behavior_rollouts < 1:
-                    raise ValueError(
-                        "Adaptive behavior compression rollouts must be positive"
-                    )
-                if not 0 <= self.adaptive_behavior_max_return_drop < 1:
-                    raise ValueError(
-                        "Adaptive behavior maximum return drop must lie in [0, 1)"
-                    )
-                if min(
-                    self.adaptive_behavior_actor_distill_scale,
-                    self.adaptive_behavior_critic_distill_scale,
-                ) <= 0:
-                    raise ValueError(
-                        "Adaptive behavior actor/critic distillation scales must be positive"
-                    )
-                if (
-                    self.ac_slow_critic_regularizer != 0
-                    or self.ac_use_slow_critic_targets
-                ):
-                    raise ValueError(
-                        "Adaptive behavior compression requires one routed critic; "
-                        "slow-critic regularization and targets must remain disabled"
-                    )
         else:
             if self.evolving_checkpoint_retention != "all_boundaries":
                 raise ValueError(
@@ -1223,22 +749,12 @@ class Config(Serialisable):
                     "a named evolving_atomic_rssm continual method: "
                     f"{evolving_nondefault}"
                 )
-        is_dino_fullbank = self.continual_method == "dino_fullbank_arrow"
-        is_dino_patchbank = self.continual_method == "dino_patchbank_arrow"
-        is_dino_convbank = self.continual_method == "dino_convbank_arrow"
-        is_dino_pixelbank = is_dino_patchbank or is_dino_convbank
-        uses_task_experts = (
-            is_moe_arrow
-            or is_cnn_fullbank
-            or is_cnn_projector_lora
-            or is_cnn_compact_shared_actor
-            or uses_mechanism_bank
-            or is_dino_fullbank
-            or is_dino_pixelbank
-        )
-        is_independent_expert = (
-            self.independent_expert_original_task_index is not None
-        )
+        is_dino_fullbank = False
+        is_dino_patchbank = False
+        is_dino_convbank = False
+        is_dino_pixelbank = (False)
+        uses_task_experts = (uses_mechanism_bank)
+        is_independent_expert = False
         if self.data_parallel_world_size not in {1, 2, 4}:
             raise ValueError("data_parallel_world_size must be one of 1, 2, or 4")
         if self.evaluation_seed_protocol not in {
@@ -1258,11 +774,10 @@ class Config(Serialisable):
                 "evaluation_task_seed_offset requires fixed validation seeds"
             )
         if self.data_parallel_world_size > 1:
-            if not (is_dino_convbank or is_cnn_fullbank):
-                raise ValueError(
-                    "multi-GPU data parallelism is validated only for "
-                    "DINO-ConvBank-ARROW and CNN-FullBank-ARROW"
-                )
+            raise ValueError(
+                "multi-GPU data parallelism is validated only for "
+                "DINO-ConvBank-ARROW and CNN-FullBank-ARROW"
+            )
             distributed_batch_sizes = {
                 "mb_n_size": self.mb_n_size,
                 "pretrain_mb_n_size": self.pretrain_mb_n_size,
@@ -1279,29 +794,7 @@ class Config(Serialisable):
                     "fixed global sequence batches must divide equally across "
                     f"data-parallel ranks: {indivisible}"
                 )
-        if is_dino_convbank:
-            if self.compute_dtype != "bfloat16":
-                raise ValueError(
-                    "DINO-ConvBank-ARROW requires bfloat16 compute"
-                )
-            if self.dinov3_max_batch_size != 512:
-                raise ValueError(
-                    "DINO-ConvBank-ARROW requires a 512-frame DINO execution chunk"
-                )
-            if self.dinov3_feature_cache_dtype != "bfloat16":
-                raise ValueError(
-                    "DINO-ConvBank-ARROW requires bfloat16 on-the-fly features"
-                )
-            if self.replay_observation_dtype != "uint8":
-                raise ValueError(
-                    "DINO-ConvBank-ARROW requires uint8 observation replay"
-                )
-        elif (
-            is_cnn_fullbank
-            or is_cnn_projector_lora
-            or is_cnn_compact_shared_actor
-            or uses_mechanism_bank
-        ):
+        if (uses_mechanism_bank):
             if self.compute_dtype != "bfloat16":
                 raise ValueError("The CNN task-bank protocol requires bfloat16 compute")
             if self.replay_observation_dtype != "uint8":
@@ -1321,42 +814,13 @@ class Config(Serialisable):
                 raise ValueError("Task-aware expert methods require ARROW mixed replay")
             if self.esc.env_schedule_type is not SequentialEnvironments:
                 raise ValueError("Task-aware expert methods require a sequential task schedule")
-            if is_independent_expert:
-                if not is_cnn_fullbank:
-                    raise ValueError(
-                        "Independent experts are validated only for CNN-FullBank"
-                    )
-                if len(self.esc.env_configs) != 1:
-                    raise ValueError(
-                        "Independent expert training requires exactly one environment"
-                    )
-                if not (
-                    0
-                    <= self.independent_expert_original_task_index
-                    < self.rssm_num_experts
-                ):
-                    raise ValueError(
-                        "Independent expert task index must address an allocated slot"
-                    )
-                if (
-                    self.evaluation_task_seed_offset
-                    != self.independent_expert_original_task_index
-                ):
-                    raise ValueError(
-                        "Independent expert evaluation offset must match its original task index"
-                    )
-            else:
-                if len(self.esc.env_configs) < 2:
-                    raise ValueError(
-                        "Task-aware expert methods require at least two scheduled tasks"
-                    )
-                if self.rssm_num_experts != len(self.esc.env_configs):
-                    raise ValueError(
-                        "Task-aware expert methods require one RSSM expert per scheduled task"
-                    )
-            if self.residual_correction != "none":
+            if len(self.esc.env_configs) < 2:
                 raise ValueError(
-                    "A task-aware expert method does not use residual corrections"
+                    "Task-aware expert methods require at least two scheduled tasks"
+                )
+            if self.rssm_num_experts != len(self.esc.env_configs):
+                raise ValueError(
+                    "Task-aware expert methods require one RSSM expert per scheduled task"
                 )
         else:
             if self.rssm_num_experts != 1:
@@ -1374,6 +838,7 @@ class Config(Serialisable):
             "dream_rehearsal_realized_threshold": 0.3,
             "dream_rehearsal_realized_bonus": 10.0,
             "dream_rehearsal_grad_clip": 100.0,
+            "dream_rehearsal_bootstrap_last_imagined_feature": False,
         }
         if is_bounded_dream_rehearsal:
             from clworldmodel.continual.dream_rehearsal import (
@@ -1439,6 +904,10 @@ class Config(Serialisable):
                 raise ValueError(
                     "Dream-rehearsal gradient clipping must be non-negative"
                 )
+            if type(self.dream_rehearsal_bootstrap_last_imagined_feature) is not bool:
+                raise ValueError(
+                    "Dream-rehearsal bootstrap selection must be a boolean"
+                )
         else:
             nondefault_dream_rehearsal = {
                 name: (getattr(self, name), expected)
@@ -1451,43 +920,11 @@ class Config(Serialisable):
                     "continual_method='bounded_dream_rehearsal': "
                     f"{nondefault_dream_rehearsal}"
                 )
-
-        if is_moe_arrow:
-            if not 0 < self.moe_arrow_current_task_fraction < 1:
-                raise ValueError(
-                    "MoE-ARROW current-task update fraction must lie in (0, 1)"
-                )
-            if self.shared_core_mode != "trainable":
-                raise ValueError("MoE-ARROW keeps shared modules trainable")
-            if self.observation_objective != "dinov3_next_feature":
-                raise ValueError(
-                    "MoE-ARROW predicts frozen DINOv3 features from the RSSM prior"
-                )
-        elif (
-            is_cnn_fullbank
-            or is_cnn_projector_lora
-            or is_cnn_compact_shared_actor
-            or is_cnn_mechanism_bank
-            or is_evolving_atomic
-            or is_dino_fullbank
-            or is_dino_pixelbank
-        ):
-            if self.dino_fullbank_current_task_fraction != 1.0:
-                raise ValueError(
-                    "Full task banks assign all updates to the current task"
-                )
+        if (is_evolving_atomic):
             expected_shared_core_mode = (
                 "evolving_replay_protected"
                 if is_evolving_atomic
-                else "task_banked_shared_adapter"
-                if is_dino_convbank
-                else "task1_frozen_projector_compact_rssm"
-                if is_cnn_compact_shared_actor
-                else "task1_frozen_mechanism_bank"
-                if is_cnn_mechanism_bank
-                else "task1_frozen_projector_lora"
-                if is_cnn_projector_lora
-                else "task_isolated"
+                else ("task_isolated")
             )
             if self.shared_core_mode != expected_shared_core_mode:
                 raise ValueError(
@@ -1496,23 +933,14 @@ class Config(Serialisable):
                 )
             expected_objective = (
                 "reconstruction"
-                if is_cnn_fullbank
-                or is_cnn_projector_lora
-                or is_cnn_compact_shared_actor
-                or uses_mechanism_bank
-                or is_dino_pixelbank
+                if (uses_mechanism_bank)
                 else "dinov3_posterior_feature"
             )
             if self.observation_objective != expected_objective:
                 raise ValueError(
                     (
                         "CNN and DINO patch task banks keep DreamerV3 pixel reconstruction"
-                        if is_cnn_fullbank
-                        or is_cnn_projector_lora
-                        or is_cnn_compact_shared_actor
-                        or is_cnn_mechanism_bank
-                        or is_evolving_atomic
-                        or is_dino_pixelbank
+                        if (is_evolving_atomic)
                         else "DINO-FullBank-ARROW reconstructs posterior DINOv3 features"
                     )
                 )
@@ -1520,29 +948,14 @@ class Config(Serialisable):
                 raise ValueError(
                     "Full task banks require a random collection for each new task"
                 )
-            if (
-                is_cnn_fullbank
-                or is_cnn_projector_lora
-                or is_cnn_compact_shared_actor
-                or is_cnn_mechanism_bank
-                or is_evolving_atomic
-                or is_dino_pixelbank
-            ) and any(
+            if (is_evolving_atomic) and any(
                 replay_config.rb_device.split(":", 1)[0] != "cpu"
                 for replay_config in self.replay_buffers
             ):
                 raise ValueError(
                     "Pixel task banks require CPU-addressable mapped observation replay"
                 )
-        if self.task_banked_image_encoder != is_cnn_fullbank:
-            raise ValueError(
-                "task_banked_image_encoder is required only by CNN-FullBank-ARROW"
-            )
-        uses_cnn_projector = (
-            is_cnn_projector_lora
-            or is_cnn_compact_shared_actor
-            or uses_mechanism_bank
-        )
+        uses_cnn_projector = (uses_mechanism_bank)
         if self.task_projected_image_encoder != uses_cnn_projector:
             raise ValueError(
                 "task_projected_image_encoder is required only by "
@@ -1558,10 +971,10 @@ class Config(Serialisable):
                     "CNN projector methods fix the projector bottleneck at 64"
                 )
             observed_ranks = (
-                self.task_lora_recurrent_rank,
-                self.task_lora_representation_rank,
-                self.task_lora_transition_rank,
-                self.task_recurrent_output_adapter_features,
+                0,
+                0,
+                0,
+                0,
             )
             if uses_mechanism_bank:
                 if observed_ranks != (0, 0, 0, 0):
@@ -1570,8 +983,7 @@ class Config(Serialisable):
                     )
                 expected_mechanism_settings = {
                     "matched_512": (True, 512, 512, 256, 0.1),
-                    "expanded_640": (True, 640, 640, 320, 0.1),
-                    "compact_128_128_64": (True, 128, 128, 64, 0.1),
+
                 }[self.task_mechanism_capacity_profile]
                 observed_mechanism_settings = (
                     self.task_mechanism_bank,
@@ -1586,28 +998,17 @@ class Config(Serialisable):
                         f"settings to {expected_mechanism_settings}, got "
                         f"{observed_mechanism_settings}"
                     )
-                if (
-                    self.task_mechanism_capacity_profile == "expanded_640"
-                    and not is_rec_rssm
-                ):
-                    raise ValueError(
-                        "expanded_640 is validated only for REC-RSSM"
-                    )
                 atom_settings = (
                     self.task_mechanism_num_atoms,
-                    self.task_mechanism_reuse_probe_epochs,
-                    self.task_mechanism_route_lr_scale,
-                    self.task_mechanism_consolidation_batches,
-                    self.task_mechanism_min_contribution,
-                    self.task_mechanism_max_validation_drop,
+                    0,
+                    1.0,
+                    8,
+                    0.01,
+                    0.05,
                 )
-                expected_atom_settings = (
-                    (4, 1, 5.0, 8, 0.01, 0.05)
-                    if is_rec_rssm
-                    else (4, 0, 1.0, 8, 0.01, 0.05)
+                expected_atom_settings = ((4, 0, 1.0, 8, 0.01, 0.05)
                     if is_evolving_atomic
-                    else (1, 0, 1.0, 8, 0.01, 0.05)
-                )
+                    else (1, 0, 1.0, 8, 0.01, 0.05))
                 if atom_settings != expected_atom_settings:
                     raise ValueError(
                         "The named mechanism protocol fixes atom/probe/route-LR/"
@@ -1615,8 +1016,7 @@ class Config(Serialisable):
                         f"{expected_atom_settings}, got {atom_settings}"
                 )
                 if (
-                    (is_rec_rssm or is_evolving_atomic)
-                    and not is_evolving_learned_base_adapters
+                    (is_evolving_atomic)
                     and not self.task_mechanism_reuse
                 ):
                     raise ValueError("Atomic RSSM requires atom reuse")
@@ -1625,7 +1025,7 @@ class Config(Serialisable):
                         "CNN-MechanismBank methods require persistent actor-critics"
                     )
                 expected_actor_network = (
-                    "fast_kan_ac_stable" if is_evolving_shared_fastkan else "mlp"
+                    ("mlp")
                 )
                 if self.actor_network != expected_actor_network:
                     raise ValueError(
@@ -1633,33 +1033,14 @@ class Config(Serialisable):
                         f"'{expected_actor_network}'"
                     )
             else:
-                expected_ranks = (
-                    ((0, 32, 32, 32),)
-                    if is_cnn_compact_shared_actor
-                    else ((128, 128, 32, 0), (32, 32, 16, 0))
-                )
+                expected_ranks = ((128, 128, 32, 0), (32, 32, 16, 0))
                 if observed_ranks not in expected_ranks:
-                    method_description = (
-                        "The compact recurrent/representation protocol fixes "
-                        "recurrent-LoRA/representation-LoRA/transition-LoRA/"
-                        "GRU-output-adapter sizes"
-                        if is_cnn_compact_shared_actor
-                        else "CNN-Projector-LoRA-ARROW fixes recurrent/representation/"
-                        "transition/output-adapter sizes"
-                    )
+                    method_description = ("CNN-Projector-LoRA-ARROW fixes recurrent/representation/"
+                        "transition/output-adapter sizes")
                     raise ValueError(
                         f"{method_description} to a named profile in "
                         f"{expected_ranks}, got {observed_ranks}"
                     )
-        elif any(
-            (
-                self.task_lora_recurrent_rank,
-                self.task_lora_representation_rank,
-                self.task_lora_transition_rank,
-                self.task_recurrent_output_adapter_features,
-            )
-        ):
-            raise ValueError("RSSM adapters require a named CNN projector method")
         if self.task_mechanism_bank != uses_mechanism_bank:
             raise ValueError(
                 "task_mechanism_bank is required only by named mechanism methods"
@@ -1675,11 +1056,11 @@ class Config(Serialisable):
                 )
             observed_atom_settings = (
                 self.task_mechanism_num_atoms,
-                self.task_mechanism_reuse_probe_epochs,
-                self.task_mechanism_route_lr_scale,
-                self.task_mechanism_consolidation_batches,
-                self.task_mechanism_min_contribution,
-                self.task_mechanism_max_validation_drop,
+                0,
+                1.0,
+                8,
+                0.01,
+                0.05,
             )
             default_atom_settings = (1, 0, 1.0, 8, 0.01, 0.05)
             if observed_atom_settings != default_atom_settings:
@@ -1689,344 +1070,40 @@ class Config(Serialisable):
                 )
         shared_actor_defaults = (False, 0.0, 1, 1, 0, 1)
         shared_actor_values = (
-            self.shared_actor_imagination_distillation,
-            self.shared_actor_distill_scale,
-            self.shared_actor_distill_interval,
-            self.shared_actor_distill_n_sync,
-            self.shared_actor_distill_burnin_steps,
-            self.shared_actor_distill_steps,
+            False,
+            0.0,
+            1,
+            1,
+            0,
+            1,
         )
-        if is_cnn_compact_shared_actor:
-            expected_shared_actor_values = (True, 1.0, 4, 128, 16, 16)
-            if shared_actor_values != expected_shared_actor_values:
-                raise ValueError(
-                    "CNN-Compact-SharedActor requires fixed imagination distillation "
-                    f"settings {expected_shared_actor_values}, got {shared_actor_values}"
-                )
-            if self.fresh_ac is not False or self.actor_network != "mlp":
-                raise ValueError(
-                    "CNN-Compact-SharedActor requires one persistent MLP actor-critic"
-                )
-        elif shared_actor_values != shared_actor_defaults:
+        if shared_actor_values != shared_actor_defaults:
             raise ValueError(
                 "Shared-actor imagination distillation settings require "
                 "CNN-Compact-SharedActor"
             )
-        if (
-            is_cnn_fullbank
-            or is_cnn_projector_lora
-            or is_cnn_compact_shared_actor
-            or is_cnn_mechanism_bank
-            or is_evolving_atomic
-        ) and self.observation_encoder != "cnn":
+        if (is_evolving_atomic) and self.observation_encoder != "cnn":
             raise ValueError("CNN task-bank methods require the CNN observation encoder")
         if self.observation_objective not in {
             "reconstruction",
-            "r2",
-            "dinov3_next_feature",
-            "dinov3_posterior_feature",
+
         }:
             raise ValueError(
                 f"Unknown observation objective: {self.observation_objective!r}"
             )
-        if self.r2_barlow_loss_scale <= 0:
-            raise ValueError("r2_barlow_loss_scale must be positive")
-        if self.r2_redundancy_scale < 0:
-            raise ValueError("r2_redundancy_scale must be non-negative")
-        if self.r2_normalization_eps <= 0:
-            raise ValueError("r2_normalization_eps must be positive")
-        if self.observation_encoder not in {"cnn", "dinov3_vits16"}:
+        if self.observation_encoder not in {"cnn", }:
             raise ValueError(f"Unknown observation encoder: {self.observation_encoder!r}")
-        uses_dinov3_objective = self.observation_objective in {
-            "dinov3_next_feature",
-            "dinov3_posterior_feature",
-        }
-        uses_dinov3 = self.observation_encoder == "dinov3_vits16"
-        if uses_dinov3:
-            if self.algorithm != "arrow":
-                raise ValueError("KARROW Frozen-Core requires ARROW mixed replay")
-            if self.observation_encoder != "dinov3_vits16":
-                raise ValueError("DINOv3 feature prediction requires dinov3_vits16")
-            if self.dinov3_model_path is None:
-                raise ValueError("DINOv3 feature prediction requires dinov3_model_path")
-            if not Path(self.dinov3_model_path).is_absolute():
-                raise ValueError("dinov3_model_path must be absolute")
-            if self.dinov3_input_size != 256:
-                raise ValueError("KARROW Frozen-Core fixes DINOv3 input size at 256")
-            if self.dinov3_max_batch_size < 1:
-                raise ValueError("dinov3_max_batch_size must be positive")
-            if self.dinov3_feature_cache_dtype not in {
-                "float16",
-                "bfloat16",
-                "float32",
-            }:
-                raise ValueError("Unknown DINOv3 feature cache dtype")
-            if self.dinov3_replay_feature_mode not in {"cached", "on_the_fly"}:
-                raise ValueError("Unknown DINOv3 replay feature mode")
-            if (
-                self.dinov3_feature_cache_dtype == "bfloat16"
-                and self.dinov3_replay_feature_mode != "on_the_fly"
-            ):
-                raise ValueError(
-                    "bfloat16 DINO features are supported only for on-the-fly replay"
-                )
-            if is_dino_pixelbank:
-                if self.dinov3_replay_feature_mode != "on_the_fly":
-                    raise ValueError(
-                        "A DINO patch task bank recomputes frozen DINOv3 patches "
-                        "from sampled replay observations"
-                    )
-                if (
-                    self.compute_dtype == "bfloat16"
-                    and self.dinov3_feature_cache_dtype != "bfloat16"
-                ):
-                    raise ValueError(
-                        "BF16 DINO patch task banks require bfloat16 on-the-fly "
-                        "features to avoid a redundant dtype round trip"
-                    )
-            elif self.dinov3_replay_feature_mode != "cached":
-                raise ValueError(
-                    "Only DINO patch task banks support on-the-fly replay features"
-                )
-            if self.dinov3_feature_loss_scale <= 0:
-                raise ValueError("dinov3_feature_loss_scale must be positive")
-            if self.dinov3_feature_mode not in {"cls", "patch_grid"}:
-                raise ValueError("Unknown DINOv3 feature mode")
-            if self.dinov3_patch_pool_size < 1:
-                raise ValueError("dinov3_patch_pool_size must be positive")
-            if not 1 <= self.dinov3_patch_feature_dim <= 384:
-                raise ValueError("dinov3_patch_feature_dim must be in [1, 384]")
-            if self.dinov3_patch_projection not in {
-                "none",
-                "task1_pca",
-                "fixed_orthogonal",
-            }:
-                raise ValueError("Unknown DINOv3 patch projection")
-            if self.dinov3_patch_projection_frames < 0:
-                raise ValueError("dinov3_patch_projection_frames must be non-negative")
-            if self.dinov3_patch_projection_seed < 0:
-                raise ValueError("dinov3_patch_projection_seed must be non-negative")
-            if self.dinov3_patch_adapter not in {
-                "none",
-                "conv_3x3_stride2",
-            }:
-                raise ValueError("Unknown DINOv3 patch adapter")
-            if is_dino_convbank:
-                if self.dinov3_patch_adapter != "conv_3x3_stride2":
-                    raise ValueError(
-                        "DINO-ConvBank-ARROW requires the shared 3x3 stride-2 adapter"
-                    )
-            elif self.dinov3_patch_adapter != "none":
-                raise ValueError(
-                    "Only DINO-ConvBank-ARROW uses a trainable patch adapter"
-                )
-            if self.dinov3_feature_loss_kind not in {
-                "cosine",
-                "batch_standardized_smooth_l1",
-            }:
-                raise ValueError("Unknown DINOv3 feature loss")
-            if self.dinov3_feature_std_floor <= 0:
-                raise ValueError("dinov3_feature_std_floor must be positive")
-            if self.observation_objective == "dinov3_next_feature":
-                if is_moe_arrow:
-                    if self.dinov3_feature_mode != "patch_grid":
-                        raise ValueError(
-                            "MoE-ARROW requires pooled DINOv3 patch features"
-                        )
-                    if self.dinov3_patch_pool_size != 4:
-                        raise ValueError("MoE-ARROW fixes a 4x4 DINOv3 patch grid")
-                    if self.dinov3_patch_feature_dim != 64:
-                        raise ValueError(
-                            "MoE-ARROW fixes each projected patch at 64 dimensions"
-                        )
-                    if self.dinov3_patch_projection != "fixed_orthogonal":
-                        raise ValueError(
-                            "MoE-ARROW requires a task-independent fixed projection"
-                        )
-                    if self.dinov3_patch_projection_frames != 0:
-                        raise ValueError("MoE-ARROW never fits a Task-1 projection")
-                    if self.dinov3_feature_loss_kind != "cosine":
-                        raise ValueError("MoE-ARROW fixes the prior feature loss to cosine")
-                else:
-                    if self.dinov3_feature_mode != "cls":
-                        raise ValueError("KARROW v1 fixes DINOv3 output to the CLS token")
-                    if self.dinov3_feature_loss_kind != "cosine":
-                        raise ValueError("KARROW v1 fixes the feature loss to cosine")
-                    if self.dinov3_patch_feature_dim != 384:
-                        raise ValueError(
-                            "KARROW v1 does not use projected patch features"
-                        )
-                    if (
-                        self.dinov3_patch_projection != "none"
-                        or self.dinov3_patch_projection_frames != 0
-                        or self.dinov3_patch_projection_seed != 0
-                    ):
-                        raise ValueError("KARROW v1 does not fit a patch projection")
-            elif self.observation_objective == "dinov3_posterior_feature":
-                if self.dinov3_feature_mode != "patch_grid":
-                    if is_dino_fullbank:
-                        raise ValueError(
-                            "DINO-FullBank-ARROW requires pooled DINOv3 patch tokens"
-                        )
-                    raise ValueError(
-                        "KARROW spatial v2 requires pooled DINOv3 patch tokens"
-                    )
-                if self.dinov3_patch_pool_size != 4:
-                    raise ValueError("Posterior DINOv3 objectives fix a 4x4 patch grid")
-                if self.dinov3_patch_feature_dim != 64:
-                    raise ValueError(
-                        "Posterior DINOv3 objectives fix each patch feature at 64 dimensions"
-                    )
-                if is_dino_fullbank:
-                    if self.dinov3_patch_projection != "fixed_orthogonal":
-                        raise ValueError(
-                            "DINO-FullBank-ARROW requires a task-independent fixed projection"
-                        )
-                    if self.dinov3_patch_projection_frames != 0:
-                        raise ValueError(
-                            "DINO-FullBank-ARROW never fits a task-specific projection"
-                        )
-                else:
-                    if self.dinov3_patch_projection != "task1_pca":
-                        raise ValueError(
-                            "KARROW spatial v2 learns a Task-1 PCA patch projection"
-                        )
-                    if self.dinov3_patch_projection_frames != 512:
-                        raise ValueError(
-                            "KARROW spatial v2 fits PCA on 512 initial Task-1 frames"
-                        )
-                    if self.random_policy != "first":
-                        raise ValueError(
-                            "KARROW spatial v2 requires an initial random Task-1 collection"
-                        )
-                if (
-                    self.dinov3_feature_loss_kind
-                    != "batch_standardized_smooth_l1"
-                ):
-                    raise ValueError(
-                        "Posterior DINOv3 objectives require batch-standardized SmoothL1"
-                    )
-            elif self.observation_objective == "reconstruction":
-                if not is_dino_pixelbank:
-                    raise ValueError(
-                        "DINOv3 pixel reconstruction is reserved for "
-                        "named DINO patch task banks"
-                    )
-                if self.dinov3_feature_mode != "patch_grid":
-                    raise ValueError(
-                        "DINO patch task banks require spatial DINOv3 patch tokens"
-                    )
-                if self.dinov3_patch_pool_size != 16:
-                    raise ValueError(
-                        "DINO patch task banks retain the complete 16x16 patch grid"
-                    )
-                if self.dinov3_patch_feature_dim != 384:
-                    raise ValueError(
-                        "DINO patch task banks retain all 384 patch channels"
-                    )
-                if self.dinov3_patch_projection != "none":
-                    raise ValueError(
-                        "DINO patch task banks do not project frozen patch features"
-                    )
-                if self.dinov3_patch_projection_frames != 0:
-                    raise ValueError(
-                        "DINO patch task banks do not fit a patch projection"
-                    )
-                if self.dinov3_patch_projection_seed != 0:
-                    raise ValueError(
-                        "DINO patch task banks have no patch-projection RNG"
-                    )
-            else:
-                raise ValueError(
-                    "The DINOv3 encoder does not support the configured observation "
-                    f"objective: {self.observation_objective!r}"
-                )
-            if self.actor_network != "mlp":
-                raise ValueError("KARROW keeps the original MLP actor and critic")
-            if self.fresh_ac is not False:
-                if uses_task_experts:
-                    raise ValueError(
-                        "Task-aware expert methods manage persistent per-task actor-critics"
-                    )
-                raise ValueError("KARROW requires one persistent actor-critic across tasks")
-        elif (
-            uses_dinov3_objective
-            or self.observation_encoder != "cnn"
-            or self.dinov3_model_path is not None
-            or self.dinov3_feature_mode != "cls"
-            or self.dinov3_patch_feature_dim != 384
-            or self.dinov3_patch_projection != "none"
-            or self.dinov3_patch_projection_frames != 0
-            or self.dinov3_patch_projection_seed != 0
-            or self.dinov3_patch_adapter != "none"
-            or self.dinov3_feature_loss_kind != "cosine"
-        ):
+        uses_dinov3_objective = False
+        uses_dinov3 = False
+        if (self.observation_encoder != "cnn"):
             raise ValueError(
                 "Only named DINOv3 protocols may configure the DINOv3 encoder"
             )
-
-        if self.residual_correction not in {"none", "mlp", "kan"}:
-            raise ValueError(
-                f"Unknown residual correction: {self.residual_correction!r}"
-            )
-        if self.residual_input_mode not in {"base_output", "module_input"}:
-            raise ValueError(
-                f"Unknown residual input mode: {self.residual_input_mode!r}"
-            )
-        if self.residual_consolidation not in {"none", "replay_functional"}:
-            raise ValueError(
-                f"Unknown residual consolidation: {self.residual_consolidation!r}"
-            )
         if self.shared_core_mode not in {
             "trainable",
-            "freeze_after_first_task",
-            "snapshot_adaptation",
-            "task_isolated",
-            "task_banked_shared_adapter",
-            "task1_frozen_projector_lora",
-            "task1_frozen_projector_compact_rssm",
-            "task1_frozen_mechanism_bank",
             "evolving_replay_protected",
         }:
             raise ValueError(f"Unknown shared core mode: {self.shared_core_mode!r}")
-        if self.shared_core_mode == "task_isolated" and not (
-            is_cnn_fullbank or is_dino_fullbank or is_dino_patchbank
-        ):
-            raise ValueError(
-                "shared_core_mode='task_isolated' is reserved for full task banks"
-            )
-        if (
-            self.shared_core_mode == "task_banked_shared_adapter"
-            and not is_dino_convbank
-        ):
-            raise ValueError(
-                "shared_core_mode='task_banked_shared_adapter' is reserved for "
-                "DINO-ConvBank-ARROW"
-            )
-        if (
-            self.shared_core_mode == "task1_frozen_projector_lora"
-            and not is_cnn_projector_lora
-        ):
-            raise ValueError(
-                "shared_core_mode='task1_frozen_projector_lora' is reserved for "
-                "CNN-Projector-LoRA-ARROW"
-            )
-        if (
-            self.shared_core_mode == "task1_frozen_projector_compact_rssm"
-            and not is_cnn_compact_shared_actor
-        ):
-            raise ValueError(
-                "shared_core_mode='task1_frozen_projector_compact_rssm' is "
-                "reserved for CNN-Compact-SharedActor-ARROW"
-            )
-        if (
-            self.shared_core_mode == "task1_frozen_mechanism_bank"
-            and not uses_mechanism_bank
-        ):
-            raise ValueError(
-                "shared_core_mode='task1_frozen_mechanism_bank' is reserved for "
-                "CNN-MechanismBank-ARROW"
-            )
         if (
             self.shared_core_mode == "evolving_replay_protected"
             and not is_evolving_atomic
@@ -2035,65 +1112,8 @@ class Config(Serialisable):
                 "shared_core_mode='evolving_replay_protected' is reserved for "
                 "Evolving-Core Atomic RSSM"
             )
-        if self.residual_correction != "none" and not uses_dinov3:
-            raise ValueError("KARROW residuals require the frozen DINOv3 protocol")
-        if (
-            self.residual_correction != "none"
-            and self.shared_core_mode
-            not in {"freeze_after_first_task", "snapshot_adaptation"}
-        ):
-            raise ValueError(
-                "KARROW residuals require shared_core_mode="
-                "freeze_after_first_task or snapshot_adaptation"
-            )
-        if self.shared_core_mode == "freeze_after_first_task":
-            if self.residual_correction == "none":
-                raise ValueError(
-                    "Frozen shared core requires a plastic residual correction"
-                )
-            if not uses_dinov3:
-                raise ValueError(
-                    "Frozen shared core is only defined for the DINOv3 protocol"
-                )
-            if self.fresh_ac is not False:
-                raise ValueError(
-                    "Frozen shared core requires one persistent actor-critic"
-                )
-            if self.esc.env_schedule_type is not SequentialEnvironments:
-                raise ValueError(
-                    "Frozen shared core requires a sequential task schedule"
-                )
-            if len(self.esc.env_configs) < 2:
-                raise ValueError(
-                    "Frozen shared core requires at least two scheduled tasks"
-                )
-        if self.shared_core_mode == "snapshot_adaptation":
-            if self.residual_correction == "none":
-                raise ValueError(
-                    "Snapshot adaptation requires a plastic residual correction"
-                )
-            if not uses_dinov3:
-                raise ValueError(
-                    "Snapshot adaptation is only defined for the DINOv3 protocol"
-                )
-            if self.fresh_ac is not False:
-                raise ValueError(
-                    "Snapshot adaptation requires one persistent actor-critic"
-                )
-            if self.esc.env_schedule_type is not SequentialEnvironments:
-                raise ValueError(
-                    "Snapshot adaptation requires a sequential task schedule"
-                )
-        if self.residual_bottleneck_features != 64:
-            raise ValueError("KARROW Frozen-Core fixes the residual bottleneck at 64")
-        if self.residual_grid_size != 8:
-            raise ValueError("KARROW Frozen-Core fixes eight Gaussian basis centers")
-        if self.residual_input_min != -2.0 or self.residual_input_max != 2.0:
+        if (-2.0 != -2.0):
             raise ValueError("KARROW Frozen-Core fixes the residual basis range at [-2, 2]")
-        if self.residual_rms_norm_epsilon != 1e-4:
-            raise ValueError("KARROW Frozen-Core fixes residual RMSNorm epsilon at 1e-4")
-        if self.residual_alpha != 0.1:
-            raise ValueError("KARROW Frozen-Core fixes residual alpha at 0.1")
         consolidation_defaults = (
             16,
             8,
@@ -2102,64 +1122,21 @@ class Config(Serialisable):
             1.0,
         )
         consolidation_values = (
-            self.residual_consolidation_batches,
-            self.residual_consolidation_imagination_horizon,
-            self.residual_consolidation_gradient_power,
-            self.residual_consolidation_min_plasticity,
-            self.residual_consolidation_anchor_loss_scale,
+            16,
+            8,
+            2.0,
+            0.01,
+            1.0,
         )
-        if self.residual_consolidation == "none":
-            if consolidation_values != consolidation_defaults:
-                raise ValueError(
-                    "Residual consolidation settings require "
-                    "residual_consolidation='replay_functional'"
-                )
-        else:
-            if self.residual_correction != "kan":
-                raise ValueError("Replay consolidation requires KAN residuals")
-            if self.shared_core_mode != "freeze_after_first_task":
-                raise ValueError("Replay consolidation requires a frozen shared core")
-            if self.residual_consolidation_batches < 1:
-                raise ValueError("Residual consolidation batches must be positive")
-            if self.residual_consolidation_imagination_horizon < 0:
-                raise ValueError(
-                    "Residual consolidation imagination horizon must be non-negative"
-                )
-            if self.residual_consolidation_gradient_power <= 0:
-                raise ValueError(
-                    "Residual consolidation gradient power must be positive"
-                )
-            if not 0 <= self.residual_consolidation_min_plasticity <= 1:
-                raise ValueError(
-                    "Residual consolidation minimum plasticity must lie in [0, 1]"
-                )
-            if self.residual_consolidation_anchor_loss_scale < 0:
-                raise ValueError(
-                    "Residual consolidation anchor loss scale must be non-negative"
-                )
-        if self.actor_network not in {
-            "mlp",
-            "relu_kan",
-            "relu_kan_bounded",
-            "relu_kan_adaptive",
-            "fast_kan_ac",
-            "fast_kan_ac_param_matched",
-            "fast_kan_ac_stable",
-        }:
+        if consolidation_values != consolidation_defaults:
+            raise ValueError(
+                "Residual consolidation settings require "
+                "residual_consolidation='replay_functional'"
+            )
+        if self.actor_network not in {"mlp"}:
             raise ValueError(f"Unknown actor network: {self.actor_network!r}")
-        if self.actor_kan_hidden_features < 1:
-            raise ValueError("actor_kan_hidden_features must be positive")
-        if self.actor_kan_grid_size < 1:
-            raise ValueError("actor_kan_grid_size must be positive")
-        if self.actor_kan_spline_order < 0:
-            raise ValueError("actor_kan_spline_order must be non-negative")
-        if (
-            self.actor_kan_input_min != 0.0
-            or self.actor_kan_input_max != 1.0
-        ):
-            raise ValueError("The first KAN-Actor protocol requires a [0, 1] grid")
-        expected_trainable_grid = self.actor_network == "relu_kan_adaptive"
-        if self.actor_kan_trainable_grid != expected_trainable_grid:
+        expected_trainable_grid = False
+        if False != expected_trainable_grid:
             if expected_trainable_grid:
                 raise ValueError(
                     "relu_kan_adaptive requires actor_kan_trainable_grid=True"
@@ -2167,36 +1144,6 @@ class Config(Serialisable):
             raise ValueError(
                 "Only relu_kan_adaptive may enable actor_kan_trainable_grid"
             )
-        if not self.actor_kan_normalize_recurrent_state:
-            raise ValueError(
-                "The [0, 1] KAN-Actor input domain requires recurrent-state normalization"
-            )
-        if self.actor_network in {
-            "relu_kan",
-            "relu_kan_bounded",
-            "relu_kan_adaptive",
-        }:
-            basis_count = self.actor_kan_grid_size + self.actor_kan_spline_order
-            if self.actor_kan_hidden_features * basis_count != self.mlp_features:
-                raise ValueError(
-                    "KAN-Actor coefficient matching requires "
-                    "actor_kan_hidden_features * "
-                    "(actor_kan_grid_size + actor_kan_spline_order) == "
-                    f"mlp_features, got {self.actor_kan_hidden_features} * "
-                    f"{basis_count} != {self.mlp_features}"
-                )
-        if self.fastkan_hidden_features < 1 or self.fastkan_hidden_layers < 1:
-            raise ValueError("FastKAN hidden dimensions must be positive")
-        if self.fastkan_grid_size < 2:
-            raise ValueError("FastKAN grid size must be at least 2")
-        if self.fastkan_input_max <= self.fastkan_input_min:
-            raise ValueError("FastKAN input maximum must exceed its minimum")
-        if self.fastkan_rms_norm_epsilon <= 0:
-            raise ValueError("FastKAN RMSNorm epsilon must be positive")
-        if self.fastkan_actor_output_scale < 0:
-            raise ValueError("FastKAN actor output scale must be non-negative")
-        if not 0 <= self.fastkan_actor_unimix < 1:
-            raise ValueError("FastKAN actor unimix must lie in [0, 1)")
         if self.ac_optimizer not in {"adam", "laprop"}:
             raise ValueError(f"Unknown actor-critic optimizer: {self.ac_optimizer!r}")
         if self.ac_lr <= 0 or self.ac_fresh_lr <= 0:
@@ -2217,28 +1164,13 @@ class Config(Serialisable):
                     "Actor-critic final entropy scale must lie in "
                     "[0, ac_entropy_scale]"
                 )
-            current_only_actor_training = (
-                is_cnn_fullbank
-                or (
-                    is_rec_rssm
-                    and self.task_mechanism_capacity_profile == "expanded_640"
-                )
-            )
-            if (
-                not current_only_actor_training
-                or self.dino_fullbank_current_task_fraction != 1.0
-            ):
+            current_only_actor_training = (False)
+            if (not current_only_actor_training):
                 raise ValueError(
                     "task_cosine_decay is validated only for named current-only "
                     "actor training profiles"
                 )
             actor_schedule_durations = sequential_task_durations
-            if (
-                actor_schedule_durations is not None
-                and is_rec_rssm
-                and self.task_mechanism_capacity_profile == "expanded_640"
-            ):
-                actor_schedule_durations = actor_schedule_durations[1:]
             if (
                 not actor_schedule_durations
                 or min(actor_schedule_durations) < self.ac_decay_end_task_epoch
@@ -2265,69 +1197,6 @@ class Config(Serialisable):
         if self.ac_replay_critic_loss_scale < 0:
             raise ValueError("Replay critic loss scale must be non-negative")
 
-        if self.actor_network in {
-            "fast_kan_ac",
-            "fast_kan_ac_param_matched",
-            "fast_kan_ac_stable",
-        }:
-            paper_aligned = {
-                "fastkan_hidden_layers": 3,
-                "fastkan_grid_size": 8,
-                "fastkan_input_min": -2.0,
-                "fastkan_input_max": 2.0,
-                "fastkan_rms_norm_epsilon": 1e-4,
-                "fastkan_actor_output_scale": 0.01,
-                "fastkan_actor_unimix": 0.01,
-                "ac_optimizer": "laprop",
-                "ac_lr": 4e-5,
-                "ac_fresh_lr": 4e-5,
-                "ac_optimizer_eps": 1e-20,
-                "ac_optimizer_beta1": 0.9,
-                "ac_optimizer_beta2": 0.999,
-                "ac_optimizer_warmup_steps": 1000,
-                "ac_agc_clip": 0.3,
-                "ac_grad_clip": 0.0,
-                "ac_dream_steps": 15,
-                "ac_discount": 1.0 - 1.0 / 333.0,
-                "ac_lambda": 0.95,
-                "ac_entropy_scale": 3e-4,
-                "ac_return_norm_decay": 0.99,
-                "ac_persistent_return_norm": True,
-                "ac_slow_critic_regularizer": 1.0,
-                "ac_slow_critic_decay": 0.98,
-            }
-            method_aligned = {
-                "fast_kan_ac": {
-                    "fastkan_hidden_features": 34,
-                    "ac_replay_critic_loss_scale": 0.0,
-                    "ac_use_slow_critic_targets": False,
-                    "ac_corrected_imagination_bootstrap": False,
-                },
-                "fast_kan_ac_param_matched": {
-                    "fastkan_hidden_features": 53,
-                    "ac_replay_critic_loss_scale": 0.3,
-                    "ac_use_slow_critic_targets": False,
-                    "ac_corrected_imagination_bootstrap": False,
-                },
-                "fast_kan_ac_stable": {
-                    "fastkan_hidden_features": 53,
-                    "ac_replay_critic_loss_scale": 0.3,
-                    "ac_use_slow_critic_targets": True,
-                    "ac_corrected_imagination_bootstrap": True,
-                },
-            }
-            paper_aligned.update(method_aligned[self.actor_network])
-            mismatches = {
-                key: (getattr(self, key), expected)
-                for key, expected in paper_aligned.items()
-                if getattr(self, key) != expected
-            }
-            if mismatches:
-                raise ValueError(
-                    f"{self.actor_network} requires its named KAN-Dreamer-aligned "
-                    "FastKAN settings: "
-                    f"{mismatches}"
-                )
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -2336,25 +1205,14 @@ class Config(Serialisable):
         return data
 
     @property
+    def uses_reconstruction_task_inference(self) -> bool:
+        """Task-aware training, label-free action selection; not full task agnosticism."""
+
+        return self.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}
+
+    @property
     def uses_task_experts(self) -> bool:
-        return self.continual_method in {
-            "moe_arrow",
-            "cnn_fullbank_arrow",
-            "cnn_projector_lora_arrow",
-            "cnn_compact_shared_actor_arrow",
-            "cnn_mechanism_bank_arrow",
-            "rec_rssm_arrow",
-            "evolving_atomic_rssm_arrow",
-            "evolving_atomic_rssm_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
-            "evolving_atomic_rssm_learned_base_adapters_arrow",
-            "evolving_atomic_rssm_shared_fastkan_arrow",
-            "dino_fullbank_arrow",
-            "dino_patchbank_arrow",
-            "dino_convbank_arrow",
-        }
+        return self.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}
 
     @property
     def uses_bounded_dream_rehearsal(self) -> bool:
@@ -2366,65 +1224,23 @@ class Config(Serialisable):
 
         return self.uses_task_experts or self.uses_bounded_dream_rehearsal
 
-    @property
-    def uses_full_task_experts(self) -> bool:
-        return self.continual_method in {
-            "cnn_fullbank_arrow",
-            "cnn_projector_lora_arrow",
-            "cnn_compact_shared_actor_arrow",
-            "cnn_mechanism_bank_arrow",
-            "rec_rssm_arrow",
-            "dino_fullbank_arrow",
-            "dino_patchbank_arrow",
-            "dino_convbank_arrow",
-        }
 
     @property
     def task_update_fraction(self) -> float:
-        if self.continual_method == "moe_arrow":
-            return self.moe_arrow_current_task_fraction
-        if self.continual_method in {
-            "cnn_fullbank_arrow",
-            "cnn_projector_lora_arrow",
-            "cnn_compact_shared_actor_arrow",
-            "cnn_mechanism_bank_arrow",
-            "rec_rssm_arrow",
-            "evolving_atomic_rssm_arrow",
-            "evolving_atomic_rssm_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
-            "evolving_atomic_rssm_learned_base_adapters_arrow",
-            "evolving_atomic_rssm_shared_fastkan_arrow",
-            "dino_fullbank_arrow",
-            "dino_patchbank_arrow",
-            "dino_convbank_arrow",
-        }:
-            return self.dino_fullbank_current_task_fraction
+        if self.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}:
+            return 1.0
         raise ValueError("Task update fractions require a task-aware expert method")
 
     @property
     def uses_shared_actor(self) -> bool:
-        return self.continual_method in {
-            "cnn_compact_shared_actor_arrow",
-            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_shared_fastkan_arrow",
-        }
+        return False
 
     @property
     def uses_replay_rehearsed_shared_behavior(self) -> bool:
         """Whether one shared actor-critic rehearses task-routed replay."""
 
-        return self.continual_method in {
-            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_shared_fastkan_arrow",
-        }
+        return False
 
-    @property
-    def uses_task_private_heads(self) -> bool:
-        """Separate private heads from copied full-RSSM expert topology."""
-
-        return self.task_private_heads or self.uses_full_task_experts
 
     @property
     def uses_shared_prediction_heads(self) -> bool:
@@ -2432,58 +1248,20 @@ class Config(Serialisable):
 
         return (
             self.continual_method
-            in {
-                "evolving_atomic_rssm_shared_heads_arrow",
-                "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-                "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-                "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
-                "evolving_atomic_rssm_learned_base_adapters_arrow",
-            }
+            in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}
         )
 
-    @property
-    def uses_full_task_rssm_experts(self) -> bool:
-        if self.continual_method in {
-            "evolving_atomic_rssm_arrow",
-            "evolving_atomic_rssm_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
-            "evolving_atomic_rssm_learned_base_adapters_arrow",
-            "evolving_atomic_rssm_shared_fastkan_arrow",
-        }:
-            return self.full_task_rssm_experts
-        return self.uses_full_task_experts
 
     @property
     def uses_evolving_atomic_rssm(self) -> bool:
-        return self.continual_method in {
-            "evolving_atomic_rssm_arrow",
-            "evolving_atomic_rssm_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
-            "evolving_atomic_rssm_learned_base_adapters_arrow",
-            "evolving_atomic_rssm_shared_fastkan_arrow",
-        }
+        return self.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}
 
     @property
     def uses_adaptive_qfp_compression(self) -> bool:
         """Whether completed Dense Q/F/P modules are return-gated and compacted."""
 
-        return self.continual_method in {
-            "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-            "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-        }
+        return self.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}
 
-    @property
-    def uses_adaptive_behavior_compression(self) -> bool:
-        """Whether routed Actor-Critic residuals are return-gated and compacted."""
-
-        return (
-            self.continual_method
-            == "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow"
-        )
 
     def get_env_schedule(self) -> EnvironmentSchedule:
         return self.esc.env_schedule_type(
