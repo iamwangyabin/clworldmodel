@@ -37,6 +37,7 @@ else:
     sys.path.insert(0, str(SCRIPTS))
     sys.path.insert(0, str(VENDORED_ATARI))
     from config import Config
+    from ac import _dream_rehearsal_bootstrap_state
 
     spec = importlib.util.spec_from_file_location(
         "bounded_dream_rehearsal_launcher",
@@ -65,6 +66,34 @@ class BoundedDreamRehearsalConfigTests(unittest.TestCase):
         self.assertEqual(config.replay_observation_dtype, "uint8")
         self.assertEqual(config.replay_buffers[0].rb_type.__name__, "LongTermReplay")
         self.assertEqual(config.replay_buffers[0].rb_device, "cpu")
+        self.assertFalse(
+            config.dream_rehearsal_bootstrap_last_imagined_feature
+        )
+
+    def test_arrow_matched_reference_batch_and_bootstrap_are_valid(self) -> None:
+        source = json.loads(SOURCE_CONFIG.read_text(encoding="utf-8"))
+        config = Config.from_dict(
+            launcher._resolved_config(
+                source,
+                replay_slots=8,
+                batch_sequences=16,
+                context_steps=64,
+                bootstrap_last_imagined_feature=True,
+            )
+        )
+
+        self.assertEqual(config.dream_rehearsal_batch_sequences, 16)
+        self.assertEqual(config.dream_rehearsal_context_steps, 64)
+        self.assertTrue(config.dream_rehearsal_bootstrap_last_imagined_feature)
+
+        invalid = launcher._resolved_config(
+            source,
+            replay_slots=8,
+            bootstrap_last_imagined_feature=True,
+        )
+        invalid["dream_rehearsal_bootstrap_last_imagined_feature"] = "true"
+        with self.assertRaisesRegex(ValueError, "must be a boolean"):
+            Config.from_dict(invalid)
 
     def test_fifo_and_task_aware_world_model_are_rejected(self) -> None:
         fifo = self._data()
@@ -81,10 +110,38 @@ class BoundedDreamRehearsalConfigTests(unittest.TestCase):
         data = copy.deepcopy(self._data())
         data["continual_method"] = "none"
         data["replay_observation_dtype"] = "float32"
-        data["dream_rehearsal_horizon"] = 7
+        data["dream_rehearsal_bootstrap_last_imagined_feature"] = True
 
         with self.assertRaisesRegex(ValueError, "Dream-rehearsal settings require"):
             Config.from_dict(data)
+
+    def test_reference_bootstrap_uses_the_last_imagined_feature(self) -> None:
+        imagined = torch.tensor(
+            [
+                [[10.0, 11.0, 12.0, 13.0, 14.0, 15.0]],
+                [[20.0, 21.0, 22.0, 23.0, 24.0, 25.0]],
+            ]
+        )
+        post_z = torch.tensor([[[1.0, 2.0], [3.0, 4.0]]])
+        post_h = torch.tensor([[5.0, 6.0]])
+
+        reference = _dream_rehearsal_bootstrap_state(
+            imagined,
+            post_z,
+            post_h,
+            use_last_imagined_feature=True,
+        )
+        legacy = _dream_rehearsal_bootstrap_state(
+            imagined,
+            post_z,
+            post_h,
+            use_last_imagined_feature=False,
+        )
+
+        torch.testing.assert_close(reference, imagined[-1])
+        torch.testing.assert_close(
+            legacy, torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]])
+        )
 
 
 if __name__ == "__main__":

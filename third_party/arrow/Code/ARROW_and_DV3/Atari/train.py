@@ -6899,6 +6899,9 @@ if __name__ == "__main__":
                     ),
                     realized_bonus=config.dream_rehearsal_realized_bonus,
                     grad_clip=config.dream_rehearsal_grad_clip,
+                    bootstrap_last_imagined_feature=(
+                        config.dream_rehearsal_bootstrap_last_imagined_feature
+                    ),
                 )
                 dream_rehearsal_updates_by_task[old_task_id] = (
                     dream_rehearsal_updates_by_task.get(old_task_id, 0)
@@ -6949,8 +6952,16 @@ if __name__ == "__main__":
             if distributed_context.is_primary:
                 accounting = {
                     "schema_version": 1,
-                    "artifact_kind": "bounded_dream_rehearsal_accounting",
-                    "method": "Bounded-Dream-Rehearsal-v1-Atari",
+                    "artifact_kind": (
+                        "dream_rehearsal_accounting"
+                        if config.dream_rehearsal_bootstrap_last_imagined_feature
+                        else "bounded_dream_rehearsal_accounting"
+                    ),
+                    "method": (
+                        "Dream-Rehearsal-ArrowMatched-v1-Atari"
+                        if config.dream_rehearsal_bootstrap_last_imagined_feature
+                        else "Bounded-Dream-Rehearsal-v1-Atari"
+                    ),
                     "replay": {
                         "retention": "uniform_random_key_reservoir",
                         "trajectory_slots": replay.n,
@@ -6973,6 +6984,11 @@ if __name__ == "__main__":
                             total_agent_decisions - agent_decisions_before_epoch
                         ),
                         "due_updates_are_batched_after_the_epoch_actor_update": True,
+                        "bootstrap_feature": (
+                            "last_imagined_pre_transition_feature"
+                            if config.dream_rehearsal_bootstrap_last_imagined_feature
+                            else "post_horizon_feature"
+                        ),
                     },
                     "counters": {
                         "agent_decisions": total_agent_decisions,

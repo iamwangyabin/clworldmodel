@@ -415,6 +415,7 @@ class Config(Serialisable):
     dream_rehearsal_realized_threshold: float = 0.3
     dream_rehearsal_realized_bonus: float = 10.0
     dream_rehearsal_grad_clip: float = 100.0
+    dream_rehearsal_bootstrap_last_imagined_feature: bool = False
     dinov3_model_path: Optional[str] = None
     dinov3_input_size: int = 256
     dinov3_max_batch_size: int = 128
@@ -1374,6 +1375,7 @@ class Config(Serialisable):
             "dream_rehearsal_realized_threshold": 0.3,
             "dream_rehearsal_realized_bonus": 10.0,
             "dream_rehearsal_grad_clip": 100.0,
+            "dream_rehearsal_bootstrap_last_imagined_feature": False,
         }
         if is_bounded_dream_rehearsal:
             from clworldmodel.continual.dream_rehearsal import (
@@ -1438,6 +1440,10 @@ class Config(Serialisable):
             if self.dream_rehearsal_grad_clip < 0:
                 raise ValueError(
                     "Dream-rehearsal gradient clipping must be non-negative"
+                )
+            if type(self.dream_rehearsal_bootstrap_last_imagined_feature) is not bool:
+                raise ValueError(
+                    "Dream-rehearsal bootstrap selection must be a boolean"
                 )
         else:
             nondefault_dream_rehearsal = {
