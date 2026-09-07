@@ -9,11 +9,26 @@ random/single-task reference constants from different protocols.
 from __future__ import annotations
 
 import math
+import statistics
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 
 METRIC_SCHEMA_VERSION = "arrow-paper-v1"
+
+
+def paired_raw_return_summary(baseline: Sequence[float], candidate: Sequence[float]) -> dict[str, Any]:
+    """Matched complete-episode returns; no normalization or seed inference."""
+    if not baseline or len(baseline) != len(candidate):
+        raise ValueError("Paired returns must have equal positive lengths")
+    left = [_finite(x, name="baseline return") for x in baseline]
+    right = [_finite(x, name="candidate return") for x in candidate]
+    delta = [b - a for a, b in zip(left, right)]
+    return {"metric_schema_version": "paired-raw-returns-v1", "pairs": len(left),
+            "baseline_mean": statistics.mean(left), "candidate_mean": statistics.mean(right),
+            "baseline_std": statistics.pstdev(left), "candidate_std": statistics.pstdev(right),
+            "mean_paired_delta": statistics.mean(delta), "wins": sum(x > 0 for x in delta),
+            "ties": sum(x == 0 for x in delta), "losses": sum(x < 0 for x in delta)}
 
 
 def _finite(value: float, *, name: str) -> float:
