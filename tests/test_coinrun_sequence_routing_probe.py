@@ -2,8 +2,10 @@
 """Diagnostic scoring contracts: fixed tensors only, no simulator or updates."""
 import sys
 import unittest
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 import torch
@@ -42,6 +44,22 @@ class ActionFixture:
 
 
 class ProbeTests(unittest.TestCase):
+    def test_cuda_initialized_before_allocator_reset_and_failure_recorded(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            receipt = root / "receipt.json"
+            receipt.write_text("{}")
+            argv = ["probe", "--checkpoint", str(root / "weights.pt"), "--output-dir", str(root / "output"),
+                    "--upstream-verification", str(receipt)]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(probe, "verify_launch"), \
+                    mock.patch.object(probe, "require_synced_training_git_state", return_value={}), \
+                    mock.patch.object(torch.cuda, "set_device") as initialize, \
+                    mock.patch.object(torch.cuda, "reset_peak_memory_stats", side_effect=lambda _: initialize.assert_called_once()), \
+                    mock.patch.object(probe, "load_model", side_effect=RuntimeError("preflight sentinel")):
+                with self.assertRaisesRegex(RuntimeError, "preflight sentinel"):
+                    probe.main()
+            self.assertIn("preflight sentinel", (root / "output/failure.json").read_text())
+
     def test_prediction_precedes_observation_and_candidate_states_are_private(self):
         rssm = ActionFixture()
         model = SimpleNamespace(rssm=rssm, decoder_for=lambda route: lambda zh: zh[:, 1].reshape(-1, 1, 1, 1))

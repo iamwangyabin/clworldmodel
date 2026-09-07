@@ -335,9 +335,11 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
     device = torch.device(cfg.device)
-    if device.type == "cuda": torch.cuda.reset_peak_memory_stats(device)
     started = time.perf_counter()
     try:
+        if device.type == "cuda":
+            torch.cuda.set_device(device)  # Initialize allocator before resetting its counters.
+            torch.cuda.reset_peak_memory_stats(device)
         wm, actors, model_config, routes, payload, digest = load_model(checkpoint, device)
         from clworldmodel.environments.coinrun import COINRUN_TASKS, CoinRunFactory, PROCGEN_COMMIT
         task_names = COINRUN_TASKS[:len(routes)]
