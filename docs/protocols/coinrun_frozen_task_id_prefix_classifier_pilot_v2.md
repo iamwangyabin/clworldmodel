@@ -35,3 +35,16 @@ not be overwritten or retroactively assigned the v2 commit.
 V2 retains single-instance reference behavior at extra feature-extraction cost.
 It makes no FPS improvement claim. The fixed-input tests and real-checkpoint
 no-update numerical checks must pass before the clean/pushed v2 launch.
+
+## Read-only result verification
+
+`scripts/report_coinrun_temporal_task_id.py RUN_DIRECTORY --plot` independently
+recomputes every all-cohort accuracy from saved raw predictions and verifies
+first-frame preservation. For the predeclared 1/2/5/9/17-frame columns, it also
+reports paired GRU-minus-control accuracy intervals using 4,000 bootstrap draws
+over equally sized environment-seed groups, with fixed seed 20260909. Each
+group contains the matched task variants. Router seeds are averaged, not counted
+as extra independent test examples. Intervals condition on this one WM checkpoint
+and the fitted heads; there is no multiple-comparison adjustment. Plot shading
+is the router-seed range, **not** a confidence interval. The report performs no
+environment interaction or parameter update and cannot select another model.
