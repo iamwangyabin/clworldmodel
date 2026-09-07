@@ -308,6 +308,7 @@ def _evaluate_policy_tasks(
                     env_repeat=config.env_repeat, n_rollouts=16, seed=task_seed,
                     deterministic_policy=True,
                     eligible_route_ids=tuple(range(eligible_task_count)),
+                    task_route_inference=config.task_route_inference,
                     diagnostics=diagnostic,
                 )
                 diagnostic["audit"] = routing_audit(
@@ -2906,8 +2907,8 @@ if __name__ == "__main__":
     if args.arrow_replay_ratio is not None:
         config_overrides["arrow_replay_capacity_ratio"] = args.arrow_replay_ratio
     config_overrides["observation_objective"] = 'reconstruction'
-    config_overrides["actor_network"] = args.actor_network
-    config_overrides["actor_kan_trainable_grid"] = False
+    if args.actor_network is not None:
+        config_overrides["actor_network"] = args.actor_network
     if args.epochs is not None:
         config_overrides["epochs"] = args.epochs
     config = Config.from_dict(config_overrides)
@@ -3523,6 +3524,7 @@ if __name__ == "__main__":
                         eligible_route_ids=(tuple(range(current_task_id + 1))
                                             if config.uses_reconstruction_task_inference else None),
                         routing_diagnostics=collection_routing,
+                        task_route_inference=config.task_route_inference,
 
                     ),
                     config.data_t,
@@ -4671,7 +4673,7 @@ if __name__ == "__main__":
         }
         if config.uses_reconstruction_task_inference:
             final_evaluation.update({
-                "policy": "first_frame_reconstruction_episode_lock_argmax_latent_mode_arrow_legacy_evaluator",
+                "policy": config.task_route_inference + "_arrow_legacy_evaluator",
                 "task_identity_exposed_during_inference": False,
                 "task_aware_training": True,
                 "eligible_route_ids": list(range(len(eval_funcs))),

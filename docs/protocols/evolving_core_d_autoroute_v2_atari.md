@@ -1,5 +1,10 @@
 # AWM-AutoRoute v2: AWM-compatible collection and evaluation
 
+Historical only; retired from current code on 2026-09-08. The sole maintained
+method is [AWM-AutoRoute](awm_autoroute_v3_atari.md). The definition below is
+unchanged; current code rejects its route mode. Historical reproduction requires
+the recorded revision, not a runtime version switch.
+
 Formerly D-AutoRoute v2. AWM stands for **Accumulative World Modeling**.
 Decision 0060 changes the formal name only; entry-point paths, method keys,
 protocol IDs and the v1/v2 distinction remain unchanged.

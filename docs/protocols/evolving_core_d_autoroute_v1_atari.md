@@ -1,10 +1,9 @@
 # D-AutoRoute v1: D with private MLP behavior and task-ID-free inference
 
-> **Superseded on 2026-09-07.** This file preserves the protocol used by the
-> existing SameStep/exact-evaluator pilot runs. The maintained entry point now
-> implements [D-AutoRoute v2](evolving_core_d_autoroute_v2_atari.md), which
-> restores D/ARROW collection, evaluation, consolidation and compression-gate
-> semantics. Historical v1 runs require their recorded Git revision.
+> **Historical only; retired from current code on 2026-09-08.** This file
+> preserves the SameStep/exact-evaluator protocol. The sole maintained method
+> is [AWM-AutoRoute](awm_autoroute_v3_atari.md). Commands/configs below require
+> their recorded Git revision and are not current runtime options.
 
 ## Identity and scope
 

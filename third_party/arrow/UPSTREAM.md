@@ -19,6 +19,15 @@ documented here, covered by focused parity tests, and followed by regenerating
 
 ## Current retirement update (2026-09-07)
 
+Launch preflight correction (2026-09-08): Atari's actual CLI still injected the
+retired `actor_kan_trainable_grid` field and replaced the resolved MLP setting
+with `None` when `--actor-network` was omitted. Remove the obsolete field and
+apply the actor override only when explicitly supplied. This repairs startup,
+not the retained training protocol. `test_d_autoroute` executes the real CLI
+through config validation and stops before CUDA initialization, covering both
+omitted and explicit MLP arguments. The launch manifest also now consistently
+labels adaptive compression selection as completed-task oracle validation.
+
 Decision 0058 retires FastKAN StableTargets and F/D-AutoKAN at the user's
 request. Atari's typed config and CLI reject those selectors; the FastKAN
 constructor arguments, branches, preset validation and shared-FastKAN training
@@ -745,6 +754,41 @@ complete by this change. See Decision 0058 for the validation scope.
     next-step behavior remains inconsistent with its same-step comment; v2
     preserves the executable behavior and records the issue rather than fixing
     it in only one method. See Decision 0059 and the D-AutoRoute v2 protocol.
+
+65. Keep the AWM-AutoRoute name/key/entry point and advance its default to the
+    separately recorded two-frame probability-reconstruction v3 protocol.
+    Atari config admits the explicit old v2 mode and new v3 mode; the launcher
+    chooses v3 and passes it through collection/evaluation/snapshot metadata.
+    The project-owned router accumulates FP32 pixel MSE in FP64 over two
+    actionable observations. The vendored adapter advances independent hard,
+    deterministic candidate histories with executed actions; only decoder
+    scoring receives posterior probabilities. The selected policy still runs
+    its ordinary RSSM and private Actor, with its own candidate history restored
+    on a second-frame switch. Episode starts use a fresh state and dummy action;
+    ignored NextStep reset actions/terminal observations are not second probes.
+    Thus v3 is not claimed single-route action-identical to v2 across resets.
+    After two observations there are no candidate RSSM/decoder calls. The
+    collector's stored transitions, evaluator, oracle training gates, Replay
+    labels, update/parameter budgets, upstream pin and MIT notices are unchanged.
+    Fixed-tensor tests cover scores against independently replayed real RSSMs,
+    hard Actor input, switching, staggered resets, bounded calls, frozen weights,
+    RNG, checkpoint round trips and cross-version resume rejection. The v2
+    collector test's pre-existing off-by-one assertion now checks the initial
+    stored dummy plus all four effective/ignored env.step actions (five entries),
+    without changing the old collector. See Decision 0061 and the v3 protocol.
+
+66. On 2026-09-08, retire the historical first-frame runtime branch at the
+    user's request. AWM-AutoRoute now names only the two-frame probability
+    router. Config and collector reject the old route mode; collection and
+    evaluation default to the sole maintained router. Remove the zero-state
+    modal-decoder adapter branch and project-owned first-frame router class.
+    The two-frame scoring/state/reset behavior, internal v3 protocol ID,
+    training budgets, baseline AWM behavior and checkpoint layout are unchanged.
+    Tests migrate shared policy/collector contracts to cumulative decisions and
+    assert that old configs/entry points fail before environment creation.
+    Historical protocols, results and read-only report interpretation remain;
+    they require recorded source revisions, not compatibility execution.
+    See Decision 0062. Upstream pin and MIT notices remain unchanged.
 
 ## Method retirement in progress — 2026-09-06
 

@@ -284,10 +284,10 @@ def main() -> int:
     )
     routing_smoke = None
     if config.uses_reconstruction_task_inference:
-        from clworldmodel.routing import EpisodeReconstructionRouter
+        from clworldmodel.routing import TwoFrameReconstructionRouter
         from generate_trajectory import _routed_policy_step
 
-        router = EpisodeReconstructionRouter((0, 1))
+        router = TwoFrameReconstructionRouter((0, 1))
         with train._preserve_training_rng_state():
             routing_aco = shared_aco
             routing_bank = None
@@ -306,13 +306,15 @@ def main() -> int:
             previous = torch.nn.functional.one_hot(
                 torch.zeros(2, dtype=torch.long, device=device), config.action_space
             )
-            _, _, actions = _routed_policy_step(
-                world_model, routing_policy, router,
-                torch.zeros(2, 3, 64, 64, device=device), z, h, previous,
-                torch.ones(2, 1, device=device), stochastic=False,
-            )
-        if actions.shape != (2,) or len(router.events) != 2:
-            raise RuntimeError("First-frame autoroute smoke did not cover both workers")
+            for t in range(3):
+                z, h, actions = _routed_policy_step(
+                    world_model, routing_policy, router,
+                    torch.zeros(2, 3, 64, 64, device=device), z, h, previous,
+                    torch.full((2, 1), float(t == 0), device=device), stochastic=False,
+                )
+                previous = torch.nn.functional.one_hot(actions, config.action_space)
+        if actions.shape != (2,) or len(router.events) != 4 or router.counts.tolist() != [2, 2]:
+            raise RuntimeError("Two-frame autoroute smoke did not cover both workers")
         routing_smoke = {"events": router.events, "accuracy_claimed": False}
     old_private = tuple(world_model.private_parameters(0))
 
@@ -480,7 +482,7 @@ def main() -> int:
             [0, 1] if behavior_metrics is not None else None
         ),
         "shared_behavior_metrics": behavior_metrics,
-        "first_frame_autoroute_smoke": routing_smoke,
+        "two_frame_autoroute_smoke": routing_smoke,
         "adaptive_compression_smoke": adaptive_compression_smoke,
         "adaptive_behavior_compression_smoke": (
             adaptive_behavior_compression_smoke

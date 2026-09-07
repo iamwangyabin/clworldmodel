@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Launch AWM-AutoRoute: Accumulative World Modeling with label-free inference.
 
-Formerly D-AutoRoute; the entry-point path and protocol identifiers are unchanged.
+Formerly D-AutoRoute; the method name/key and entry-point path are unchanged.
 This independent entry point fixes the research topology. It composes the
 existing launcher/trainer rather than copying them. Training remains task-aware;
 online interaction and reported periodic/final evaluation select routes from
-first-frame reconstruction; AWM's boundary-selection gates remain oracle-routed.
+two-frame cumulative probability reconstruction; AWM's boundary-selection
+gates remain oracle-routed. The first observation selects an immediately usable
+route, the second may revise it, and later observations do not re-score routes.
 All relative paths resolve from the repository root, independent of the working
 directory. Absolute paths and user-home paths are preserved.
 """

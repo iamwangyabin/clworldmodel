@@ -111,6 +111,12 @@ The formal method name is **AWM — Accumulative World Modeling**, adopted on
 existing method keys, protocol IDs, launcher paths and historical evidence for
 compatibility and provenance; this is a naming-only change (Decision 0060).
 
+As of 2026-09-08, maintain exactly one **AWM-AutoRoute** implementation: the
+two-frame probability-reconstruction router recorded under protocol v3.
+Historical v1/v2 first-frame routing is retired, not a runtime option or a
+silently migrated config. Preserve its protocols/results for provenance and
+use recorded revisions to reproduce it. See Decision 0062.
+
 Do not restore retired algorithms just to satisfy their old method-specific
 tests. Shared functionality and its necessary tests belong to the retained
 methods. Preserve historical protocols, raw results, provenance and failed-run

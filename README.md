@@ -706,15 +706,21 @@ Actor-Critics**, without FastKAN, shared behavior, or AC compression:
 python scripts/run_evolving_atomic_rssm_d_autoroute.py --seed 0 --dry-run
 ```
 
-Each worker's first-frame reconstruction selects both its world-model path
-and its corresponding private Actor, locked until reset. Training/Replay still
-use true task labels; inference does not. The maintained v2 restores AWM/ARROW's
-implicit NextStep collection, legacy trajectory-budget evaluator, oracle
-consolidation checks and current-task oracle Q/F/P gate with 480 nominal
-selector rollouts. AC parameters remain AWM's `10,295,910`; no learned router
-parameters are added. The earlier SameStep/exact v1 runs remain historical and
-are not comparable to AWM as an isolated routing ablation. See
-[`AWM-AutoRoute v2`](docs/protocols/evolving_core_d_autoroute_v2_atari.md).
+**AWM-AutoRoute** has one maintained implementation. It selects a route from the first
+observation, accumulates a second observation's reconstruction MSE using each
+candidate's own history and the executed action, then holds the result until
+reset. Only the routing decoder receives posterior probabilities; recurrence
+and the private Actor retain hard categorical states. No later candidate
+probes or learned router parameters are added. Training/Replay still use true
+task labels; inference does not. It retains AWM's implicit NextStep collector,
+legacy evaluation budget, oracle consolidation/compression gates and 480 nominal
+selector rollouts. Episode-local policy initialization and switch-state handling
+are explicitly versioned routing changes, not claimed action parity with AWM.
+AC parameters remain AWM's `10,295,910`. Old first-frame routing is no longer
+selectable; its results remain historical. The internal protocol ID retains
+`v3` for provenance, not as a menu of supported methods. No new training or
+return result is claimed. See
+[`AWM-AutoRoute`](docs/protocols/awm_autoroute_v3_atari.md).
 
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control

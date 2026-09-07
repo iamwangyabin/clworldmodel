@@ -92,7 +92,7 @@ D_AUTOROUTE_METHOD = (
 )
 D_AUTOROUTE_PROTOCOL = (
     "Evolving-Core-DenseAcquire-AdaptiveQFP-SharedHeads-PrivateMLPAC-"
-    "FirstFrameRouter-ARROWParity-v2-OriginalSix-Atari-"
+    "TwoFrameProbabilityRouter-ARROWParity-v3-OriginalSix-Atari-"
     "TaskAwareTraining-TaskIDFreeInference-Pilot"
 )
 AUTOROUTE_METHODS = (D_AUTOROUTE_METHOD,)
@@ -390,7 +390,7 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "private_mlp selects AWM (Accumulative World Modeling, formerly D); "
             "private_mlp_autoroute selects AWM-AutoRoute, preserving AWM's private "
-            "MLPs and adding first-frame reconstruction routing."
+            "MLPs and adding two-frame probability reconstruction routing."
         ),
     )
     parser.add_argument("--output-dir", type=Path)
@@ -481,7 +481,7 @@ def _resolved_config(
     if behavior_profile in AUTOROUTE_BEHAVIORS:
         if behavior_profile == PRIVATE_MLP_AUTOROUTE_BEHAVIOR:
             config["continual_method"] = D_AUTOROUTE_METHOD
-        config["task_route_inference"] = "first_frame_reconstruction"
+        config["task_route_inference"] = "two_frame_probability_reconstruction"
     for replay_config in config["replay_buffers"]:
         replay_config["rb_device"] = "cpu"
     return config
@@ -987,8 +987,7 @@ def main(argv: list[str] | None = None) -> int:
     launch = {
         "schema_version": 1,
         "method": (
-            "AWM-AutoRoute (Accumulative World Modeling with "
-            "First-Frame Reconstruction Routing)"
+            "AWM-AutoRoute"
             if args.behavior_profile == PRIVATE_MLP_AUTOROUTE_BEHAVIOR
             else
             ("AWM (Accumulative World Modeling)"
@@ -1020,9 +1019,23 @@ def main(argv: list[str] | None = None) -> int:
             "mode": config.get("task_route_inference", "oracle"),
             "eligible_routes": "acquired slots plus currently acquiring slot; never future slots",
             "episode_lock": args.behavior_profile in AUTOROUTE_BEHAVIORS,
+            "maximum_scored_observations_per_episode": (
+                2 if args.behavior_profile in AUTOROUTE_BEHAVIORS else 0
+            ),
+            "decoder_latent_for_routing": (
+                "posterior_probabilities" if args.behavior_profile in AUTOROUTE_BEHAVIORS else None
+            ),
+            "score_aggregation": (
+                "arithmetic_mean_pixel_mse" if args.behavior_profile in AUTOROUTE_BEHAVIORS else None
+            ),
             "learned_router_parameters": 0,
             "evaluation_episode_count_mode": config.get("evaluation_episode_count_mode", "legacy"),
-            "extra_inference_compute": "one RSSM posterior plus decoder per eligible route at episode start",
+            "extra_inference_compute": (
+                "one deterministic RSSM posterior plus decoder per eligible route on each "
+                "of the first two actionable observations; selected policy RSSM still runs; "
+                "no candidate probes afterward"
+                if args.behavior_profile in AUTOROUTE_BEHAVIORS else "none"
+            ),
         },
         "from_scratch": True,
         "behavior_profile": args.behavior_profile,
@@ -1112,11 +1125,7 @@ def main(argv: list[str] | None = None) -> int:
                     "adaptive_compression_max_return_drop"
                 ],
                 "selection": "smallest passing candidate after evaluating all candidates",
-                "validation_scope": (
-                    "every seen task under automatic routing"
-                    if args.behavior_profile in AUTOROUTE_BEHAVIORS
-                    else "completed task with oracle routing"
-                ),
+                "validation_scope": "completed task with oracle routing",
                 "fallback": "retain full Dense Q/F/P when no candidate passes",
                 "candidate_replay": "completed-task LTDM only",
                 "selection_cohort": "dedicated fixed pruning validation",

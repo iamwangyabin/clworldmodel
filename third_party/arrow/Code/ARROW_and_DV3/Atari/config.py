@@ -205,7 +205,9 @@ class Config(Serialisable):
     compute_dtype: ComputeDType = "float32"
     data_parallel_world_size: DataParallelWorldSize = 1
     evaluation_seed_protocol: EvaluationSeedProtocol = "advancing"
-    task_route_inference: Literal["oracle", "first_frame_reconstruction"] = "oracle"
+    task_route_inference: Literal[
+        "oracle", "two_frame_probability_reconstruction"
+    ] = "oracle"
     evaluation_episode_count_mode: Literal["legacy", "exact"] = "legacy"
     evaluation_max_agent_decisions_per_episode: int = 32768
     evaluation_task_seed_offset: int = 0
@@ -366,7 +368,7 @@ class Config(Serialisable):
         is_evolving_autoroute = self.uses_reconstruction_task_inference
 
         expected_inference = (
-            "first_frame_reconstruction" if is_evolving_autoroute else "oracle"
+            "two_frame_probability_reconstruction" if is_evolving_autoroute else "oracle"
         )
         expected_episode_mode = "legacy"
         if self.task_route_inference != expected_inference:
