@@ -44,6 +44,19 @@ actor-override handling were corrected without changing the resolved protocol.
 The unrelated historical-suite migration limits in Decision 0061 still apply;
 this is not a claim that full test discovery is green or that CUDA smoke passed.
 
+The expanded 60-test set passed locally. Its first target-host run on both
+Linux/x86 servers found one mismatch against the existing macOS CPU loss trace
+(baseline 4353.83740234375 versus 4356.27392578125). Disabling oneDNN in an
+isolated diagnostic did not remove the mismatch. Before launching a pilot,
+the exact archived pre-retirement source snapshot was checked against all six
+hashes in the original fixture and evaluated on the target Linux runtime.
+Old and new source produced **identical** initialization hashes, losses and
+all gradient norms there (baseline 4353.83740234375, D 4232.0263671875).
+The Linux reference fixture records that old-source provenance; the original
+fixture and numerical tolerances remain unchanged. The initial failed
+preflight is preserved. This is a platform-specific fixed-trace reference,
+not a new performance measurement or a change to training precision.
+
 Monitor both new runs alongside the old campaign, but grant automatic diagnosis
 and safe recovery only to these two new runs. Preserve failed attempts and all
 raw metrics. Check real process identity, logs, CPU progress, GPU activity,
