@@ -145,6 +145,32 @@ class DAutorouteLauncherTests(unittest.TestCase):
 
 @unittest.skipUnless(vendor_available, "requires pinned Atari imports, no ROMs")
 class DAutorouteIntegrationTests(unittest.TestCase):
+    def test_private_mlp_actor_updates_without_retired_consolidation_interface(self):
+        from ac import ActorCriticTrainingStep, build_actor_critic_opt, train_ac_from_wm
+        from replay import FifoReplay
+        from retained_method_support import retained_world_model
+
+        wm = retained_world_model()
+        wm.activate_task_expert(0)
+        data = FifoReplay(4, 4, wm.a_dim, "cpu", store_task_ids=True,
+                          observation_dtype="uint8")
+        actions = torch.nn.functional.one_hot(torch.zeros(4, 4, dtype=torch.long), wm.a_dim).float()
+        data.add(actions, torch.zeros(4, 4, 3, 64, 64), torch.zeros(4, 4, 1),
+                 torch.ones(4, 4, 1), torch.zeros(4, 4, 1), task_id=0)
+        aco = build_actor_critic_opt(wm, lr=1e-4)
+        returned, _, metrics = train_ac_from_wm(
+            wm, data, 1, n_sync=2, dream_steps=2, aco=aco, task_id=0,
+        )
+        self.assertIs(returned, aco)
+        self.assertEqual(metrics["kan_consolidation_loss"], 0.)
+        self.assertEqual({int(s["step"].item()) for s in aco.opt.state.values()}, {1})
+        step = ActorCriticTrainingStep(aco.ac, entropy_scale=.0003,
+                                      replay_critic_loss_scale=0., slow_critic_regularizer=0.)
+        values = step(torch.zeros(2, 2, wm.zh_transform.out_features), actions[:2, :2],
+                      torch.zeros(2, 2, 1), torch.tensor(1.), None, None, None, None, None)
+        self.assertTrue(all(bool(torch.isfinite(v).all()) for v in values))
+        self.assertEqual(values[-1].item(), 0.)
+
     def test_parameter_accounting_covers_dense_and_compact_retained_models(self):
         from retained_method_support import retained_world_model
 

@@ -66,6 +66,17 @@ cover dense/compact reports in unit tests and the target-CUDA smoke before
 starting replacement attempts. Do not mislabel these as learned checkpoints
 or resumed training.
 
+The second attempts at `18dd7821987edf4831cde5086791d98713ec4a52` collected
+the initial batch, evaluated and completed the first 1,000 world-model updates,
+then failed before the first AC optimizer step at the removed
+`ActorCritic.consolidation_penalty()` call. No complete epoch or resumable task
+boundary was reached. Preserve their raw evaluations, replay and failure logs;
+replacement attempts start from scratch and must record this extra consumed
+work rather than claim equivalent continuation. Repair the zero-valued retired
+MLP penalty call in both shared loss paths and add actual private-MLP AC
+optimization to CPU regression and target-CUDA smoke coverage. No learned KAN
+module, new regularization or changed update budget is introduced.
+
 Monitor both new runs alongside the old campaign, but grant automatic diagnosis
 and safe recovery only to these two new runs. Preserve failed attempts and all
 raw metrics. Check real process identity, logs, CPU progress, GPU activity,

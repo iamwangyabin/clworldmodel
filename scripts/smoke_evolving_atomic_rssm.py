@@ -364,6 +364,20 @@ def main() -> int:
         raise RuntimeError("A completed task-private parameter received a gradient")
 
     behavior_metrics = None
+    from ac import build_actor_critic_opt, train_ac_from_wm
+
+    behavior_aco = build_actor_critic_opt(
+        world_model, lr=config.ac_lr,
+        **train._actor_critic_constructor_kwargs(config),
+    )
+    behavior_kwargs = train._actor_critic_kwargs(config, protect_residual_updates=False)
+    behavior_kwargs["dream_steps"] = 2
+    returned_aco, _, behavior_metrics = train_ac_from_wm(
+        world_model, replay, 1, n_sync=2, aco=behavior_aco,
+        lr=config.ac_lr, task_id=1, **behavior_kwargs,
+    )
+    if returned_aco is not behavior_aco or _optimizer_step(behavior_aco.opt) != 1:
+        raise RuntimeError("Private MLP actor-critic smoke did not perform one update")
 
     adaptive_compression_smoke = None
     if config.uses_adaptive_qfp_compression:
@@ -480,10 +494,7 @@ def main() -> int:
         },
         "old_private_gradients_are_none": True,
         "world_model_parameter_accounting": train._world_model_parameter_accounting(world_model),
-        "shared_behavior_route_schedule": (
-            [0, 1] if behavior_metrics is not None else None
-        ),
-        "shared_behavior_metrics": behavior_metrics,
+        "private_actor_critic_smoke": {"task_id": 1, "optimizer_steps": 1, "metrics": behavior_metrics},
         "two_frame_autoroute_smoke": routing_smoke,
         "adaptive_compression_smoke": adaptive_compression_smoke,
         "adaptive_behavior_compression_smoke": (

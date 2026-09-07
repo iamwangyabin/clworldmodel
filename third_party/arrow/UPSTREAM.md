@@ -36,6 +36,14 @@ parameters. Dense/compact module-count tests and the CUDA smoke now cover this
 startup report. No parameters, update rule, replay semantics or budgets change;
 the failed attempts stopped before environment interaction or optimizer updates.
 
+The next startup attempt reached world-model updates but exposed an obsolete
+`ActorCritic.consolidation_penalty()` call in the shared AC trainer. Retained
+MLPs have no KAN consolidation; replace the two obsolete calls (ordinary and
+DDP loss paths) with the same zero penalty MLPs historically returned, keeping
+the legacy metric column zero. A real private-MLP optimizer-step regression and
+the CUDA smoke now exercise imagination plus AC optimization, not inference
+alone. Preserve failed pilot2 suffix work; no resumable first boundary existed.
+
 Decision 0058 retires FastKAN StableTargets and F/D-AutoKAN at the user's
 request. Atari's typed config and CLI reject those selectors; the FastKAN
 constructor arguments, branches, preset validation and shared-FastKAN training

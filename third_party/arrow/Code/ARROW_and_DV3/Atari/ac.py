@@ -370,7 +370,7 @@ class ActorCriticTrainingStep(nn.Module):
                 slow_critic_preds_log=slow_replay_preds_log,
                 slow_critic_regularizer=self.slow_critic_regularizer,
             )
-        consolidation_loss = self.actor_critic.consolidation_penalty()
+        consolidation_loss = torch.zeros((), device=states.device)
         loss = (
             reinforce
             - self.entropy_scale * entropy
@@ -1072,7 +1072,7 @@ def train_ac_from_wm(
                         slow_critic_preds_log=slow_replay_preds_log,
                         slow_critic_regularizer=slow_critic_regularizer,
                     )
-            consolidation_loss = ac.consolidation_penalty()
+            consolidation_loss = torch.zeros((), device=states.device)
             loss = (
                 reinforce
                 - entropy_scale * entropy
