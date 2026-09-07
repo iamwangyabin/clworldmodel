@@ -33,7 +33,7 @@ from probe_coinrun_sequence_routing import (
     verify_launch, weight_digest,
 )
 
-PROTOCOL = "CoinRun-Frozen-TaskID-PrefixClassifier-Pilot-v1"
+PROTOCOL = "CoinRun-Frozen-TaskID-PrefixClassifier-Pilot-v2"
 SPLIT_DOMAINS = {"train": 6101, "validation": 6201, "test": 6301}
 
 
@@ -45,7 +45,7 @@ class ExperimentConfig:
     prefix_decisions: int = 16
     epochs: int = 100
     router_batch_size: int = 64
-    score_batch_size: int = 16
+    score_batch_size: int = 1
     gru_hidden: int = 32
     mlp_hidden: int = 56
     learning_rate: float = 0.003
@@ -64,6 +64,8 @@ class ExperimentConfig:
             raise ValueError("All episode, prefix, model and update counts must be positive integers")
         if not 0 <= self.seed < 2**31 or self.learning_rate <= 0 or self.weight_decay < 0:
             raise ValueError("Invalid seed or optimizer settings")
+        if self.score_batch_size != 1:
+            raise ValueError("This protocol matches the single-instance production routing batch exactly")
 
 
 def split_config(cfg: ExperimentConfig, split: str) -> ProbeConfig:
@@ -247,10 +249,9 @@ def collect_split(wm, actors, routes, names, cfg, split, output):
     labels = np.array([r["task_index_for_audit_only"] for r in rows], dtype=np.int64)
     production_first = np.asarray([r["initial_policy_reconstruction_mse"] for r in rows], dtype=np.float32)
     first_score_difference = float(np.abs(errors[:, 0] - production_first).max())
-    # Use the exact production first-frame scores, not a potentially different
-    # BF16 batch-size rounding. Later features remain identically shared by arms.
-    np.testing.assert_allclose(errors[:, 0], production_first, rtol=1e-3, atol=1e-5)
-    errors[:, 0] = production_first
+    # BF16 near-tied categorical modes can amplify batch-size differences. Do
+    # not relax this check or replace scores to conceal a changed latent path.
+    np.testing.assert_array_equal(errors[:, 0], production_first)
     for i, row in enumerate(rows):
         if row["initial_policy_route"] != routes[int(errors[i, 0].argmin())]:
             raise RuntimeError("First-frame feature scorer disagrees with actual behavior router")

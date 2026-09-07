@@ -32,6 +32,8 @@ class TemporalTaskIDTests(unittest.TestCase):
         self.assertEqual(plan, seed_plan(cfg))
         self.assertEqual([len(s) for s in plan.values()], [256, 128, 512])
         self.assertEqual(len(set(sum(plan.values(), []))), 896)
+        self.assertEqual(cfg.score_batch_size, 1)
+        with self.assertRaises(ValueError): ExperimentConfig(score_batch_size=16)
         with self.assertRaises(ValueError): ExperimentConfig(epochs=0)
         with self.assertRaises(TypeError): ExperimentConfig(unknown_setting=1)
 
