@@ -16,6 +16,14 @@ Start with:
 `RESULTS.md` and `registry.json` are generated. The per-run `record.json` files
 are the reviewed source of truth in this directory.
 
+The current formal name **AWM (Accumulative World Modeling)** replaces D;
+D-AutoRoute is now **AWM-AutoRoute** (Decision 0060). Historical names, record
+IDs, protocol versions and raw results below remain as recorded. Renaming does
+not turn the earlier AutoRoute v1 evidence into a v2 result.
+
+StableTargets and F/D-AutoKAN execution code was retired on 2026-09-07
+(Decision 0058). Result records below remain unchanged historical evidence.
+
 ## What the current evidence says
 
 The [CoinRun five-seed baseline archive](coinrun_baselines_5seed_20260906.md)

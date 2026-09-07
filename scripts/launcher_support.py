@@ -91,3 +91,17 @@ def run_and_tee(
                 log.write(line)
                 log.flush()
         return process.wait()
+
+
+def prepare_replay_symlink(output_dir: Path, mmap_root: Path | None) -> Path | None:
+    if mmap_root is None:
+        return None
+    root = mmap_root.expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    backing = root / output_dir.name
+    if backing.exists() or backing.is_symlink():
+        raise FileExistsError(f"Replay backing already exists: {backing}")
+    backing.mkdir()
+    link = output_dir / "mmap_replay"
+    link.symlink_to(backing, target_is_directory=True)
+    return backing

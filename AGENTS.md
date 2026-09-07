@@ -96,6 +96,28 @@ The repository itself is Apache-2.0 licensed. New project code uses that
 license. MIT-derived material must retain the MIT notice; do not relabel copied
 upstream code as solely Apache-2.0.
 
+## Retained research-method scope (2026-09-07)
+
+The user has retired the early ARROW-R2Rep, ReLU-KAN, non-StableTargets
+FastKAN, KARROW, MoE/full-world-model-bank, frozen-first-task LoRA/MB/REC,
+and older Evolving-Core method implementations. Retain the project-owned
+AWM and AWM-AutoRoute paths (formerly D and D-AutoRoute). StableTargets and
+F/D-AutoKAN are also retired by the user decision of 2026-09-07. ARROW/DV3 baselines
+and the independent R2-Dreamer and Dream Rehearsal reference integrations
+are outside this retirement.
+
+The formal method name is **AWM — Accumulative World Modeling**, adopted on
+2026-09-07. Use AWM and AWM-AutoRoute in current method descriptions. Preserve
+existing method keys, protocol IDs, launcher paths and historical evidence for
+compatibility and provenance; this is a naming-only change (Decision 0060).
+
+Do not restore retired algorithms just to satisfy their old method-specific
+tests. Shared functionality and its necessary tests belong to the retained
+methods. Preserve historical protocols, raw results, provenance and failed-run
+records; historical commands may require their recorded Git revision.
+The retirement is not validated until retained-method tests, parity and
+checkpoint contracts pass; see Decisions 0057 and 0058 for the current migration status.
+
 ## Target repository layout
 
 The baseline-only repository starts with this minimal layout:

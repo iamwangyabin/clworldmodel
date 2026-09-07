@@ -328,15 +328,8 @@ def _old_coordinate_metrics(
     comparison_priors = comparison_model.world_model.rssm.transition(reference_hiddens)
     reference_priors = reference_model.world_model.rssm.transition(reference_hiddens)
     hidden_difference = (comparison_hiddens - reference_hiddens).square().mean(dim=-1).sqrt()
-    hidden_scale = (
-        (reference_hiddens - reference_hiddens.mean(dim=(0, 2), keepdim=True))
-        .square()
-        .mean(dim=(0, 2))
-        .sqrt()
-        .clamp_min(1e-8)
-    )
     metrics["rssm.recurrent_normalized_rmse"] = _chunk_temporal_mean(
-        hidden_difference / hidden_scale.unsqueeze(0), start=burn_in - 1
+        hidden_difference / None.unsqueeze(0), start=burn_in - 1
     )
     metrics["rssm.prior_symmetric_kl"] = _chunk_temporal_mean(
         _symmetric_kl_torch(reference_priors, comparison_priors), start=burn_in - 1

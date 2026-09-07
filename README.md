@@ -5,7 +5,36 @@ learning. Its current base is the paper's canonical ARROW-50 method: a
 DreamerV3-style agent with an equally split FIFO and long-term
 distribution-matching (LTDM) replay budget.
 
-## Current status
+## Current method scope — retirement in progress
+
+The retained project-owned methods are **AWM (Accumulative World Modeling)**,
+formerly D, and its **AWM-AutoRoute** variant, formerly D-AutoRoute. ARROW-50,
+DreamerV3/FIFO, native R2-Dreamer and Dream Rehearsal reference integrations
+remain separate.
+
+AWM aims to accumulate learned prediction and control functionality in a
+continually trainable world model: acquire with full private capacity, protect
+previously learned functions, then compact the acquired structure under a
+raw-return gate. The formal name replaces D, not its algorithm or protocol.
+Existing launcher paths, config keys, protocol IDs and historical records stay
+unchanged; see [Decision 0060](docs/decisions/0060-name-awm-accumulative-world-modeling.md).
+
+The early representation/KAN, KARROW, MoE/full-bank, frozen-first-task
+adaptation and other Evolving-Core implementations have been retired by user
+decision. Their protocol and experiment records below are historical evidence,
+not a claim that their commands still work on the current checkout.
+
+**Cleanup is not yet fully validated:** retained launch dry runs and fixed-input
+model parity pass, but migration of old method-specific tests is pending explicit
+approval. Do not launch a campaign from this intermediate worktree.
+See [Decision 0057](docs/decisions/0057-retire-historical-method-code.md) and
+[Decision 0058](docs/decisions/0058-retire-stabletargets-and-d-autokan.md).
+
+**StableTargets and F / D-AutoKAN were retired on 2026-09-07.** Their
+execution paths and FastKAN implementation are removed. Historical protocols,
+raw results and provenance remain; they require the recorded Git revision.
+
+## Implementation and experiment history
 
 The repository contains the maintained baseline stack plus named method
 ablations at different stages of evidence:
@@ -595,7 +624,7 @@ private-head reference. Q/F/P and private behavior still grow per task. This
 configuration has no performance result yet; see
 `docs/protocols/evolving_core_dense_qfp_shared_distilled_heads_v1_atari.md`.
 
-The Dense-acquire adaptive-compression profile keeps that same acquisition
+**AWM (Accumulative World Modeling, formerly D)** keeps that same acquisition
 topology, then evaluates four physical structured-pruning candidates after
 each task. Every candidate receives the same 250-update LTDM recovery budget;
 the smallest width within a five-percent **raw-return** drop on a dedicated
@@ -645,6 +674,47 @@ fallback) to `3,039,855` (all width 64). Joint online parameters range from
 compression is measured rather than promised. The extra 6,000 behavior
 compression updates and 480 selector rollouts are explicit. See
 `docs/protocols/evolving_core_adaptive_qfp_ac_compression_v1_atari.md`.
+
+**D-AutoKAN (方案 F)** is a separate D-derived profile: it keeps adaptive Q/F/P
+and shared prediction heads, uses one fixed-size FastKAN StableTargets
+Actor-Critic, and selects each episode's route from first-frame reconstruction
+MSE. Training retains task labels; interaction and evaluation do not receive
+the environment's task ID. It is **not** fully task-agnostic training.
+
+```bash
+python scripts/run_evolving_atomic_rssm.py \
+  --task-order arrow-original-six \
+  --prediction-head-profile shared_distilled \
+  --adaptive-qfp-compression \
+  --behavior-profile shared_fastkan_autoroute \
+  --seed 0 --classification pilot --dry-run
+```
+
+The single behavior pair has `1,700,670` parameters instead of D's six-pair
+`10,295,910` bank; there is no task-wise AC growth. Compression now gates on
+every seen task's **auto-routed** raw return, explicitly increasing selection
+validation from 480 nominal to 1,680 exact episodes. First-frame probes also
+add inference compute. The new protocol uses explicit same-step resets and
+exact-episode evaluation, without redefining legacy D. No performance or
+recognition-accuracy result is claimed; see
+[`D-AutoKAN v1`](docs/protocols/evolving_core_fastkan_autoroute_v1_atari.md).
+
+**AWM-AutoRoute** has its own entry point and retains AWM's **independent MLP
+Actor-Critics**, without FastKAN, shared behavior, or AC compression:
+
+```bash
+python scripts/run_evolving_atomic_rssm_d_autoroute.py --seed 0 --dry-run
+```
+
+Each worker's first-frame reconstruction selects both its world-model path
+and its corresponding private Actor, locked until reset. Training/Replay still
+use true task labels; inference does not. The maintained v2 restores AWM/ARROW's
+implicit NextStep collection, legacy trajectory-budget evaluator, oracle
+consolidation checks and current-task oracle Q/F/P gate with 480 nominal
+selector rollouts. AC parameters remain AWM's `10,295,910`; no learned router
+parameters are added. The earlier SameStep/exact v1 runs remain historical and
+are not comparable to AWM as an isolated routing ablation. See
+[`AWM-AutoRoute v2`](docs/protocols/evolving_core_d_autoroute_v2_atari.md).
 
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control
