@@ -44,6 +44,31 @@ class ActionFixture:
 
 
 class ProbeTests(unittest.TestCase):
+    def test_checkpoint_actor_reconstruction_uses_production_config_mapping(self):
+        from test_d_autoroute_coinrun import new_config
+        from config import Config
+        from ac import build_actor_critic_opt
+        from train import _actor_critic_constructor_kwargs
+        import smoke_evolving_atomic_rssm
+        from artifact_io import write_sha256_sidecar
+        config = Config.from_dict(new_config())
+        wm = torch.nn.Linear(1, 1)
+        wm.ls, wm.h_dim, wm.a_dim = (1, 2), 1, 15
+        ac = build_actor_critic_opt(wm, lr=config.ac_lr, **_actor_critic_constructor_kwargs(config)).ac
+        payload = {"artifact_kind": "task_bank_boundary_inference_snapshot", "config": config.to_dict(),
+                   "inference_routing": {"eligible_route_ids": [0, 1]}, "completed_task": {"task_index": 1},
+                   "world_model_state_dict": wm.state_dict(),
+                   "actor_critic_bank_state_dict": {"tasks": {"0": ac.state_dict(), "1": ac.state_dict()}}}
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "weights.pt"
+            torch.save(payload, path); write_sha256_sidecar(path)
+            with mock.patch.object(smoke_evolving_atomic_rssm, "_world_model", return_value=wm):
+                loaded, actors, _, routes, _, _ = probe.load_model(path, torch.device("cpu"))
+        self.assertEqual(routes, (0, 1))
+        self.assertTrue(all(not p.requires_grad for m in (loaded, actors) for p in m.parameters()))
+        for key, value in ac.actor.state_dict().items():
+            torch.testing.assert_close(value, actors.actors["1"].state_dict()[key])
+
     def test_cuda_initialized_before_allocator_reset_and_failure_recorded(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

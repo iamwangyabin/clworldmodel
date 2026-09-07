@@ -75,7 +75,7 @@ def load_model(checkpoint: Path, device: torch.device):
         sys.path.insert(0, str(path))
     from config import Config
     from smoke_evolving_atomic_rssm import _world_model
-    from ac import ActorCritic
+    from ac import build_actor_critic_opt
     from train import _actor_critic_constructor_kwargs
     from clworldmodel.routing import RoutedActorBank
 
@@ -99,8 +99,10 @@ def load_model(checkpoint: Path, device: torch.device):
     wm.load_state_dict(payload["world_model_state_dict"], strict=True)
     actors = {}
     for k in routes:
-        ac = ActorCritic(int(np.prod(wm.ls)) + wm.h_dim, wm.a_dim,
-                        **_actor_critic_constructor_kwargs(config)).to(device)
+        # Reuse the production constructor's config mapping. Its optimizer is
+        # discarded without any update or state allocation.
+        ac = build_actor_critic_opt(wm, lr=config.ac_lr,
+                                    **_actor_critic_constructor_kwargs(config)).ac
         ac.load_state_dict(states[str(k)], strict=True)
         ac.requires_grad_(False).eval()
         actors[k] = ac.actor
