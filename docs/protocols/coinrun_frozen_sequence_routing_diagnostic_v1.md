@@ -98,3 +98,10 @@ Focused check (fixed tensors/mocks only, no simulator or parameter updates):
 ```bash
 PYTHONPATH=src:tests:scripts python -m unittest test_coinrun_sequence_routing_probe test_d_autoroute_coinrun test_d_autoroute test_fastkan_autoroute
 ```
+
+After completion, render all predeclared windows from the preserved metric
+records without a model, GPU or simulator (stdlib-only reporting command):
+
+```bash
+python scripts/report_coinrun_sequence_routing_probe.py /absolute/path/to/run-directory
+```
