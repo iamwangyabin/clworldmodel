@@ -115,27 +115,6 @@ def _adaptive_compression_task_seeds(
     )
 
 
-def _adaptive_behavior_compression_task_seeds(
-    seed: int, task_count: int
-) -> tuple[int, ...]:
-    """Derive fixed behavior-pruning seeds in an isolated RNG domain.
-
-    Spawn index 4 is distinct from collection (0), periodic validation (1),
-    held-out final evaluation (2), and Q/F/P pruning validation (3).
-    """
-
-    if task_count < 1:
-        raise ValueError(
-            "Adaptive behavior compression requires at least one task seed"
-        )
-    compression_rng = np.random.default_rng(
-        np.random.SeedSequence(int(seed), spawn_key=(4,))
-    )
-    return tuple(
-        _next_environment_seed(compression_rng) for _ in range(task_count)
-    )
-
-
 @contextmanager
 def _preserve_training_rng_state():
     """Keep stochastic evaluation from changing subsequent training draws."""
@@ -279,6 +258,25 @@ def _stage_elapsed(start: float, enabled: bool) -> float:
     return _stage_clock(True) - start
 
 
+def _autorouted_behavior(
+    config: Config,
+    aco: Optional[ActorCriticOpt],
+    actor_critic_bank,
+    eligible_task_count: Optional[int],
+) -> torch.nn.Module:
+    """Expose acquired policies only; never choose one from an environment label."""
+    if eligible_task_count is None or not 1 <= eligible_task_count <= config.rssm_num_experts:
+        raise ValueError("Declare acquired route count explicitly; never infer it from evaluation labels")
+    from clworldmodel.routing import RoutedActorBank
+
+    if not config.task_private_actor_critic or actor_critic_bank is None:
+        raise ValueError("Private auto-routed behavior requires the acquired Actor-Critic bank")
+    return RoutedActorBank({
+        task: actor_critic_bank.get(task).ac.actor
+        for task in range(eligible_task_count)
+    })
+
+
 def _evaluate_policy_tasks(
     config: Config,
     wm: WorldModel,
@@ -287,11 +285,41 @@ def _evaluate_policy_tasks(
     task_seeds: Sequence[int],
     actor_critic_bank=None,
     distributed_context=None,
+    eligible_task_count: Optional[int] = None,
+    routing_diagnostics: Optional[list[dict[str, Any]]] = None,
+    oracle_routes: bool = False,
 ) -> tuple[list[float], list[float]]:
     if len(task_seeds) != len(eval_funcs):
         raise ValueError(
             "Evaluation task functions and fixed task seeds must have equal length"
         )
+    if getattr(config, "uses_reconstruction_task_inference", False) and not oracle_routes:
+        from clworldmodel.routing import routing_audit
+
+        if distributed_context is not None and distributed_context.enabled:
+            raise ValueError("The named autoroute pilot is single-device")
+        behavior = _autorouted_behavior(config, aco, actor_critic_bank, eligible_task_count)
+        means, stds = [], []
+        with _preserve_training_rng_state():
+            for audit_task_id, (env_fns, task_seed) in enumerate(zip(eval_funcs, task_seeds)):
+                diagnostic = {}
+                mean, std = evaluate(
+                    config.n_sync, wm=wm, ac=behavior, env_fns=env_fns,
+                    env_repeat=config.env_repeat, n_rollouts=16, seed=task_seed,
+                    deterministic_policy=True,
+                    eligible_route_ids=tuple(range(eligible_task_count)),
+                    diagnostics=diagnostic,
+                )
+                diagnostic["audit"] = routing_audit(
+                    diagnostic["routing_events"], true_task_id=audit_task_id,
+                    task_count=config.rssm_num_experts,
+                )
+                diagnostic["true_task_is_eligible"] = audit_task_id < eligible_task_count
+                if routing_diagnostics is not None:
+                    routing_diagnostics.append(diagnostic)
+                means.append(mean)
+                stds.append(std)
+        return means, stds
     if distributed_context is not None and distributed_context.enabled:
         local_values = torch.zeros(
             len(eval_funcs), 2, dtype=torch.float64, device=distributed_context.device
@@ -361,6 +389,13 @@ def _evaluate_policy_tasks(
             means.append(mean)
             stds.append(std)
     return means, stds
+
+
+def _write_routing_diagnostic(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(data, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def _actor_critic_schedule_values(
@@ -618,20 +653,8 @@ def _save_evolving_resumable_checkpoint(
     replay_state = _snapshot_checkpoint_replay_mmaps(
         replay_buffer.state_dict(), checkpoint_path=path
     )
-    uses_shared_behavior = config.uses_replay_rehearsed_shared_behavior
-    if uses_shared_behavior:
-        if (
-            actor_critic_bank is not None
-            or aco is None
-            or shared_behavior_update_rng is None
-            or shared_behavior_replay_updates is None
-        ):
-            raise ValueError(
-                "Shared replay-rehearsed behavior checkpoints require exactly one "
-                "actor-critic and "
-                "its independent route-schedule RNG plus routed update counters"
-            )
-    elif (
+
+    if (
         actor_critic_bank is None
         or aco is not None
         or shared_behavior_update_rng is not None
@@ -641,11 +664,7 @@ def _save_evolving_resumable_checkpoint(
             "Private-behavior Evolving-Core checkpoints require only an actor bank"
         )
     behavior_optimizer_state = (
-        {
-            "shared_actor_critic": _actor_critic_opt_resumable_state_dict(aco),
-        }
-        if uses_shared_behavior
-        else {"actor_critic_bank": actor_critic_bank.resumable_state_dict()}
+        ({"actor_critic_bank": actor_critic_bank.resumable_state_dict()})
     )
     rng_state = {
         "python": random.getstate(),
@@ -665,32 +684,9 @@ def _save_evolving_resumable_checkpoint(
             final_environment_seed_rng.bit_generator.state
         ),
     }
-    if uses_shared_behavior:
-        rng_state["shared_behavior_update"] = copy.deepcopy(
-            shared_behavior_update_rng.bit_generator.state
-        )
     routed_behavior_updates: dict[str, int] | None = None
-    if uses_shared_behavior:
-        routed_behavior_updates = {
-            str(int(task_id)): int(update_count)
-            for task_id, update_count in sorted(
-                shared_behavior_replay_updates.items()
-            )
-        }
-        if any(
-            int(task_id) < 0 or update_count < 0
-            for task_id, update_count in routed_behavior_updates.items()
-        ):
-            raise ValueError(
-                "Shared behavior routed update counters must be non-negative"
-            )
-        if sum(routed_behavior_updates.values()) != actor_critic_updates:
-            raise ValueError(
-                "Shared behavior routed update counters must sum to the total "
-                "Actor-Critic optimizer updates"
-            )
     payload = {
-        "schema_version": 2 if uses_shared_behavior else 1,
+        "schema_version": (1),
         "artifact_kind": "evolving_core_atomic_rssm_resumable_checkpoint",
         "resumable": True,
         "config": config.to_dict(),
@@ -714,17 +710,9 @@ def _save_evolving_resumable_checkpoint(
             "raw_environment_frames": total_env_steps,
             "world_model_updates": world_model_updates,
             "actor_critic_updates": actor_critic_updates,
-            "adaptive_behavior_compression_updates": int(
-                adaptive_behavior_compression_updates
-            ),
+            "adaptive_behavior_compression_updates": 0,
             **(
-                {
-                    "actor_critic_updates_by_task_route": (
-                        routed_behavior_updates
-                    )
-                }
-                if uses_shared_behavior
-                else {}
+                ({})
             ),
         },
         "replay_checkpoint_semantics": (
@@ -732,6 +720,13 @@ def _save_evolving_resumable_checkpoint(
             "all other replay tensors and retention indices are embedded"
         ),
     }
+    if getattr(config, "uses_reconstruction_task_inference", False):
+        payload["inference_routing"] = {
+            "mode": config.task_route_inference,
+            "eligible_route_ids": list(range(current_task_id + 1)),
+            "episode_state_checkpointed": False,
+            "resume_semantics": "boundary checkpoint; collection starts with fresh environment resets",
+        }
     if getattr(config, "uses_adaptive_qfp_compression", False):
         world_model_layout = wm.rssm.adaptive_compression_layout()
         teacher_layout = boundary_teacher.rssm.adaptive_compression_layout()
@@ -754,24 +749,6 @@ def _save_evolving_resumable_checkpoint(
             ),
             "full_dense_teacher_persistent": False,
         }
-    if uses_shared_behavior:
-        payload["shared_behavior"] = {
-            "topology": (
-                "single_shared_mlp_plus_task_adaptive_residuals"
-                if getattr(config, "uses_adaptive_behavior_compression", False)
-                else "single_shared_fastkan_actor_critic"
-            ),
-            "future_task_teacher_actor": aco.ac.actor.state_dict(),
-            "teacher_seen_tasks": current_task_id + 1,
-            "teacher_semantics": (
-                "the just-completed shared actor becomes the single frozen "
-                "cumulative policy-interface teacher for the next task"
-            ),
-        }
-        if getattr(config, "uses_adaptive_behavior_compression", False):
-            payload["shared_behavior"]["adaptive_hidden_widths"] = (
-                aco.ac.adaptive_behavior_layout()
-            )
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     torch.save(payload, temporary)
@@ -876,7 +853,7 @@ def _restore_evolving_resumable_checkpoint(
     )
     if not isinstance(payload, Mapping):
         raise ValueError("Evolving-Core checkpoint must contain a mapping")
-    expected_schema = 2 if config.uses_replay_rehearsed_shared_behavior else 1
+    expected_schema = (1)
     if (
         payload.get("schema_version") != expected_schema
         or payload.get("artifact_kind")
@@ -886,8 +863,26 @@ def _restore_evolving_resumable_checkpoint(
         raise ValueError(
             f"Checkpoint is not resumable Evolving-Core schema v{expected_schema}"
         )
-    if payload.get("config") != config.to_dict():
+    checkpoint_config = payload.get("config")
+    if isinstance(checkpoint_config, Mapping) and not getattr(config, "uses_reconstruction_task_inference", False):
+        # Historical D/other checkpoints predate these opt-in, default-off fields.
+        checkpoint_config = dict(checkpoint_config)
+        for name, default in (
+            ("task_route_inference", "oracle"),
+            ("evaluation_episode_count_mode", "legacy"),
+            ("evaluation_max_agent_decisions_per_episode", 32768),
+        ):
+            if name in config.to_dict():
+                checkpoint_config.setdefault(name, default)
+    if checkpoint_config != config.to_dict():
         raise ValueError("Resolved config changed across Evolving-Core resume")
+    if getattr(config, "uses_reconstruction_task_inference", False):
+        routing = payload.get("inference_routing", {})
+        completed_id = int(payload["schedule"]["current_task_id"])
+        if (not 0 <= completed_id < config.rssm_num_experts
+                or routing.get("eligible_route_ids") != list(range(completed_id + 1))
+                or routing.get("mode") != config.task_route_inference):
+            raise ValueError("Checkpoint inference eligibility does not match acquisition state")
 
     wm.load_state_dict(payload["world_model"], strict=True)
     boundary_teacher.load_state_dict(payload["boundary_teacher"], strict=True)
@@ -932,48 +927,17 @@ def _restore_evolving_resumable_checkpoint(
             optimizer.load_state_dict(states[str(task_id)])
     restored_teacher = None
     restored_teacher_seen_tasks = 0
-    if config.uses_replay_rehearsed_shared_behavior:
-        if (
-            actor_critic_bank is not None
-            or aco is None
-            or shared_behavior_update_rng is None
-        ):
-            raise ValueError(
-                "Shared replay-rehearsed behavior restore requires exactly one "
-                "actor-critic and "
-                "its independent route-schedule RNG"
-            )
-        _load_actor_critic_opt_resumable_state_dict(
-            aco, optimizers["shared_actor_critic"]
+    if (
+        actor_critic_bank is None
+        or aco is not None
+        or shared_behavior_update_rng is not None
+    ):
+        raise ValueError(
+            "Private-behavior restore requires only an actor-critic bank"
         )
-        shared_behavior = payload.get("shared_behavior")
-        if not isinstance(shared_behavior, Mapping):
-            raise ValueError("Shared behavior checkpoint is missing behavior state")
-        if getattr(config, "uses_adaptive_behavior_compression", False) and (
-            aco.ac.adaptive_behavior_layout()
-            != shared_behavior.get("adaptive_hidden_widths")
-        ):
-            raise ValueError(
-                "Adaptive Actor-Critic checkpoint did not rebuild recorded widths"
-            )
-        restored_teacher = copy.deepcopy(aco.ac.actor).eval()
-        restored_teacher.requires_grad_(False)
-        restored_teacher.load_state_dict(
-            shared_behavior["future_task_teacher_actor"], strict=True
-        )
-        restored_teacher_seen_tasks = int(shared_behavior["teacher_seen_tasks"])
-    else:
-        if (
-            actor_critic_bank is None
-            or aco is not None
-            or shared_behavior_update_rng is not None
-        ):
-            raise ValueError(
-                "Private-behavior restore requires only an actor-critic bank"
-            )
-        actor_critic_bank.load_resumable_state_dict(
-            optimizers["actor_critic_bank"], actor_critic_factory
-        )
+    actor_critic_bank.load_resumable_state_dict(
+        optimizers["actor_critic_bank"], actor_critic_factory
+    )
     replay_buffer.load_state_dict(payload["replay"])
 
     rng = payload["rng"]
@@ -989,19 +953,8 @@ def _restore_evolving_resumable_checkpoint(
         (final_environment_seed_rng, "final_environment"),
     ):
         generator.bit_generator.state = copy.deepcopy(rng[name])
-    if config.uses_replay_rehearsed_shared_behavior:
-        shared_behavior_update_rng.bit_generator.state = copy.deepcopy(
-            rng["shared_behavior_update"]
-        )
     schedule = payload["schedule"]
     environment_schedule._step = int(schedule["environment_step"])
-    if (
-        config.uses_adaptive_behavior_compression
-        and aco is not None
-    ):
-        # The task route is scheduler state, deliberately not a CUDA buffer in
-        # the Actor-Critic. Restore it before any resumed collection can run.
-        aco.ac.set_task_route(int(schedule["current_task_id"]))
     counters = payload["counters"]
     restored = {
         "completed_epochs": int(schedule["completed_epochs"]),
@@ -1009,34 +962,8 @@ def _restore_evolving_resumable_checkpoint(
         "raw_environment_frames": int(counters["raw_environment_frames"]),
         "world_model_updates": int(counters["world_model_updates"]),
         "actor_critic_updates": int(counters["actor_critic_updates"]),
-        "adaptive_behavior_compression_updates": int(
-            counters.get("adaptive_behavior_compression_updates", 0)
-        ),
+        "adaptive_behavior_compression_updates": 0,
     }
-    if config.uses_replay_rehearsed_shared_behavior:
-        restored["shared_actor_teacher"] = restored_teacher
-        restored["shared_actor_teacher_seen_tasks"] = restored_teacher_seen_tasks
-        routed_updates = counters.get("actor_critic_updates_by_task_route")
-        if not isinstance(routed_updates, Mapping):
-            raise ValueError(
-                "Shared behavior checkpoint is missing routed update counters"
-            )
-        restored_updates = {
-            int(task_id): int(update_count)
-            for task_id, update_count in routed_updates.items()
-        }
-        if (
-            any(
-                task_id < 0 or update_count < 0
-                for task_id, update_count in restored_updates.items()
-            )
-            or sum(restored_updates.values())
-            != restored["actor_critic_updates"]
-        ):
-            raise ValueError(
-                "Shared behavior checkpoint has inconsistent routed update counters"
-            )
-        restored["shared_behavior_replay_updates"] = restored_updates
     return restored
 
 
@@ -1057,284 +984,6 @@ _TASK0_TRANSITION_ALLOWED_CONFIG_CHANGES = frozenset(
         "freeze_shared_prediction_heads_after_task0",
     }
 )
-
-
-def _load_evolving_task0_transition_checkpoint(
-    path: Path,
-    *,
-    config: Config,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Validate the one named Task-0 boundary transition used by method C.
-
-    This is deliberately not the normal equivalent-resume path.  It preserves
-    Task-0 data, weights, behavior state, counters, and RNG while changing the
-    *future-task* Q/F/P and prediction-head ownership topology.  Optimizers for
-    the changed world-model ownership are therefore rebuilt explicitly.
-    """
-
-    path = path.expanduser().resolve()
-    checksum_path = path.with_suffix(path.suffix + ".sha256")
-    if not path.is_file() or not checksum_path.is_file():
-        raise FileNotFoundError(
-            "Task-0 transition requires a checkpoint and checksum sidecar: "
-            f"{path}"
-        )
-    fields = checksum_path.read_text(encoding="ascii").split()
-    actual_sha256 = _sha256(path)
-    if not fields or fields[0] != actual_sha256:
-        raise ValueError("Task-0 transition checkpoint checksum does not match")
-    payload = torch.load(path, map_location="cpu", weights_only=False)
-    if not isinstance(payload, dict):
-        raise ValueError("Task-0 transition checkpoint must contain a dictionary")
-    if (
-        payload.get("schema_version") != 1
-        or payload.get("artifact_kind")
-        != "evolving_core_atomic_rssm_resumable_checkpoint"
-        or payload.get("resumable") is not True
-    ):
-        raise ValueError(
-            "Task-0 transition source must be private-behavior Evolving-Core "
-            "resumable schema v1"
-        )
-    if config.continual_method != _ATOMIC_LORA_SHARED_HEADS_METHOD:
-        raise ValueError(
-            "Task-0 boundary transition is restricted to the named atomic-LoRA "
-            "shared-head method"
-        )
-    source_config = payload.get("config")
-    if not isinstance(source_config, Mapping):
-        raise ValueError("Task-0 transition source is missing its resolved config")
-    if source_config.get("continual_method") != _TASK0_TRANSITION_SOURCE_METHOD:
-        raise ValueError(
-            "Task-0 transition must come from the named learned-base adapter pilot"
-        )
-    target_config = config.to_dict()
-    changed = {
-        key
-        for key in set(source_config) | set(target_config)
-        if source_config.get(key) != target_config.get(key)
-    }
-    if changed != _TASK0_TRANSITION_ALLOWED_CONFIG_CHANGES:
-        raise ValueError(
-            "Task-0 transition changed fields outside the declared topology "
-            f"boundary: {sorted(changed)}"
-        )
-    expected_values = {
-        "source": {
-            "task_mechanism_reuse": False,
-            "task_mechanism_parameterization": "learned_task0_low_rank",
-            "task_mechanism_low_rank": 32,
-            "task_private_prediction_adapters": True,
-            "prediction_adapter_rank": 32,
-            "freeze_shared_prediction_heads_after_task0": True,
-        },
-        "target": {
-            "task_mechanism_reuse": True,
-            "task_mechanism_parameterization": "dense_task0_low_rank_atoms",
-            "task_mechanism_low_rank": 128,
-            "task_private_prediction_adapters": False,
-            "prediction_adapter_rank": 0,
-            "freeze_shared_prediction_heads_after_task0": False,
-        },
-    }
-    for label, values in expected_values.items():
-        actual = source_config if label == "source" else target_config
-        mismatches = {
-            name: (actual.get(name), expected)
-            for name, expected in values.items()
-            if actual.get(name) != expected
-        }
-        if mismatches:
-            raise ValueError(
-                f"Task-0 transition {label} topology is not the declared v1: "
-                f"{mismatches}"
-            )
-
-    durations = _sequential_task_durations(config)
-    first_task_epochs = int(durations[0])
-    schedule = payload.get("schedule")
-    counters = payload.get("counters")
-    if not isinstance(schedule, Mapping) or not isinstance(counters, Mapping):
-        raise ValueError("Task-0 transition source is missing schedule/counters")
-    expected_schedule = {
-        "environment_step": first_task_epochs,
-        "epoch": first_task_epochs - 1,
-        "completed_epochs": first_task_epochs,
-        "current_task_id": 0,
-    }
-    schedule_mismatches = {
-        name: (int(schedule.get(name, -1)), expected)
-        for name, expected in expected_schedule.items()
-        if int(schedule.get(name, -1)) != expected
-    }
-    if schedule_mismatches:
-        raise ValueError(
-            "Task-0 transition source is not exactly the post-Task-0 boundary: "
-            f"{schedule_mismatches}"
-        )
-    expected_counters = {
-        "raw_environment_frames": (
-            first_task_epochs
-            * config.n_sync
-            * config.gen_seq_len
-            * config.env_repeat
-        ),
-        "world_model_updates": (
-            first_task_epochs * config.steps_per_batch
-            + config.boundary_consolidation_steps
-        ),
-        "actor_critic_updates": first_task_epochs * config.ac_train_steps,
-    }
-    counter_mismatches = {
-        name: (int(counters.get(name, -1)), expected)
-        for name, expected in expected_counters.items()
-        if int(counters.get(name, -1)) != expected
-    }
-    if counter_mismatches:
-        raise ValueError(
-            "Task-0 transition source counters do not match the fixed budget: "
-            f"{counter_mismatches}"
-        )
-    for name in ("world_model", "boundary_teacher", "optimizers", "replay", "rng"):
-        if name not in payload:
-            raise ValueError(f"Task-0 transition source is missing {name!r}")
-
-    metadata = {
-        "schema_version": 1,
-        "artifact_kind": "evolving_task0_cross_topology_transition",
-        "source_checkpoint": str(path),
-        "source_checkpoint_sha256": actual_sha256,
-        "source_method": _TASK0_TRANSITION_SOURCE_METHOD,
-        "target_method": _ATOMIC_LORA_SHARED_HEADS_METHOD,
-        "completed_epochs": first_task_epochs,
-        "source_counters": expected_counters,
-        "allowed_config_changes": sorted(changed),
-        "replay_state": "exact_task0_checkpoint_state_copied_to_new_working_mmaps",
-        "world_model_optimizer_state": "reset_due_to_ownership_transition",
-        "actor_critic_task0_optimizer_state": "restored_exactly_but_frozen",
-        "rng_state": "restored_after_target_topology_construction",
-        "environment_schedule_restart_task": 1,
-        "scientific_scope": (
-            "post-Task-0 boundary bootstrap across a declared topology change; "
-            "not an equivalent resume and not a from-scratch C run"
-        ),
-    }
-    return payload, metadata
-
-
-def _seed_atomic_lora_task0_world_model(
-    wm: WorldModel,
-    source_state: Mapping[str, torch.Tensor],
-) -> dict[str, Any]:
-    """Copy only shared and Task-0-compatible state into method C."""
-
-    exact_names = {"task_expert_initialized"}
-    prefixes = (
-        "rssm.image_embedder.",
-        "rssm.observation_adapter.",
-        "rssm.recurrent.",
-        "rssm.representation.",
-        "rssm.transition.",
-        "rssm.image_projectors.0.",
-        "rssm.recurrent_mechanism_bank.mechanisms.0.",
-        "rssm.representation_mechanism_bank.mechanisms.0.",
-        "rssm.transition_mechanism_bank.mechanisms.0.",
-        "zh_transform.",
-        "decoder.",
-        "reward_fc.",
-        "continue_fc.",
-    )
-    # The published Atari shape uses identity observation and latent-feature
-    # adapters, which have no state-dict entries. Transfer shaped adapters when
-    # present, but do not require empty identity modules to manufacture state.
-    optional_stateless_prefixes = {
-        "rssm.observation_adapter.",
-        "zh_transform.",
-    }
-    required_prefixes = tuple(
-        prefix
-        for prefix in prefixes
-        if prefix not in optional_stateless_prefixes
-    )
-    target_state = wm.state_dict()
-    selected = {
-        name: value
-        for name, value in source_state.items()
-        if name in exact_names or name.startswith(prefixes)
-    }
-    missing_required_prefixes = [
-        prefix
-        for prefix in required_prefixes
-        if not any(name.startswith(prefix) for name in selected)
-    ]
-    if missing_required_prefixes:
-        raise ValueError(
-            "Task-0 transition source lacks required world-model modules: "
-            f"{missing_required_prefixes}"
-        )
-    if exact_names - selected.keys():
-        raise ValueError("Task-0 transition source lacks task initialization state")
-    unknown = sorted(set(selected) - set(target_state))
-    if unknown:
-        raise ValueError(
-            f"Task-0 transition selected unknown target state: {unknown[:5]}"
-        )
-    mismatched = {
-        name: (tuple(value.shape), tuple(target_state[name].shape))
-        for name, value in selected.items()
-        if value.shape != target_state[name].shape or value.dtype != target_state[name].dtype
-    }
-    if mismatched:
-        raise ValueError(
-            "Task-0 transition shared/Task-0 tensors changed shape or dtype: "
-            f"{mismatched}"
-        )
-    merged = dict(target_state)
-    merged.update(selected)
-    wm.load_state_dict(merged, strict=True)
-    parameter_names = {name for name, _parameter in wm.named_parameters()}
-    transferred_parameters = sum(
-        value.numel()
-        for name, value in selected.items()
-        if name in parameter_names
-    )
-    return {
-        "selected_tensor_count": len(selected),
-        "selected_parameter_count": transferred_parameters,
-        "selected_prefixes": list(prefixes),
-        "future_task_modules": "target initialization preserved",
-        "future_task_routes": "target zero-gate initialization preserved",
-        "prediction_adapters": "source-only modules omitted",
-    }
-
-
-def _restore_task0_transition_rng(
-    rng: Mapping[str, Any],
-    *,
-    task_update_rng: np.random.Generator,
-    collection_environment_seed_rng: np.random.Generator,
-    validation_environment_seed_rng: np.random.Generator,
-    final_environment_seed_rng: np.random.Generator,
-) -> None:
-    """Restore the source boundary RNG after all method-C modules exist."""
-
-    random.setstate(rng["python"])
-    np.random.set_state(rng["numpy_legacy"])
-    torch.random.set_rng_state(rng["torch_cpu"].cpu())
-    cuda_state = rng.get("torch_cuda")
-    if cuda_state is not None:
-        if not torch.cuda.is_available():
-            raise RuntimeError("Task-0 transition contains CUDA RNG but CUDA is absent")
-        if len(cuda_state) != torch.cuda.device_count():
-            raise ValueError("Task-0 transition CUDA device count changed")
-        torch.cuda.set_rng_state_all(cuda_state)
-    for generator, name in (
-        (task_update_rng, "task_update"),
-        (collection_environment_seed_rng, "collection_environment"),
-        (validation_environment_seed_rng, "validation_environment"),
-        (final_environment_seed_rng, "final_environment"),
-    ):
-        generator.bit_generator.state = copy.deepcopy(rng[name])
 
 
 def _parameter_accounting(module: torch.nn.Module) -> dict[str, int]:
@@ -1404,43 +1053,6 @@ def _actor_critic_bank_parameter_accounting(bank) -> dict:
     }
 
 
-def _shared_actor_parameter_accounting(
-    aco: ActorCriticOpt,
-    teacher_actor: Optional[torch.nn.Module],
-) -> dict:
-    accounting = _actor_critic_parameter_accounting(aco)
-    adaptive_behavior = bool(aco.ac.adaptive_behavior_residuals)
-    accounting["topology"] = (
-        "single_shared_mlp_plus_task_adaptive_residuals"
-        if adaptive_behavior
-        else "single_shared_actor_critic"
-    )
-    accounting["persistent_actor_copies"] = 1
-    accounting["per_task_actor_growth"] = (
-        "outcome-dependent private actor/critic residual width"
-        if adaptive_behavior
-        else 0
-    )
-    if adaptive_behavior:
-        accounting["adaptive_behavior"] = {
-            "layout": aco.ac.adaptive_behavior_layout(),
-            "actor": aco.ac.actor.parameter_report(),
-            "critic": aco.ac.critic.parameter_report(),
-            "shared_bases_trainable": True,
-            "task_routes_explicit": True,
-        }
-    accounting["transient_teacher"] = (
-        {
-            "persistent": False,
-            "lifetime": "current task only",
-            "actor": _module_state_accounting(teacher_actor),
-        }
-        if teacher_actor is not None
-        else None
-    )
-    return accounting
-
-
 def _active_actor_critic_parameter_accounting(
     *,
     config: Config,
@@ -1452,8 +1064,6 @@ def _active_actor_critic_parameter_accounting(
 
     if actor_critic_bank is not None:
         return _actor_critic_bank_parameter_accounting(actor_critic_bank)
-    if config.uses_shared_actor:
-        return _shared_actor_parameter_accounting(aco, shared_actor_teacher)
     return _actor_critic_parameter_accounting(aco)
 
 
@@ -1464,21 +1074,14 @@ def _write_json_atomically(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 def _world_model_parameter_accounting(wm: WorldModel) -> dict:
-    if wm.observation_objective == "reconstruction":
-        observation_head_name = "decoder"
-        observation_head = wm.decoder
-    elif wm.observation_objective == "r2":
-        observation_head_name = "r2_projector"
-        observation_head = wm.r2_projector
-    else:
-        observation_head_name = "feature_predictor"
-        observation_head = wm.feature_predictor
+    observation_head_name = "decoder"
+    observation_head = wm.decoder
     observation_encoders_per_task = {
         str(task_id): _parameter_accounting(
             wm.rssm.image_embedder_for(task_id)
         )
         for task_id in range(wm.rssm.num_task_experts)
-        if wm.rssm.task_banked_image_encoder
+        if False
     }
     projectors_per_task = {
         str(task_id): _parameter_accounting(
@@ -1525,29 +1128,21 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         }
     return {
         "schema_version": 1,
-        "observation_objective": wm.observation_objective,
+        "observation_objective": 'reconstruction',
         "world_model": _parameter_accounting(wm),
         "world_model_parameter_and_buffer_state": _module_state_accounting(wm),
         "observation_encoder": _parameter_accounting(wm.rssm.image_embedder),
-        "observation_encoder_topology": (
-            "per_task_bank"
-            if wm.rssm.task_banked_image_encoder
-            else "shared"
-        ),
+        "observation_encoder_topology": ("shared"),
         "observation_encoders_per_task": observation_encoders_per_task,
         "task_projected_image_encoder": wm.rssm.task_projected_image_encoder,
         "task_symmetric_image_projectors": (
             wm.rssm.task_symmetric_image_projectors
         ),
         "observation_projectors_per_task": projectors_per_task,
-        "rssm_task_lora_enabled": wm.rssm.task_lora_enabled,
+        "rssm_task_lora_enabled": False,
         "rssm_task_lora_reports": wm.rssm.task_lora_reports,
-        "rssm_recurrent_output_adapter_enabled": (
-            wm.rssm.task_recurrent_output_adapter_enabled
-        ),
-        "rssm_recurrent_output_adapter_features": (
-            wm.rssm.task_recurrent_output_adapter_features
-        ),
+        "rssm_recurrent_output_adapter_enabled": False,
+        "rssm_recurrent_output_adapter_features": 0,
         "rssm_task_mechanism_bank_enabled": (
             wm.rssm.task_mechanism_bank_enabled
         ),
@@ -1555,7 +1150,7 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         "rssm_task_mechanism_parameterization": (
             wm.rssm.task_mechanism_parameterization
         ),
-        "rssm_task_mechanism_low_rank": wm.rssm.task_mechanism_low_rank,
+        "rssm_task_mechanism_low_rank": 0,
         "rssm_task_symmetric_mechanisms": wm.rssm.task_symmetric_mechanisms,
         "rssm_task_mechanism_banks": mechanism_banks,
         "rssm_task_mechanism_parameters_per_later_task": (
@@ -1569,33 +1164,18 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
             if observation_encoders_per_task
             else _parameter_accounting(wm.rssm.image_embedder)["parameters"]
         ),
-        "observation_adapter_kind": wm.rssm.observation_adapter_kind,
         "observation_adapter": _parameter_accounting(
             wm.rssm.observation_adapter
         ),
         "posterior_embedding_size": wm.rssm.observation_embedding_size,
         "observation_head_name": observation_head_name,
         "observation_head": _parameter_accounting(observation_head),
-        "prediction_head_topology": (
-            "frozen_task0_base_plus_private_feature_adapters"
-            if wm.task_private_prediction_adapters
-            else "single_shared"
+        "prediction_head_topology": ("single_shared"
             if wm.task_shared_prediction_heads
             else "task_routed"
             if wm.rssm.num_task_experts > 1
-            else "single_task"
-        ),
+            else "single_task"),
         "task_shared_prediction_heads": wm.task_shared_prediction_heads,
-        "task_private_prediction_adapters": (
-            wm.task_private_prediction_adapters
-        ),
-        "freeze_shared_prediction_heads_after_task0": (
-            wm.freeze_shared_prediction_heads_after_task0
-        ),
-        "prediction_adapter_rank": wm.prediction_adapter_rank,
-        "prediction_adapter_residual_scale": (
-            wm.prediction_adapter_residual_scale
-        ),
         "prediction_adapter_parameters_per_task": {
             str(task_id): sum(
                 parameter.numel()
@@ -1624,72 +1204,6 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
             "world_model_parameter_and_buffer_state also counts registered buffers; "
             "all entries exclude gradients, optimizer state, and activations"
         ),
-    }
-
-
-@torch.no_grad()
-def _encode_frozen_observation_features(
-    wm: WorldModel,
-    observations: torch.Tensor,
-    *,
-    batch_size: int,
-) -> torch.Tensor:
-    """Encode collected CPU observations once before writing the replay sidecar."""
-    if observations.ndim != 5:
-        raise ValueError("Collected observations must have [time, batch, C, H, W] axes")
-    if batch_size < 1:
-        raise ValueError("DINOv3 encoding batch size must be positive")
-    time, sequences = observations.shape[:2]
-    flat = observations.reshape(-1, *observations.shape[-3:])
-    try:
-        encoder_device = next(wm.rssm.image_embedder.parameters()).device
-    except StopIteration:
-        encoder_device = next(wm.parameters()).device
-    encoded = []
-    for start in range(0, flat.shape[0], batch_size):
-        images = flat[start : start + batch_size].to(encoder_device)
-        encoded.append(wm.rssm.image_embedder(images).detach().cpu())
-    features = torch.cat(encoded, dim=0)
-    return features.view(time, sequences, -1)
-
-
-@torch.no_grad()
-def _fit_dinov3_patch_projection(
-    wm: WorldModel,
-    observations: torch.Tensor,
-    *,
-    calibration_frames: int,
-) -> dict[str, object]:
-    """Learn one Task-1 PCA bottleneck before any world-model update."""
-    encoder = wm.rssm.image_embedder
-    if not getattr(encoder, "requires_projection_fit", False):
-        raise RuntimeError("The DINOv3 patch projection does not require fitting")
-    if observations.ndim != 5:
-        raise ValueError("Collected observations must have [time, batch, C, H, W] axes")
-    flat = observations.reshape(-1, *observations.shape[-3:])
-    if calibration_frames < 1 or calibration_frames > flat.shape[0]:
-        raise ValueError(
-            "Patch projection calibration frames must fit in the first collection"
-        )
-    indices = torch.linspace(
-        0,
-        flat.shape[0] - 1,
-        steps=calibration_frames,
-        dtype=torch.float64,
-    ).round().long()
-    try:
-        encoder_device = next(encoder.parameters()).device
-    except StopIteration:
-        encoder_device = next(wm.parameters()).device
-    calibration_images = flat.index_select(0, indices).to(encoder_device)
-    raw_patch_features = encoder.extract_patch_features(calibration_images)
-    metadata = encoder.fit_patch_projection(raw_patch_features)
-    return {
-        **metadata,
-        "calibration_frames": calibration_frames,
-        "frame_selection": "uniform over first Task-1 random collection",
-        "fit_timing": "before first world-model update",
-        "frozen_after_fit": True,
     }
 
 
@@ -1729,245 +1243,14 @@ def _optimizer_parameters(
 RESUME_ADAPTATION_MODES = frozenset({"kan_only", "kan_plus_heads"})
 
 
-def _load_analysis_snapshot(path: Path) -> Mapping[str, object]:
-    """Load a portable boundary snapshot for a task-2 acquisition run."""
-    payload = torch.load(path, map_location="cpu", weights_only=False)
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"Analysis snapshot must contain a mapping: {path}")
-    required = {
-        "artifact_kind",
-        "resumable",
-        "world_model_state_dict",
-        "actor_critic_state_dict",
-    }
-    missing = sorted(required - set(payload))
-    if missing:
-        raise ValueError(f"Analysis snapshot is missing {missing}: {path}")
-    if payload["artifact_kind"] != "analysis_snapshot" or payload["resumable"]:
-        raise ValueError(f"Snapshot is not a non-resumable analysis snapshot: {path}")
-    if not isinstance(payload["world_model_state_dict"], Mapping):
-        raise ValueError(f"World-model state is not a mapping: {path}")
-    if not isinstance(payload["actor_critic_state_dict"], Mapping):
-        raise ValueError(f"Actor-critic state is not a mapping: {path}")
-    return payload
-
-
-def _load_task1_boundary_snapshot(path: Path) -> Mapping[str, object]:
-    """Load a finished Task-1 inference bank as a new incremental-run seed."""
-    payload = torch.load(path, map_location="cpu", weights_only=False)
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"Task boundary snapshot must contain a mapping: {path}")
-    required = {
-        "artifact_kind",
-        "resumable",
-        "completed_epochs",
-        "completed_task",
-        "world_model_state_dict",
-        "actor_critic_bank_state_dict",
-    }
-    missing = sorted(required - set(payload))
-    if missing:
-        raise ValueError(f"Task boundary snapshot is missing {missing}: {path}")
-    if (
-        payload["artifact_kind"] != "task_bank_boundary_inference_snapshot"
-        or payload["resumable"]
-    ):
-        raise ValueError(f"Snapshot is not a non-resumable task boundary: {path}")
-    completed_task = payload["completed_task"]
-    if not isinstance(completed_task, Mapping) or int(
-        completed_task.get("task_index", -1)
-    ) != 0:
-        raise ValueError("The incremental seed must be the completed first task")
-    actor_bank = payload["actor_critic_bank_state_dict"]
-    if not isinstance(actor_bank, Mapping):
-        raise ValueError("Task boundary actor bank is not a mapping")
-    tasks = actor_bank.get("tasks")
-    if not isinstance(tasks, Mapping) or "0" not in tasks:
-        raise ValueError("Task boundary snapshot does not contain the Task-1 actor")
-    if not isinstance(payload["world_model_state_dict"], Mapping):
-        raise ValueError("Task boundary world-model state is not a mapping")
-    return payload
-
-
-def _load_prefixed_module_state(
-    module: torch.nn.Module,
-    state: Mapping[str, object],
-    *,
-    prefix: str,
-    label: str,
-) -> int:
-    prefix_with_dot = f"{prefix}."
-    selected = {
-        key[len(prefix_with_dot) :]: value
-        for key, value in state.items()
-        if key.startswith(prefix_with_dot)
-    }
-    if not selected:
-        raise ValueError(f"Task-1 snapshot has no {label} state")
-    result = module.load_state_dict(selected, strict=True)
-    if result.missing_keys or result.unexpected_keys:
-        raise ValueError(
-            f"Task-1 {label} mismatch: missing={result.missing_keys} "
-            f"unexpected={result.unexpected_keys}"
-        )
-    return len(selected)
-
-
-def _seed_task1_world_model_from_fullbank(
-    wm: WorldModel, payload: Mapping[str, object]
-) -> dict[str, int]:
-    """Import only Task-1 core/head tensors into the new frozen-core topology."""
-    state = payload["world_model_state_dict"]
-    if not isinstance(state, Mapping):
-        raise ValueError("Task-1 world-model state must be a mapping")
-    modules = {
-        "rssm.image_embedder": (wm.rssm.image_embedder, "CNN encoder"),
-        "rssm.recurrent": (wm.rssm.recurrent, "recurrent RSSM"),
-        "rssm.representation": (wm.rssm.representation, "posterior RSSM"),
-        "rssm.transition": (wm.rssm.transition, "prior RSSM"),
-        "decoder": (wm.decoder, "pixel decoder"),
-        "reward_fc": (wm.reward_fc, "reward head"),
-        "continue_fc": (wm.continue_fc, "continuation head"),
-    }
-    report = {
-        prefix: _load_prefixed_module_state(
-            module, state, prefix=prefix, label=label
-        )
-        for prefix, (module, label) in modules.items()
-    }
-    if wm.task_expert_initialized is None:
-        raise ValueError("Task-1 seed requires a task-routed world model")
-    wm.task_expert_initialized.zero_()
-    wm.task_expert_initialized[0] = True
-    return report
-
-
-def _load_snapshot_state(
-    module: torch.nn.Module,
-    state: Mapping[str, object],
-    *,
-    label: str,
-) -> dict[str, list[str]]:
-    """Load weights while allowing only stale consolidation buffers."""
-    target_state = module.state_dict()
-    filtered_state = {}
-    ignored_stale_buffers: list[str] = []
-    for key, value in state.items():
-        target = target_state.get(key)
-        if (
-            "consolidation_" in key
-            and target is not None
-            and hasattr(value, "shape")
-            and target.shape != value.shape
-        ):
-            ignored_stale_buffers.append(key)
-            continue
-        filtered_state[key] = value
-    result = module.load_state_dict(filtered_state, strict=False)
-    unexpected = list(result.unexpected_keys)
-    missing = list(result.missing_keys)
-    disallowed_missing = [
-        key for key in missing if "consolidation_" not in key
-    ]
-    disallowed_unexpected = [
-        key for key in unexpected if "consolidation_" not in key
-    ]
-    if disallowed_missing or disallowed_unexpected:
-        raise ValueError(
-            f"{label} snapshot incompatibility: missing={disallowed_missing} "
-            f"unexpected={disallowed_unexpected}"
-        )
-    return {
-        "missing": missing,
-        "unexpected": [*unexpected, *ignored_stale_buffers],
-    }
-
-
-def _last_linear(module: torch.nn.Module) -> tuple[str, torch.nn.Linear]:
-    candidates = [
-        (name, child)
-        for name, child in module.named_modules()
-        if isinstance(child, torch.nn.Linear)
-    ]
-    if not candidates:
-        raise ValueError(f"No linear readout found in {type(module).__name__}")
-    return candidates[-1]
-
-
-def _configure_resume_world_model(
-    wm: WorldModel,
-    mode: str,
-) -> list[str]:
-    """Freeze the shared model and optionally open a few task-2 readouts."""
-    if mode not in RESUME_ADAPTATION_MODES:
-        raise ValueError(f"Unknown resume adaptation mode: {mode!r}")
-    wm.freeze_shared_core()
-    opened: list[str] = []
-    if mode == "kan_plus_heads":
-        candidates = {
-            "world_model.rssm.representation.eh_to_inter": (
-                wm.rssm.representation.eh_to_inter
-            ),
-            "world_model.rssm.transition.h_to_z_prior": (
-                wm.rssm.transition.h_to_z_prior
-            ),
-            "world_model.reward_fc": wm.reward_fc,
-            "world_model.continue_fc": wm.continue_fc,
-        }
-        for name, module in candidates.items():
-            child_name, linear = _last_linear(module)
-            linear.requires_grad_(True)
-            opened.append(f"{name}.{child_name}")
-    return opened
-
-
-def _configure_resume_actor_critic(
-    aco: ActorCriticOpt,
-    mode: str,
-) -> list[str]:
-    """Freeze the MLP behavior core and optionally open its output heads."""
-    if mode not in RESUME_ADAPTATION_MODES:
-        raise ValueError(f"Unknown resume adaptation mode: {mode!r}")
-    aco.ac.freeze_shared_core()
-    if mode == "kan_only":
-        return []
-    opened: list[str] = []
-    for name in ("actor", "critic"):
-        head = getattr(aco.ac, name)
-        if not hasattr(head, "base_head"):
-            raise ValueError(
-                "Task-2 checkpoint adaptation requires residual MLP behavior heads"
-            )
-        head.base_head.requires_grad_(True)
-        opened.append(f"actor_critic.{name}.base_head")
-    return opened
-
-
 def _actor_critic_kwargs(
     config: Config,
     *,
-    feature_cache,
     protect_residual_updates: bool,
 ) -> dict[str, object]:
     return {
         "dream_steps": config.ac_dream_steps,
         "actor_network": config.actor_network,
-        "actor_kan_hidden_features": config.actor_kan_hidden_features,
-        "actor_kan_grid_size": config.actor_kan_grid_size,
-        "actor_kan_spline_order": config.actor_kan_spline_order,
-        "actor_kan_input_min": config.actor_kan_input_min,
-        "actor_kan_input_max": config.actor_kan_input_max,
-        "actor_kan_normalize_recurrent_state": (
-            config.actor_kan_normalize_recurrent_state
-        ),
-        "fastkan_hidden_features": config.fastkan_hidden_features,
-        "fastkan_hidden_layers": config.fastkan_hidden_layers,
-        "fastkan_grid_size": config.fastkan_grid_size,
-        "fastkan_input_min": config.fastkan_input_min,
-        "fastkan_input_max": config.fastkan_input_max,
-        "fastkan_rms_norm_epsilon": config.fastkan_rms_norm_epsilon,
-        "fastkan_actor_output_scale": config.fastkan_actor_output_scale,
-        "fastkan_actor_unimix": config.fastkan_actor_unimix,
         "optimizer_name": config.ac_optimizer,
         "optimizer_eps": config.ac_optimizer_eps,
         "optimizer_beta1": config.ac_optimizer_beta1,
@@ -1985,27 +1268,8 @@ def _actor_critic_kwargs(
         "replay_critic_loss_scale": config.ac_replay_critic_loss_scale,
         "use_slow_critic_targets": config.ac_use_slow_critic_targets,
         "corrected_imagination_bootstrap": config.ac_corrected_imagination_bootstrap,
-        "residual_correction": config.residual_correction,
-        "residual_bottleneck_features": config.residual_bottleneck_features,
-        "residual_grid_size": config.residual_grid_size,
-        "residual_input_min": config.residual_input_min,
-        "residual_input_max": config.residual_input_max,
-        "residual_rms_norm_epsilon": config.residual_rms_norm_epsilon,
-        "residual_alpha": config.residual_alpha,
-        "residual_input_mode": config.residual_input_mode,
-        "residual_consolidation": config.residual_consolidation,
-        "adaptive_behavior_residuals": config.adaptive_behavior_residuals,
-        "adaptive_behavior_num_tasks": config.rssm_num_experts,
-        "adaptive_behavior_hidden_features": (
-            config.adaptive_behavior_hidden_features
-        ),
-        "adaptive_behavior_residual_scale": (
-            config.adaptive_behavior_residual_scale
-        ),
-        "adaptive_behavior_num_atoms": config.adaptive_behavior_num_atoms,
-        "adaptive_behavior_reuse": config.adaptive_behavior_reuse,
         "protect_residual_updates": protect_residual_updates,
-        "feature_cache": feature_cache,
+
     }
 
 
@@ -2014,7 +1278,6 @@ def _actor_critic_constructor_kwargs(
 ) -> dict[str, object]:
     kwargs = _actor_critic_kwargs(
         config,
-        feature_cache=None,
         protect_residual_updates=False,
     )
     for key in (
@@ -2029,253 +1292,9 @@ def _actor_critic_constructor_kwargs(
         "use_slow_critic_targets",
         "corrected_imagination_bootstrap",
         "protect_residual_updates",
-        "feature_cache",
     ):
         kwargs.pop(key)
     return kwargs
-
-
-@torch.no_grad()
-def _exercise_world_model_residual_heads(
-    wm: WorldModel,
-    z: torch.Tensor,
-    h: torch.Tensor,
-    *,
-    prior_log_probs: Optional[torch.Tensor] = None,
-) -> None:
-    """Visit every non-RSSM residual at deterministic replay/imagination states."""
-    zhs = wm.zh_transform(z, h)
-    for residual in (wm.reward_residual, wm.continue_residual):
-        if residual is not None:
-            residual(zhs)
-    if wm.feature_predictor_residual is not None:
-        if wm.observation_objective == "dinov3_next_feature":
-            if prior_log_probs is None:
-                raise ValueError("Prior features require deterministic prior logits")
-            feature_state = wm.zh_transform(prior_log_probs.exp(), h)
-        else:
-            feature_state = zhs
-        wm.feature_predictor_residual(feature_state)
-
-
-@torch.no_grad()
-def _observe_replay_for_kan_importance(
-    wm: WorldModel,
-    aco: ActorCriticOpt,
-    feature_cache,
-    *,
-    batches: int,
-    sequence_length: int,
-    sequences: int,
-    imagination_horizon: int,
-) -> None:
-    """Exercise KAN adapters on replay posteriors and deterministic imagination."""
-    device = next(wm.parameters()).device
-    for _ in range(batches):
-        actions, _, features, _, _, resets = feature_cache.minibatch(
-            sequence_length,
-            sequences,
-            mb_device=device,
-        )
-        initial_z, initial_h = wm.rssm.initial_state(actions.shape[1])
-        _, posterior_z, hiddens = wm.rssm.observe_embeddings(
-            initial_z,
-            actions,
-            initial_h,
-            wm.rssm.adapt_observation_embeddings(features),
-            resets,
-            stochastic=False,
-        )
-        prior_log_probs = wm.rssm.transition(hiddens)
-        _exercise_world_model_residual_heads(
-            wm,
-            posterior_z,
-            hiddens,
-            prior_log_probs=prior_log_probs,
-        )
-        posterior_states = zh_to_ac_state(posterior_z, hiddens)
-        aco.ac.actor(posterior_states)
-        aco.ac.critic(posterior_states)
-
-        z = posterior_z[-1]
-        h = hiddens[-1]
-        no_reset = torch.zeros(actions.shape[1], 1, device=device)
-        for _ in range(imagination_horizon):
-            state = zh_to_ac_state(z, h)
-            action_log_probs = aco.ac.actor(state)
-            aco.ac.critic(state)
-            action = torch.nn.functional.one_hot(
-                action_log_probs.argmax(dim=-1),
-                num_classes=wm.a_dim,
-            ).to(dtype=z.dtype)
-            imagined_prior, z, h = wm.rssm(
-                z,
-                action,
-                h,
-                None,
-                no_reset,
-                stochastic=False,
-            )
-            _exercise_world_model_residual_heads(
-                wm,
-                z,
-                h,
-                prior_log_probs=imagined_prior,
-            )
-
-
-def _consolidate_kan_from_replay(
-    *,
-    config: Config,
-    wm: WorldModel,
-    aco: ActorCriticOpt,
-    feature_cache,
-    epoch: int,
-    global_step: int,
-    log_dir: Path,
-    writer,
-) -> dict[str, dict[str, float | int]]:
-    """Estimate, persist, and log task-boundary KAN coefficient importance."""
-    if feature_cache is None:
-        raise RuntimeError("Replay KAN consolidation requires frozen feature replay")
-    from clworldmodel.continual import (
-        begin_kan_importance_estimation,
-        cancel_kan_importance_estimation,
-        finish_kan_importance_estimation,
-    )
-
-    roots = {"world_model": wm, "actor_critic": aco.ac}
-    residuals = begin_kan_importance_estimation(roots)
-    wm_was_training = wm.training
-    ac_was_training = aco.ac.training
-    try:
-        with _preserve_training_rng_state():
-            wm.eval()
-            aco.ac.eval()
-            _observe_replay_for_kan_importance(
-                wm,
-                aco,
-                feature_cache,
-                batches=config.residual_consolidation_batches,
-                sequence_length=config.mb_t_size,
-                sequences=config.mb_n_size,
-                imagination_horizon=(
-                    config.residual_consolidation_imagination_horizon
-                ),
-            )
-    except Exception:
-        cancel_kan_importance_estimation(residuals)
-        raise
-    finally:
-        wm.train(wm_was_training)
-        aco.ac.train(ac_was_training)
-
-    diagnostics = finish_kan_importance_estimation(
-        residuals,
-        gradient_power=config.residual_consolidation_gradient_power,
-        min_plasticity=config.residual_consolidation_min_plasticity,
-        anchor_loss_scale=config.residual_consolidation_anchor_loss_scale,
-    )
-    completed_task_index, _ = _sequential_task_position(config, epoch - 1)
-    upcoming_task_index, _ = _sequential_task_position(config, epoch)
-    boundary_index = completed_task_index + 1
-    artifact = {
-        "schema_version": 1,
-        "artifact_kind": "replay_functional_kan_consolidation",
-        "epoch": epoch,
-        "world_model_updates": global_step,
-        "boundary_index": boundary_index,
-        "completed_task": {
-            "index": completed_task_index,
-            "name": config.esc.env_configs[completed_task_index].name,
-        },
-        "upcoming_task": {
-            "index": upcoming_task_index,
-            "name": config.esc.env_configs[upcoming_task_index].name,
-        },
-        "estimator": {
-            "quantity": "squared local output Jacobian per Gaussian RBF coefficient",
-            "replay_batches": config.residual_consolidation_batches,
-            "sequence_length": config.mb_t_size,
-            "sequences_per_batch": config.mb_n_size,
-            "deterministic_imagination_horizon": (
-                config.residual_consolidation_imagination_horizon
-            ),
-            "replay_capacity_and_sampling": "unchanged ARROW mixture",
-            "training_rng_state_restored": True,
-            "gradient_updates": 0,
-            "environment_interactions": 0,
-            "task_identity_exposed_to_agent": False,
-        },
-        "protection": {
-            "cumulative_rule": "coefficient-wise maximum across boundaries",
-            "anchor_rule": "replace only when the new normalized importance is larger",
-            "gradient_power": config.residual_consolidation_gradient_power,
-            "minimum_plasticity": config.residual_consolidation_min_plasticity,
-            "anchor_loss_scale": config.residual_consolidation_anchor_loss_scale,
-        },
-        "modules": diagnostics,
-    }
-    output_dir = log_dir / "kan_consolidation"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"boundary_{boundary_index:02d}.json"
-    temporary_path = path.with_suffix(".json.tmp")
-    temporary_path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary_path, path)
-    for module_name, values in diagnostics.items():
-        tag_name = module_name.replace(".", "/")
-        writer.add_scalar(
-            f"KANConsolidation/{tag_name}/importance_mean",
-            values["importance_mean"],
-            global_step,
-        )
-        writer.add_scalar(
-            f"KANConsolidation/{tag_name}/protected_fraction_ge_0_9",
-            values["protected_fraction_ge_0_9"],
-            global_step,
-        )
-        writer.add_scalar(
-            f"KANConsolidation/{tag_name}/gradient_scale_mean",
-            values["gradient_scale_mean"],
-            global_step,
-        )
-    return diagnostics
-
-
-def _rec_mechanism_banks(wm: WorldModel) -> dict[str, Any]:
-    if not wm.rssm.task_mechanism_bank_enabled:
-        raise ValueError("REC-RSSM consolidation requires mechanism banks")
-    return {
-        "recurrent": wm.rssm.recurrent_mechanism_bank,
-        "posterior": wm.rssm.representation_mechanism_bank,
-        "prior": wm.rssm.transition_mechanism_bank,
-    }
-
-
-def _rec_optimizer_parameter_groups(
-    wm: WorldModel, *, wm_lr: float, route_lr_scale: float
-) -> list[dict[str, Any]]:
-    """Keep every future mechanism in Adam while assigning routes their own LR."""
-    route_parameters = [
-        parameter
-        for bank in _rec_mechanism_banks(wm).values()
-        for route in bank.routes
-        for parameter in route.parameters()
-    ]
-    route_parameter_ids = {id(parameter) for parameter in route_parameters}
-    if len(route_parameter_ids) != len(route_parameters):
-        raise RuntimeError("REC-RSSM route parameters must not be shared")
-    normal_parameters = [
-        parameter
-        for parameter in wm.parameters()
-        if id(parameter) not in route_parameter_ids
-    ]
-    if not normal_parameters or not route_parameters:
-        raise RuntimeError("REC-RSSM optimizer requires normal and route parameters")
-    return [
-        {"params": normal_parameters, "lr": wm_lr},
-        {"params": route_parameters, "lr": wm_lr * route_lr_scale},
-    ]
 
 
 def _flatten_parameter_groups(
@@ -2327,10 +1346,7 @@ def _evolving_shared_optimizer_parameter_groups(
     groups: list[dict[str, Any]] = [
         {"params": core, "lr": core_lr, "ownership": "core"}
     ]
-    if (
-        wm.task_shared_prediction_heads
-        and not wm.freeze_shared_prediction_heads_after_task0
-    ):
+    if (wm.task_shared_prediction_heads):
         if not prediction_heads:
             raise RuntimeError("Shared prediction heads have no optimizer parameters")
         groups.append(
@@ -2692,347 +1708,6 @@ def _restore_torch_rng_state(
         torch.cuda.set_rng_state_all(cuda_states)
 
 
-@torch.no_grad()
-def _rec_loss_over_batches(
-    *,
-    config: Config,
-    wm: WorldModel,
-    task_id: int,
-    batches: list[tuple[torch.Tensor, ...]],
-    cpu_rng_state: torch.Tensor,
-    cuda_rng_states: Optional[list[torch.Tensor]],
-) -> float:
-    _restore_torch_rng_state(cpu_rng_state, cuda_rng_states)
-    losses = []
-    for actions, observations, rewards, continues, resets in batches:
-        with _autocast_context(actions.device, config.compute_dtype):
-            loss, _metrics = wm.compute_loss(
-                actions,
-                observations,
-                rewards,
-                continues,
-                resets,
-                task_id=task_id,
-            )
-        if not bool(torch.isfinite(loss).item()):
-            raise FloatingPointError("REC-RSSM consolidation observed a non-finite loss")
-        losses.append(float(loss.detach().float().cpu()))
-    return float(np.mean(losses))
-
-
-def _evaluate_rec_route(
-    *,
-    config: Config,
-    wm: WorldModel,
-    aco: ActorCriticOpt,
-    task_id: int,
-    env_fns,
-    seed: int,
-) -> tuple[float, float]:
-    with _preserve_training_rng_state():
-        return evaluate(
-            config.n_sync,
-            wm=wm,
-            ac=aco.ac,
-            env_fns=env_fns,
-            env_repeat=config.env_repeat,
-            n_rollouts=16,
-            seed=seed,
-            task_id=task_id,
-            deterministic_policy=True,
-        )
-
-
-def _consolidate_rec_routes(
-    *,
-    config: Config,
-    wm: WorldModel,
-    aco: ActorCriticOpt,
-    replay_buffer,
-    completed_task_id: int,
-    eval_env_fns,
-    validation_seed: int,
-    epoch: int,
-    global_step: int,
-    log_dir: Path,
-    writer,
-) -> dict[str, Any]:
-    """Ablate old atoms, hard-prune weak reuse, and validate the route."""
-    if config.continual_method != "rec_rssm_arrow":
-        raise ValueError("REC-RSSM consolidation requires rec_rssm_arrow")
-    if completed_task_id < 1:
-        raise ValueError("REC-RSSM consolidates only post-Task-1 routes")
-
-    banks = _rec_mechanism_banks(wm)
-    route_index = completed_task_id - 1
-    original_masks = {
-        name: bank.routes[route_index].hard_mask.detach().clone()
-        for name, bank in banks.items()
-    }
-    original_shared_masks = {
-        name: bank.routes[route_index].validated_shared_mask.detach().clone()
-        for name, bank in banks.items()
-    }
-    candidate_coordinates = [
-        (name, old_index, atom_index)
-        for name, mask in original_masks.items()
-        for old_index in range(mask.shape[0])
-        for atom_index in range(mask.shape[1])
-        if bool(mask[old_index, atom_index].item())
-    ]
-    artifact: dict[str, Any] = {
-        "schema_version": 1,
-        "artifact_kind": "rec_rssm_atom_route_consolidation",
-        "epoch": epoch,
-        "completed_epochs": epoch + 1,
-        "world_model_updates": global_step,
-        "completed_task": {
-            "index": completed_task_id,
-            "name": config.esc.env_configs[completed_task_id].name,
-        },
-        "settings": {
-            "num_atoms": config.task_mechanism_num_atoms,
-            "replay_batches": config.task_mechanism_consolidation_batches,
-            "minimum_contribution": config.task_mechanism_min_contribution,
-            "maximum_validation_drop": (
-                config.task_mechanism_max_validation_drop
-            ),
-        },
-        "candidate_count": len(candidate_coordinates),
-        "gradient_updates": 0,
-        "training_replay_writes": 0,
-        "evaluation_transitions_enter_replay": False,
-    }
-    if not candidate_coordinates:
-        artifact.update(
-            {
-                "reason": "completed route has no old mechanisms to reuse",
-                "candidates": [],
-                "validation": None,
-                "rollback": False,
-                "accepted_masks": {
-                    name: bank.routes[route_index]
-                    .hard_mask.detach()
-                    .cpu()
-                    .tolist()
-                    for name, bank in banks.items()
-                },
-                "accepted_shared_masks": {
-                    name: bank.routes[route_index]
-                    .validated_shared_mask.detach()
-                    .cpu()
-                    .tolist()
-                    for name, bank in banks.items()
-                },
-                "route_manifest": {
-                    name: bank.route_manifest(completed_task_id)
-                    for name, bank in banks.items()
-                },
-            }
-        )
-    else:
-        wm_was_training = wm.training
-        batches: list[tuple[torch.Tensor, ...]] = []
-        try:
-            with _preserve_training_rng_state():
-                wm.eval()
-                for _ in range(config.task_mechanism_consolidation_batches):
-                    batches.append(
-                        tuple(
-                            tensor.detach()
-                            for tensor in replay_buffer.minibatch(
-                                config.mb_t_size,
-                                config.mb_n_size,
-                                task_id=completed_task_id,
-                            )
-                        )
-                    )
-                condition_cpu_rng = torch.random.get_rng_state()
-                condition_cuda_rngs = (
-                    torch.cuda.get_rng_state_all()
-                    if torch.cuda.is_available()
-                    else None
-                )
-                for bank in banks.values():
-                    bank.begin_contribution_recording(completed_task_id)
-                full_loss = _rec_loss_over_batches(
-                    config=config,
-                    wm=wm,
-                    task_id=completed_task_id,
-                    batches=batches,
-                    cpu_rng_state=condition_cpu_rng,
-                    cuda_rng_states=condition_cuda_rngs,
-                )
-                contributions = {
-                    name: bank.finish_contribution_recording()
-                    for name, bank in banks.items()
-                }
-
-                candidates = []
-                proposed_masks = {
-                    name: mask.detach().clone()
-                    for name, mask in original_masks.items()
-                }
-                proposed_shared_masks = {
-                    name: mask.detach().clone()
-                    for name, mask in original_shared_masks.items()
-                }
-                for bank_name, old_index, atom_index in candidate_coordinates:
-                    bank = banks[bank_name]
-                    temporary_mask = original_masks[bank_name].detach().clone()
-                    temporary_mask[old_index, atom_index] = 0
-                    bank.apply_consolidated_mask(completed_task_id, temporary_mask)
-                    ablated_loss = _rec_loss_over_batches(
-                        config=config,
-                        wm=wm,
-                        task_id=completed_task_id,
-                        batches=batches,
-                        cpu_rng_state=condition_cpu_rng,
-                        cuda_rng_states=condition_cuda_rngs,
-                    )
-                    bank.apply_consolidated_mask(
-                        completed_task_id, original_masks[bank_name]
-                    )
-                    delta_loss = ablated_loss - full_loss
-                    contribution = float(
-                        contributions[bank_name]["contribution_ratio"][old_index][
-                            atom_index
-                        ]
-                    )
-                    should_prune = (
-                        delta_loss <= 0
-                        or contribution < config.task_mechanism_min_contribution
-                    )
-                    if should_prune:
-                        proposed_masks[bank_name][old_index, atom_index] = 0
-                        proposed_shared_masks[bank_name][old_index, atom_index] = 0
-                    else:
-                        proposed_shared_masks[bank_name][old_index, atom_index] = 1
-                    candidates.append(
-                        {
-                            "component": bank_name,
-                            "owner_task": old_index + 1,
-                            "atom_index": atom_index,
-                            "full_loss": full_loss,
-                            "ablated_loss": ablated_loss,
-                            "delta_loss": delta_loss,
-                            "functional_contribution": contribution,
-                            "proposed_prune": should_prune,
-                        }
-                    )
-
-                full_mean, full_std = _evaluate_rec_route(
-                    config=config,
-                    wm=wm,
-                    aco=aco,
-                    task_id=completed_task_id,
-                    env_fns=eval_env_fns,
-                    seed=validation_seed,
-                )
-                for name, bank in banks.items():
-                    bank.apply_consolidated_mask(
-                        completed_task_id, proposed_masks[name]
-                    )
-                pruned_mean, pruned_std = _evaluate_rec_route(
-                    config=config,
-                    wm=wm,
-                    aco=aco,
-                    task_id=completed_task_id,
-                    env_fns=eval_env_fns,
-                    seed=validation_seed,
-                )
-                rollback = pruned_mean < (
-                    (1.0 - config.task_mechanism_max_validation_drop) * full_mean
-                )
-                if rollback:
-                    for name, bank in banks.items():
-                        bank.apply_consolidated_mask(
-                            completed_task_id, original_masks[name]
-                        )
-                        bank.apply_validated_shared_mask(
-                            completed_task_id, original_shared_masks[name]
-                        )
-                else:
-                    for name, bank in banks.items():
-                        bank.apply_validated_shared_mask(
-                            completed_task_id, proposed_shared_masks[name]
-                        )
-                reward_scale = config.esc.env_configs[completed_task_id].rew_scale
-                artifact.update(
-                    {
-                        "full_world_model_loss": full_loss,
-                        "functional_contributions": contributions,
-                        "candidates": candidates,
-                        "validation": {
-                            "cohort": "fixed_periodic_validation",
-                            "seed": validation_seed,
-                            "rollouts_per_condition": 16,
-                            "full_scaled_mean": full_mean,
-                            "full_scaled_std": full_std,
-                            "full_raw_mean": full_mean / reward_scale,
-                            "full_raw_std": full_std / abs(reward_scale),
-                            "pruned_scaled_mean": pruned_mean,
-                            "pruned_scaled_std": pruned_std,
-                            "pruned_raw_mean": pruned_mean / reward_scale,
-                            "pruned_raw_std": pruned_std / abs(reward_scale),
-                            "acceptance_threshold_scaled": (
-                                (1.0 - config.task_mechanism_max_validation_drop)
-                                * full_mean
-                            ),
-                        },
-                        "rollback": rollback,
-                        "accepted_masks": {
-                            name: bank.routes[route_index]
-                            .hard_mask.detach()
-                            .cpu()
-                            .tolist()
-                            for name, bank in banks.items()
-                        },
-                        "accepted_shared_masks": {
-                            name: bank.routes[route_index]
-                            .validated_shared_mask.detach()
-                            .cpu()
-                            .tolist()
-                            for name, bank in banks.items()
-                        },
-                        "route_manifest": {
-                            name: bank.route_manifest(completed_task_id)
-                            for name, bank in banks.items()
-                        },
-                    }
-                )
-        except Exception:
-            for name, bank in banks.items():
-                bank.cancel_contribution_recording()
-                bank.apply_consolidated_mask(
-                    completed_task_id, original_masks[name]
-                )
-                bank.apply_validated_shared_mask(
-                    completed_task_id, original_shared_masks[name]
-                )
-            raise
-        finally:
-            wm.train(wm_was_training)
-
-    output_dir = log_dir / "rec_rssm_consolidation"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"task_{completed_task_id:02d}_boundary.json"
-    temporary_path = path.with_suffix(".json.tmp")
-    temporary_path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary_path, path)
-    writer.add_scalar(
-        "RECRSSM/consolidation_candidate_count",
-        len(candidate_coordinates),
-        global_step,
-    )
-    writer.add_scalar(
-        "RECRSSM/consolidation_rollback",
-        int(bool(artifact["rollback"])),
-        global_step,
-    )
-    return artifact
-
-
 def _consolidate_evolving_shared_core(
     *,
     config: Config,
@@ -3065,20 +1740,12 @@ def _consolidate_evolving_shared_core(
     learning_rates_before = [group["lr"] for group in shared_optimizer.param_groups]
     was_training = wm.training
 
-    if bool(getattr(config, "uses_shared_actor", False)):
-        if actor_critic_bank is not None or aco is None:
-            raise ValueError(
-                "Shared-behavior consolidation requires exactly one actor-critic"
-            )
-        evaluation_aco = aco
-        evaluation_bank = None
-    else:
-        if actor_critic_bank is None or aco is not None:
-            raise ValueError(
-                "Private-behavior consolidation requires only an actor bank"
-            )
-        evaluation_aco = actor_critic_bank.get(completed_task_id)
-        evaluation_bank = actor_critic_bank
+    if actor_critic_bank is None or aco is not None:
+        raise ValueError(
+            "Private-behavior consolidation requires only an actor bank"
+        )
+    evaluation_aco = actor_critic_bank.get(completed_task_id)
+    evaluation_bank = actor_critic_bank
 
     pre_scaled_mean, pre_scaled_std = _evaluate_policy_tasks(
         config,
@@ -3087,6 +1754,7 @@ def _consolidate_evolving_shared_core(
         seen_eval_funcs,
         seen_validation_seeds,
         actor_critic_bank=evaluation_bank,
+        oracle_routes=True,
     )
     pre_raw_mean, pre_raw_std = _raw_return_statistics(
         config.esc.env_configs[:seen_count], pre_scaled_mean, pre_scaled_std
@@ -3170,6 +1838,7 @@ def _consolidate_evolving_shared_core(
             seen_eval_funcs,
             seen_validation_seeds,
             actor_critic_bank=evaluation_bank,
+            oracle_routes=True,
         )
         post_raw_mean, post_raw_std = _raw_return_statistics(
             config.esc.env_configs[:seen_count],
@@ -3386,18 +2055,12 @@ def _evaluate_adaptive_compression_task(
     *,
     config: Config,
     wm: WorldModel,
-    actor_critic_bank=None,
-    aco: Optional[ActorCriticOpt] = None,
+    actor_critic_bank,
     task_id: int,
     eval_env_fns,
     validation_seed: int,
 ) -> dict[str, float]:
-    if (actor_critic_bank is None) == (aco is None):
-        raise ValueError(
-            "Adaptive Q/F/P evaluation requires exactly one behavior topology"
-        )
-    task_aco = actor_critic_bank.get(task_id) if actor_critic_bank is not None else aco
-    task_aco.ac.set_task_route(task_id)
+    task_aco = actor_critic_bank.get(task_id)
     with _preserve_training_rng_state():
         scaled_mean, scaled_std = evaluate(
             config.n_sync,
@@ -3407,8 +2070,8 @@ def _evaluate_adaptive_compression_task(
             env_repeat=config.env_repeat,
             n_rollouts=config.adaptive_compression_rollouts,
             seed=validation_seed,
-            task_id=task_id,
             deterministic_policy=True,
+            task_id=task_id,
         )
     raw_mean, raw_std = _raw_return_statistics(
         [config.esc.env_configs[task_id]],
@@ -3429,7 +2092,6 @@ def _compress_evolving_task_qfp(
     wm: WorldModel,
     replay_buffer,
     actor_critic_bank,
-    aco: Optional[ActorCriticOpt] = None,
     completed_task_id: int,
     eval_env_fns,
     validation_seed: int,
@@ -3450,19 +2112,21 @@ def _compress_evolving_task_qfp(
 
     from clworldmodel.continual import recursive_python_scalars
 
-    if config.continual_method not in {
-        _ADAPTIVE_QFP_COMPRESSION_METHOD,
-        _ADAPTIVE_QFP_AC_COMPRESSION_METHOD,
-    }:
+    if config.continual_method not in {_ADAPTIVE_QFP_COMPRESSION_METHOD, _ADAPTIVE_QFP_AC_COMPRESSION_METHOD, "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}:
         raise ValueError("Adaptive Q/F/P compression requires its named method")
-    if (actor_critic_bank is None) == (aco is None):
-        raise ValueError(
-            "Adaptive Q/F/P compression requires exactly one behavior topology"
-        )
+    if actor_critic_bank is None:
+        raise ValueError("Adaptive Q/F/P compression requires private Actor-Critics")
     if not 0 <= completed_task_id < len(config.esc.env_configs):
         raise ValueError("Completed task is outside the adaptive curriculum")
     if wm.rssm.task_mechanism_parameterization != "adaptive_dense_width":
         raise ValueError("World model is not an adaptive dense-width topology")
+
+    def evaluate_condition(model):
+        return _evaluate_adaptive_compression_task(
+            config=config, wm=model, actor_critic_bank=actor_critic_bank,
+            task_id=completed_task_id, eval_env_fns=eval_env_fns,
+            validation_seed=validation_seed,
+        )
 
     was_training = wm.training
     dense_teacher = copy.deepcopy(wm).eval()
@@ -3503,15 +2167,7 @@ def _compress_evolving_task_qfp(
         # fully reflected in counters and artifacts instead.
         with _preserve_training_rng_state():
             wm.eval()
-            dense_evaluation = _evaluate_adaptive_compression_task(
-                config=config,
-                wm=dense_teacher,
-                actor_critic_bank=actor_critic_bank,
-                aco=aco,
-                task_id=completed_task_id,
-                eval_env_fns=eval_env_fns,
-                validation_seed=validation_seed,
-            )
+            dense_evaluation = evaluate_condition(dense_teacher)
             candidate_python_state = random.getstate()
             candidate_numpy_state = np.random.get_state()
             candidate_torch_state = torch.random.get_rng_state()
@@ -3520,11 +2176,7 @@ def _compress_evolving_task_qfp(
                 if torch.cuda.is_available()
                 else None
             )
-            source_aco = (
-                actor_critic_bank.get(completed_task_id)
-                if actor_critic_bank is not None
-                else aco
-            )
+            source_aco = actor_critic_bank.get(completed_task_id)
             frozen_actor = copy.deepcopy(source_aco.ac.actor).eval()
             if hasattr(frozen_actor, "set_task_route"):
                 frozen_actor.set_task_route(completed_task_id)
@@ -3588,24 +2240,14 @@ def _compress_evolving_task_qfp(
                     optimizer_updates += 1
                     losses.append(float(loss.detach().float().cpu()))
                 wm.eval()
-                evaluation = _evaluate_adaptive_compression_task(
-                    config=config,
-                    wm=wm,
-                    actor_critic_bank=actor_critic_bank,
-                    aco=aco,
-                    task_id=completed_task_id,
-                    eval_env_fns=eval_env_fns,
-                    validation_seed=validation_seed,
-                )
+                evaluation = evaluate_condition(wm)
                 relative_drop = (
                     dense_evaluation["raw_mean"] - evaluation["raw_mean"]
                 ) / max(abs(dense_evaluation["raw_mean"]), 1.0)
                 passed = _adaptive_compression_candidate_passes(
                     teacher_return=dense_evaluation["raw_mean"],
                     candidate_return=evaluation["raw_mean"],
-                    maximum_relative_drop=(
-                        config.adaptive_compression_max_return_drop
-                    ),
+                    maximum_relative_drop=config.adaptive_compression_max_return_drop,
                 )
                 candidate_record = {
                     "width_fraction": float(fraction),
@@ -3691,6 +2333,7 @@ def _compress_evolving_task_qfp(
             ),
             "seed_cohort": "fixed_pruning_validation",
             "validation_seed": validation_seed,
+            "validation_policy": "oracle_current_task",
             "rollouts_per_evaluation": config.adaptive_compression_rollouts,
             "dense_teacher_validation": dense_evaluation,
             "maximum_relative_raw_return_drop": (
@@ -3762,482 +2405,6 @@ class _TaskLtdmReplayView:
             source="ltdm",
             mb_device=mb_device,
         )
-
-
-def _adaptive_behavior_modules(
-    actor_critic: torch.nn.Module, task_id: int
-) -> dict[str, torch.nn.Module]:
-    if not getattr(actor_critic, "adaptive_behavior_residuals", False):
-        raise ValueError("Actor-Critic does not own adaptive behavior residuals")
-    modules: dict[str, torch.nn.Module] = {}
-    for name in ("actor", "critic"):
-        head = getattr(actor_critic, name)
-        modules[name] = head.mechanism_for(task_id)
-    return modules
-
-
-def _install_adaptive_behavior_modules(
-    actor_critic: torch.nn.Module,
-    task_id: int,
-    modules: Mapping[str, torch.nn.Module],
-) -> list[dict[str, Any]]:
-    if set(modules) != {"actor", "critic"}:
-        raise ValueError(
-            "Adaptive behavior replacement requires actor and critic residuals"
-        )
-    reference = next(actor_critic.parameters())
-    reports: list[dict[str, Any]] = []
-    for name in ("actor", "critic"):
-        head = getattr(actor_critic, name)
-        module = modules[name].to(device=reference.device, dtype=reference.dtype)
-        report = head.install_task_mechanism(task_id, module)
-        report["component"] = name
-        reports.append(report)
-    actor_critic.set_task_route(task_id)
-    return reports
-
-
-def _structured_adaptive_behavior_candidate(
-    *,
-    actor_critic: torch.nn.Module,
-    dense_teacher: torch.nn.Module,
-    task_id: int,
-    fraction: float,
-) -> tuple[list[dict[str, Any]], dict[str, torch.nn.Module]]:
-    from clworldmodel.models.mechanism_bank import ResidualMechanism
-
-    candidates: dict[str, torch.nn.Module] = {}
-    selection_reports: list[dict[str, Any]] = []
-    for name in ("actor", "critic"):
-        student_head = getattr(actor_critic, name)
-        teacher_head = getattr(dense_teacher, name)
-        source = teacher_head.mechanism_for(task_id)
-        if not isinstance(source, ResidualMechanism):
-            raise TypeError(
-                "Adaptive behavior compression teacher must own Dense residuals"
-            )
-        if source.hidden_features != student_head.hidden_features:
-            raise ValueError(
-                "Adaptive behavior compression must begin at the declared full width"
-            )
-        target_width = _adaptive_compression_target_width(
-            student_head.hidden_features,
-            fraction,
-            student_head.num_atoms,
-        )
-        candidate, selected = ResidualMechanism.structured_pruned_copy(
-            source, hidden_features=target_width
-        )
-        candidates[name] = candidate
-        selection_bytes = ",".join(str(index) for index in selected).encode("ascii")
-        selection_reports.append(
-            {
-                "component": name,
-                "dense_hidden_features": source.hidden_features,
-                "candidate_hidden_features": target_width,
-                "selected_channel_count": len(selected),
-                "selected_channel_sha256": hashlib.sha256(
-                    selection_bytes
-                ).hexdigest(),
-            }
-        )
-    install_reports = _install_adaptive_behavior_modules(
-        actor_critic, task_id, candidates
-    )
-    installed_by_name = {report["component"]: report for report in install_reports}
-    for report in selection_reports:
-        report.update(installed_by_name[report["component"]])
-    return selection_reports, _adaptive_behavior_modules(actor_critic, task_id)
-
-
-def _evaluate_adaptive_behavior_task(
-    *,
-    config: Config,
-    wm: WorldModel,
-    actor_critic: torch.nn.Module,
-    task_id: int,
-    eval_env_fns,
-    validation_seed: int,
-) -> dict[str, float]:
-    actor_critic.set_task_route(task_id)
-    with _preserve_training_rng_state():
-        scaled_mean, scaled_std = evaluate(
-            config.n_sync,
-            wm=wm,
-            ac=actor_critic,
-            env_fns=eval_env_fns,
-            env_repeat=config.env_repeat,
-            n_rollouts=config.adaptive_behavior_rollouts,
-            seed=validation_seed,
-            task_id=task_id,
-            deterministic_policy=True,
-        )
-    raw_mean, raw_std = _raw_return_statistics(
-        [config.esc.env_configs[task_id]],
-        [scaled_mean],
-        [scaled_std],
-    )
-    return {
-        "scaled_mean": float(scaled_mean),
-        "scaled_std": float(scaled_std),
-        "raw_mean": raw_mean[0],
-        "raw_std": raw_std[0],
-    }
-
-
-def _compress_evolving_task_actor_critic(
-    *,
-    config: Config,
-    wm: WorldModel,
-    aco: ActorCriticOpt,
-    replay_buffer,
-    completed_task_id: int,
-    eval_env_fns,
-    validation_seed: int,
-    epoch: int,
-    actor_critic_updates: int,
-    compression_updates_before: int,
-    log_dir: Path,
-    writer,
-    fused_adam: bool,
-) -> dict[str, Any]:
-    """Compress the completed task's Actor/Critic residuals behind a raw gate.
-
-    The shared MLP bases, older residuals, and reuse routes are frozen.  Every
-    fixed-width candidate is independently structured-pruned from the same
-    full-width post-task teacher, receives the same imagined-state
-    distillation budget, and is evaluated on one dedicated real-environment
-    cohort.  Failure of all candidates keeps the original Dense residuals.
-    """
-
-    from clworldmodel.continual import recursive_python_scalars
-
-    if config.continual_method != _ADAPTIVE_QFP_AC_COMPRESSION_METHOD:
-        raise ValueError("Adaptive Actor-Critic compression requires its named method")
-    if not config.uses_adaptive_behavior_compression:
-        raise ValueError("Adaptive Actor-Critic compression is not enabled")
-    if not 0 <= completed_task_id < len(config.esc.env_configs):
-        raise ValueError("Completed task is outside the adaptive curriculum")
-    if not getattr(aco.ac, "adaptive_behavior_residuals", False):
-        raise ValueError("Actor-Critic is not an adaptive residual topology")
-    if aco.slow_critic is not None:
-        raise ValueError(
-            "Adaptive Actor-Critic compression does not support a second slow "
-            "critic topology"
-        )
-
-    ac_was_training = aco.ac.training
-    wm_was_training = wm.training
-    dense_teacher = copy.deepcopy(aco.ac).eval()
-    dense_teacher.requires_grad_(False)
-    # Retain the actual objects so Dense fallback preserves their online Adam
-    # moments.  Candidates and the frozen teacher are separate copies.
-    dense_modules = _adaptive_behavior_modules(aco.ac, completed_task_id)
-    dense_layout = dense_teacher.adaptive_behavior_layout()
-    observed_dense_widths = {
-        name: widths[completed_task_id] for name, widths in dense_layout.items()
-    }
-    expected_dense_widths = {
-        "actor": config.adaptive_behavior_hidden_features,
-        "critic": config.adaptive_behavior_hidden_features,
-    }
-    if observed_dense_widths != expected_dense_widths:
-        raise ValueError(
-            "The just-completed Actor-Critic residuals were not acquired at full "
-            f"Dense width: {observed_dense_widths} != {expected_dense_widths}"
-        )
-
-    parameters_before = sum(parameter.numel() for parameter in aco.ac.parameters())
-    candidates: list[dict[str, Any]] = []
-    best_modules: dict[str, torch.nn.Module] | None = None
-    best_fraction = 1.0
-    best_evaluation: dict[str, float] | None = None
-    optimizer_updates = 0
-    imagined_states = 0
-    replay_view = _TaskLtdmReplayView(replay_buffer, completed_task_id)
-    try:
-        with _preserve_training_rng_state():
-            wm.eval()
-            aco.ac.eval()
-            dense_evaluation = _evaluate_adaptive_behavior_task(
-                config=config,
-                wm=wm,
-                actor_critic=dense_teacher,
-                task_id=completed_task_id,
-                eval_env_fns=eval_env_fns,
-                validation_seed=validation_seed,
-            )
-            candidate_python_state = random.getstate()
-            candidate_numpy_state = np.random.get_state()
-            candidate_torch_state = torch.random.get_rng_state()
-            candidate_cuda_states = (
-                torch.cuda.get_rng_state_all()
-                if torch.cuda.is_available()
-                else None
-            )
-            for fraction in config.adaptive_behavior_width_fractions:
-                random.setstate(candidate_python_state)
-                np.random.set_state(candidate_numpy_state)
-                _restore_sampling_rng(
-                    candidate_torch_state,
-                    candidate_cuda_states,
-                )
-                selection, installed = _structured_adaptive_behavior_candidate(
-                    actor_critic=aco.ac,
-                    dense_teacher=dense_teacher,
-                    task_id=completed_task_id,
-                    fraction=float(fraction),
-                )
-                aco.ac.requires_grad_(False)
-                trainable = [
-                    parameter
-                    for module in installed.values()
-                    for parameter in module.parameters()
-                ]
-                for parameter in trainable:
-                    parameter.requires_grad_(True)
-                optimizer = Adam(
-                    trainable,
-                    lr=config.adaptive_behavior_lr,
-                    fused=fused_adam,
-                )
-                actor_losses: list[float] = []
-                critic_losses: list[float] = []
-                total_losses: list[float] = []
-                for _ in range(config.adaptive_behavior_steps_per_candidate):
-                    with torch.no_grad():
-                        dense_teacher.set_task_route(completed_task_id)
-                        states, *_ = dream_rollout(
-                            wm,
-                            dense_teacher,
-                            replay_view,
-                            n_sync=config.mb_n_size,
-                            n_steps=config.ac_dream_steps,
-                            discount=config.ac_discount,
-                            lam=config.ac_lambda,
-                            n_ctx_frames=4,
-                            task_id=completed_task_id,
-                        )
-                        teacher_actor_logs = dense_teacher.actor(states).float()
-                        teacher_critic_logs = dense_teacher.critic(states).float()
-                    aco.ac.set_task_route(completed_task_id)
-                    optimizer.zero_grad(set_to_none=True)
-                    actor_loss = actor_policy_kl(
-                        aco.ac.actor, states, teacher_actor_logs
-                    )
-                    critic_loss = actor_policy_kl(
-                        aco.ac.critic, states, teacher_critic_logs
-                    )
-                    loss = (
-                        config.adaptive_behavior_actor_distill_scale * actor_loss
-                        + config.adaptive_behavior_critic_distill_scale * critic_loss
-                    )
-                    if not bool(torch.isfinite(loss).item()):
-                        raise FloatingPointError(
-                            "Adaptive Actor-Critic compression produced a "
-                            "non-finite distillation loss"
-                        )
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(trainable, config.ac_grad_clip)
-                    optimizer.step()
-                    optimizer_updates += 1
-                    imagined_states += int(states.shape[0] * states.shape[1])
-                    actor_losses.append(float(actor_loss.detach().float().cpu()))
-                    critic_losses.append(float(critic_loss.detach().float().cpu()))
-                    total_losses.append(float(loss.detach().float().cpu()))
-
-                aco.ac.eval()
-                evaluation = _evaluate_adaptive_behavior_task(
-                    config=config,
-                    wm=wm,
-                    actor_critic=aco.ac,
-                    task_id=completed_task_id,
-                    eval_env_fns=eval_env_fns,
-                    validation_seed=validation_seed,
-                )
-                relative_drop = (
-                    dense_evaluation["raw_mean"] - evaluation["raw_mean"]
-                ) / max(abs(dense_evaluation["raw_mean"]), 1.0)
-                passed = _adaptive_compression_candidate_passes(
-                    teacher_return=dense_evaluation["raw_mean"],
-                    candidate_return=evaluation["raw_mean"],
-                    maximum_relative_drop=(
-                        config.adaptive_behavior_max_return_drop
-                    ),
-                )
-                candidates.append(
-                    {
-                        "width_fraction": float(fraction),
-                        "components": selection,
-                        "optimizer_updates": len(total_losses),
-                        "imagined_states": int(
-                            len(total_losses)
-                            * config.mb_n_size
-                            * config.ac_dream_steps
-                        ),
-                        "actor_kl_mean": float(np.mean(actor_losses)),
-                        "actor_kl_first": actor_losses[0],
-                        "actor_kl_last": actor_losses[-1],
-                        "critic_categorical_kl_mean": float(
-                            np.mean(critic_losses)
-                        ),
-                        "critic_categorical_kl_first": critic_losses[0],
-                        "critic_categorical_kl_last": critic_losses[-1],
-                        "distillation_loss_mean": float(np.mean(total_losses)),
-                        "validation": evaluation,
-                        "relative_raw_return_drop": relative_drop,
-                        "passed": passed,
-                        "actor_critic_parameters": sum(
-                            parameter.numel()
-                            for parameter in aco.ac.parameters()
-                        ),
-                    }
-                )
-                if passed:
-                    best_modules = {
-                        name: copy.deepcopy(module)
-                        for name, module in _adaptive_behavior_modules(
-                            aco.ac, completed_task_id
-                        ).items()
-                    }
-                    best_fraction = float(fraction)
-                    best_evaluation = evaluation
-
-            expected_optimizer_updates = (
-                len(config.adaptive_behavior_width_fractions)
-                * config.adaptive_behavior_steps_per_candidate
-            )
-            expected_imagined_states = (
-                expected_optimizer_updates
-                * config.mb_n_size
-                * config.ac_dream_steps
-            )
-            if optimizer_updates != expected_optimizer_updates:
-                raise RuntimeError(
-                    "Adaptive Actor-Critic compression did not execute its fixed "
-                    f"candidate budget: {optimizer_updates} != "
-                    f"{expected_optimizer_updates}"
-                )
-            if imagined_states != expected_imagined_states:
-                raise RuntimeError(
-                    "Adaptive Actor-Critic compression imagined-state accounting "
-                    f"changed: {imagined_states} != {expected_imagined_states}"
-                )
-            selected_modules = (
-                dense_modules if best_modules is None else best_modules
-            )
-            _install_adaptive_behavior_modules(
-                aco.ac, completed_task_id, selected_modules
-            )
-        selected_evaluation = (
-            dense_evaluation if best_evaluation is None else best_evaluation
-        )
-        selected_layout = aco.ac.adaptive_behavior_layout()
-        parameters_after = sum(
-            parameter.numel() for parameter in aco.ac.parameters()
-        )
-    except Exception:
-        _install_adaptive_behavior_modules(
-            aco.ac, completed_task_id, dense_modules
-        )
-        raise
-    finally:
-        aco.ac.train(ac_was_training)
-        wm.train(wm_was_training)
-        # Nothing is optimized between this boundary and the next task
-        # activation.  Keep the completed residual genuinely frozen; the next
-        # epoch's ``activate_training_task`` reopens only its new route.
-        aco.ac.requires_grad_(False)
-        aco.ac.set_task_route(completed_task_id)
-        _refresh_actor_critic_optimizer_parameters(aco)
-
-    artifact = recursive_python_scalars(
-        {
-            "schema_version": 1,
-            "artifact_kind": (
-                "evolving_core_return_gated_actor_critic_residual_compression"
-            ),
-            "method": config.continual_method,
-            "epoch": epoch,
-            "completed_epochs": epoch + 1,
-            "completed_task_id": completed_task_id,
-            "online_actor_critic_update_count": actor_critic_updates,
-            "behavior_compression_update_start": compression_updates_before,
-            "behavior_compression_update_stop": (
-                compression_updates_before + optimizer_updates
-            ),
-            "optimizer_updates": optimizer_updates,
-            "expected_optimizer_updates": (
-                len(config.adaptive_behavior_width_fractions)
-                * config.adaptive_behavior_steps_per_candidate
-            ),
-            "imagined_states": imagined_states,
-            "expected_imagined_states": (
-                len(config.adaptive_behavior_width_fractions)
-                * config.adaptive_behavior_steps_per_candidate
-                * config.mb_n_size
-                * config.ac_dream_steps
-            ),
-            "candidate_compute_is_fixed": True,
-            "candidate_sampling_stream": (
-                "identical restored Python/NumPy/torch state for every width"
-            ),
-            "candidate_initialization": (
-                "independent structured channel pruning from one frozen full-width "
-                "post-task Actor-Critic residual teacher"
-            ),
-            "shared_actor_critic_bases_frozen_during_compression": True,
-            "older_task_residuals_and_routes_frozen_during_compression": True,
-            "recovery_state_context": "completed-task LTDM only",
-            "recovery_context_frames": 4,
-            "recovery_sequences_per_update": config.mb_n_size,
-            "dream_steps_per_update": config.ac_dream_steps,
-            "learning_rate": config.adaptive_behavior_lr,
-            "actor_policy_kl_scale": (
-                config.adaptive_behavior_actor_distill_scale
-            ),
-            "critic_categorical_kl_scale": (
-                config.adaptive_behavior_critic_distill_scale
-            ),
-            "seed_cohort": "fixed_behavior_pruning_validation",
-            "validation_seed": validation_seed,
-            "rollouts_per_evaluation": config.adaptive_behavior_rollouts,
-            "dense_teacher_validation": dense_evaluation,
-            "maximum_relative_raw_return_drop": (
-                config.adaptive_behavior_max_return_drop
-            ),
-            "candidates": candidates,
-            "selected_width_fraction": best_fraction,
-            "selected_dense_fallback": best_modules is None,
-            "selected_validation": selected_evaluation,
-            "dense_layout": dense_layout,
-            "selected_layout": selected_layout,
-            "actor_critic_parameters_before": parameters_before,
-            "actor_critic_parameters_after": parameters_after,
-            "actor_critic_parameters_removed": parameters_before - parameters_after,
-            "training_only_dense_teacher_discarded": True,
-            "completed_task_residual_frozen_after_boundary": True,
-            "evaluation_transitions_enter_replay": False,
-            "heldout_final_data_used": False,
-        }
-    )
-    output_dir = log_dir / "adaptive_behavior_compression"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"task_{completed_task_id:02d}_boundary.json"
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
-    writer.add_scalar(
-        "AdaptiveBehavior/selected_width_fraction",
-        best_fraction,
-        actor_critic_updates,
-    )
-    writer.add_scalar(
-        "AdaptiveBehavior/actor_critic_parameters_removed",
-        artifact["actor_critic_parameters_removed"],
-        actor_critic_updates,
-    )
-    return artifact
 
 
 def _sha256(path: Path) -> str:
@@ -4339,15 +2506,15 @@ def _save_task_bank_evaluation_snapshot(
     raw_means: Sequence[float],
     raw_stds: Sequence[float],
     cohort: str,
+    eligible_task_count: Optional[int] = None,
 ) -> Path:
     """Save the exact task-bank weights evaluated by a fixed seed cohort."""
-    uses_shared_actor = config.uses_shared_actor
-    if uses_shared_actor:
-        if actor_critic_bank is not None or aco is None:
-            raise ValueError(
-                "Shared-actor evaluation snapshots require exactly one actor-critic"
-            )
-    elif actor_critic_bank is None:
+
+    if getattr(config, "uses_reconstruction_task_inference", False) and (
+        eligible_task_count is None or not 1 <= eligible_task_count <= config.rssm_num_experts
+    ):
+        raise ValueError("Auto-routed inference snapshots must persist acquired route eligibility")
+    if actor_critic_bank is None:
         raise ValueError("Task-bank evaluation snapshots require an actor bank")
     lengths = {
         len(task_seeds),
@@ -4400,17 +2567,18 @@ def _save_task_bank_evaluation_snapshot(
         "config": config.to_dict(),
         "world_model_state_dict": _cpu_state_dict(wm),
         "actor_topology": (
-            "single_shared_actor_critic"
-            if uses_shared_actor
-            else "per_task_actor_critic_bank"
+            ("per_task_actor_critic_bank")
         ),
     }
-    if uses_shared_actor:
-        payload["actor_critic_state_dict"] = _cpu_state_dict(aco.ac)
-    else:
-        payload["actor_critic_bank_state_dict"] = (
-            actor_critic_bank.inference_state_dict()
-        )
+    if getattr(config, "uses_reconstruction_task_inference", False):
+        payload["inference_routing"] = {
+            "mode": config.task_route_inference,
+            "eligible_route_ids": list(range(eligible_task_count)),
+            "task_identity_input": False,
+        }
+    payload["actor_critic_bank_state_dict"] = (
+        actor_critic_bank.inference_state_dict()
+    )
     torch.save(payload, temporary_path)
     os.replace(temporary_path, path)
     digest = _sha256(path)
@@ -4440,13 +2608,8 @@ def _save_task_bank_boundary_snapshot(
     project_git_commit: str,
 ) -> Path:
     """Save one complete task bank immediately after a task's final update."""
-    uses_shared_actor = config.uses_shared_actor
-    if uses_shared_actor:
-        if actor_critic_bank is not None or aco is None:
-            raise ValueError(
-                "Shared-actor boundary snapshots require exactly one actor-critic"
-            )
-    elif actor_critic_bank is None:
+
+    if actor_critic_bank is None:
         raise ValueError("Task-bank boundary snapshots require an actor bank")
     if len(project_git_commit) != 40:
         raise ValueError("Project Git commit must be a full 40-character hash")
@@ -4463,7 +2626,7 @@ def _save_task_bank_boundary_snapshot(
     if not required_task_fields.issubset(task_metadata):
         raise ValueError("Task-boundary metadata is incomplete")
     task_id = int(task_metadata["task_index"])
-    completed_actor = aco if uses_shared_actor else actor_critic_bank.get(task_id)
+    completed_actor = (actor_critic_bank.get(task_id))
 
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     completed_epochs = epoch + 1
@@ -4523,20 +2686,21 @@ def _save_task_bank_boundary_snapshot(
         "config": config.to_dict(),
         "world_model_state_dict": _cpu_state_dict(wm),
         "actor_topology": (
-            "single_shared_actor_critic"
-            if uses_shared_actor
-            else "per_task_actor_critic_bank"
+            ("per_task_actor_critic_bank")
         ),
     }
-    if uses_shared_actor:
-        payload["actor_critic_state_dict"] = _cpu_state_dict(completed_actor.ac)
-    else:
-        payload["actor_critic_bank_state_dict"] = (
-            actor_critic_bank.inference_state_dict()
-        )
-        payload["completed_task_actor_critic_state_dict"] = _cpu_state_dict(
-            completed_actor.ac
-        )
+    if getattr(config, "uses_reconstruction_task_inference", False):
+        payload["inference_routing"] = {
+            "mode": config.task_route_inference,
+            "eligible_route_ids": list(range(task_id + 1)),
+            "task_identity_input": False,
+        }
+    payload["actor_critic_bank_state_dict"] = (
+        actor_critic_bank.inference_state_dict()
+    )
+    payload["completed_task_actor_critic_state_dict"] = _cpu_state_dict(
+        completed_actor.ac
+    )
     torch.save(payload, temporary_path)
     os.replace(temporary_path, path)
 
@@ -4613,7 +2777,7 @@ def _init_swanlab(
 
 
 if __name__ == "__main__":
-    
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", help="Configuration file")
     parser.add_argument(
@@ -4626,39 +2790,19 @@ if __name__ == "__main__":
         "--observation-objective",
         choices=[
             "reconstruction",
-            "r2",
-            "dinov3_next_feature",
-            "dinov3_posterior_feature",
+
         ],
         default=None,
         help="Optional world-model observation-objective override.",
     )
     parser.add_argument(
         "--actor-network",
-        choices=[
-            "mlp",
-            "relu_kan",
-            "relu_kan_bounded",
-            "relu_kan_adaptive",
-            "fast_kan_ac",
-            "fast_kan_ac_param_matched",
-            "fast_kan_ac_stable",
-        ],
+        choices=["mlp"],
         default=None,
         help=(
-            "Optional behavior architecture override; FastKAN variants replace both "
-            "actor and critic, while ReLU-KAN variants replace only the actor."
+            "Optional retained MLP behavior architecture override."
         ),
     )
-    parser.add_argument(
-        "--actor-kan-trainable-grid",
-        action="store_true",
-        default=None,
-        help="Enable learned ReLU-KAN basis anchors for relu_kan_adaptive only.",
-    )
-    parser.add_argument("--r2-barlow-loss-scale", type=float, default=None)
-    parser.add_argument("--r2-redundancy-scale", type=float, default=None)
-    parser.add_argument("--r2-normalization-eps", type=float, default=None)
     parser.add_argument(
         "--epochs",
         type=int,
@@ -4708,42 +2852,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--project-git-commit",
         help="Full project commit embedded in each task-boundary snapshot.",
-    )
-    parser.add_argument(
-        "--init-analysis-snapshot",
-        type=Path,
-        help=(
-            "Initialize a task-acquisition run from a non-resumable analysis "
-            "snapshot. Replay, optimizer, RNG, and schedule state are reset."
-        ),
-    )
-    parser.add_argument(
-        "--init-task1-boundary-snapshot",
-        type=Path,
-        help=(
-            "Seed a named CNN projector method from a completed Task-1 "
-            "CNN-FullBank inference boundary. Replay, optimizers, RNG, and "
-            "the environment schedule are deliberately restarted at Task 2."
-        ),
-    )
-    parser.add_argument(
-        "--init-evolving-task0-transition-checkpoint",
-        type=Path,
-        help=(
-            "Initialize the named atomic-LoRA shared-head method at Task 1 from "
-            "the exact post-Task-0 learned-base Evolving-Core checkpoint. This "
-            "preserves Task-0 weights/replay/behavior/counters/RNG but resets "
-            "world-model optimizers because future-task ownership changes."
-        ),
-    )
-    parser.add_argument(
-        "--resume-adaptation-mode",
-        choices=sorted(RESUME_ADAPTATION_MODES),
-        default=None,
-        help=(
-            "When initializing from a snapshot, train only KAN residuals or "
-            "also open the small latent/behavior readout heads."
-        ),
     )
     parser.add_argument(
         "--milestone-completed-epoch",
@@ -4797,18 +2905,9 @@ if __name__ == "__main__":
     config_overrides = config.to_dict()
     if args.arrow_replay_ratio is not None:
         config_overrides["arrow_replay_capacity_ratio"] = args.arrow_replay_ratio
-    if args.observation_objective is not None:
-        config_overrides["observation_objective"] = args.observation_objective
-    if args.actor_network is not None:
-        config_overrides["actor_network"] = args.actor_network
-    if args.actor_kan_trainable_grid is not None:
-        config_overrides["actor_kan_trainable_grid"] = args.actor_kan_trainable_grid
-    if args.r2_barlow_loss_scale is not None:
-        config_overrides["r2_barlow_loss_scale"] = args.r2_barlow_loss_scale
-    if args.r2_redundancy_scale is not None:
-        config_overrides["r2_redundancy_scale"] = args.r2_redundancy_scale
-    if args.r2_normalization_eps is not None:
-        config_overrides["r2_normalization_eps"] = args.r2_normalization_eps
+    config_overrides["observation_objective"] = 'reconstruction'
+    config_overrides["actor_network"] = args.actor_network
+    config_overrides["actor_kan_trainable_grid"] = False
     if args.epochs is not None:
         config_overrides["epochs"] = args.epochs
     config = Config.from_dict(config_overrides)
@@ -4852,20 +2951,7 @@ if __name__ == "__main__":
             raise ValueError(
                 "Evaluation snapshots require fixed validation and held-out final seeds"
             )
-    if config.continual_method in {
-        "cnn_fullbank_arrow",
-        "cnn_projector_lora_arrow",
-        "cnn_compact_shared_actor_arrow",
-        "cnn_mechanism_bank_arrow",
-        "rec_rssm_arrow",
-        "evolving_atomic_rssm_arrow",
-        "evolving_atomic_rssm_shared_heads_arrow",
-        "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-        "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-        "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
-        "evolving_atomic_rssm_learned_base_adapters_arrow",
-        "evolving_atomic_rssm_shared_fastkan_arrow",
-    }:
+    if config.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}:
         if task_bank_snapshot_dir is None:
             raise ValueError(
                 "CNN-FullBank-ARROW requires --task-bank-snapshot-dir"
@@ -4890,106 +2976,21 @@ if __name__ == "__main__":
             "Milestone completed epochs must lie within the configured run: "
             f"{invalid_milestones}"
         )
-
-    resume_payload = None
-    task1_seed_payload = None
-    task0_transition_payload = None
-    task0_transition_metadata: dict[str, Any] = {}
     training_start_epoch = 0
-    resume_mode = args.resume_adaptation_mode
+    resume_mode = None
     initialization_modes = sum(
         value is not None
         for value in (
-            args.init_analysis_snapshot,
-            args.init_task1_boundary_snapshot,
-            args.init_evolving_task0_transition_checkpoint,
+            None,
+            None,
+            None,
         )
     )
     if initialization_modes > 1:
         raise ValueError("Only one snapshot initialization mode may be selected")
-    if args.init_analysis_snapshot is not None:
-        if resume_mode is None:
-            resume_mode = "kan_only"
-        resume_payload = _load_analysis_snapshot(
-            args.init_analysis_snapshot.expanduser().resolve()
-        )
-        if config.residual_correction != "kan":
-            raise ValueError(
-                "Snapshot adaptation currently requires residual_correction='kan'"
-            )
-        if config.fresh_ac:
-            raise ValueError(
-                "Snapshot adaptation requires fresh_ac=False so the loaded actor "
-                "is preserved"
-            )
-        if config.shared_core_mode != "snapshot_adaptation":
-            raise ValueError(
-                "Snapshot initialization requires shared_core_mode="
-                "snapshot_adaptation"
-            )
-    elif resume_mode is not None:
+    if resume_mode is not None:
         raise ValueError("--resume-adaptation-mode requires --init-analysis-snapshot")
-    elif config.shared_core_mode == "snapshot_adaptation":
-        raise ValueError(
-            "shared_core_mode=snapshot_adaptation requires --init-analysis-snapshot"
-        )
-    if args.init_task1_boundary_snapshot is not None:
-        if config.continual_method not in {
-            "cnn_projector_lora_arrow",
-            "cnn_compact_shared_actor_arrow",
-            "cnn_mechanism_bank_arrow",
-            "rec_rssm_arrow",
-        }:
-            raise ValueError(
-                "Task-1 boundary initialization requires "
-                "a named CNN projector continual method"
-            )
-        task1_seed_payload = _load_task1_boundary_snapshot(
-            args.init_task1_boundary_snapshot.expanduser().resolve()
-        )
-        source_config = task1_seed_payload.get("config")
-        if not isinstance(source_config, Mapping) or source_config.get(
-            "continual_method"
-        ) != "cnn_fullbank_arrow":
-            raise ValueError(
-                "Task-1 incremental training must be seeded by CNN-FullBank"
-            )
-        training_start_epoch = int(task1_seed_payload["completed_epochs"])
-        first_task_duration = _sequential_task_durations(config)[0]
-        if training_start_epoch != first_task_duration:
-            raise ValueError(
-                "Task-1 snapshot completion must equal one task duration: "
-                f"{training_start_epoch} != {first_task_duration}"
-            )
-        if config.epochs <= training_start_epoch:
-            raise ValueError(
-                "Incremental training must include at least one post-Task-1 epoch"
-            )
-    elif config.continual_method == "cnn_compact_shared_actor_arrow":
-        raise ValueError(
-            "CNN-Compact-SharedActor requires --init-task1-boundary-snapshot"
-        )
-    elif config.continual_method in {"cnn_mechanism_bank_arrow", "rec_rssm_arrow"}:
-        raise ValueError(
-            "Mechanism-bank methods require --init-task1-boundary-snapshot"
-        )
-    elif config.continual_method == "cnn_projector_lora_arrow":
-        training_start_epoch = 0
-    if args.init_evolving_task0_transition_checkpoint is not None:
-        task0_transition_payload, task0_transition_metadata = (
-            _load_evolving_task0_transition_checkpoint(
-                args.init_evolving_task0_transition_checkpoint,
-                config=config,
-            )
-        )
-        training_start_epoch = int(
-            task0_transition_payload["schedule"]["completed_epochs"]
-        )
-        if config.epochs <= training_start_epoch:
-            raise ValueError(
-                "Task-0 transition training must include at least one later-task epoch"
-            )
-    elif config.continual_method == _ATOMIC_LORA_SHARED_HEADS_METHOD:
+    if config.continual_method == _ATOMIC_LORA_SHARED_HEADS_METHOD:
         raise ValueError(
             "The v1 atomic-LoRA shared-head pilot requires "
             "--init-evolving-task0-transition-checkpoint"
@@ -4997,11 +2998,11 @@ if __name__ == "__main__":
 
     if config.algorithm == "arrow":
         print(f"ARROW FIFO/LTDM capacity ratio: {config.arrow_replay_capacity_ratio}")
-    print(f"World-model observation objective: {config.observation_objective}")
-    print(f"Observation encoder: {config.observation_encoder}")
-    print(f"Residual correction: {config.residual_correction}")
-    print(f"Residual input mode: {config.residual_input_mode}")
-    print(f"Residual consolidation: {config.residual_consolidation}")
+    print(f"World-model observation objective: {'reconstruction'}")
+    print(f"Observation encoder: {'cnn'}")
+    print(f"Residual correction: {'none'}")
+    print(f"Residual input mode: {'base_output'}")
+    print(f"Residual consolidation: {'none'}")
     print(f"Shared core mode: {config.shared_core_mode}")
     print(f"Continual method: {config.continual_method}")
     print(
@@ -5020,75 +3021,14 @@ if __name__ == "__main__":
             f"updates_per_prior_task="
             f"{config.dream_rehearsal_updates_per_prior_task}"
         )
-    if config.continual_method == "moe_arrow":
-        print(
-            "MoE-ARROW routing: "
-            f"experts={config.rssm_num_experts} actor_bank=per_task "
-            "warm_start=previous_task_once current_fraction="
-            f"{config.moe_arrow_current_task_fraction}"
-        )
-    elif config.continual_method == "cnn_fullbank_arrow":
-        print(
-            "CNN-FullBank-ARROW routing: "
-            f"experts={config.rssm_num_experts} actor_bank=per_task "
-            "world_model_warm_start=previous_task_once actor_init=fresh "
-            "visual_encoder=per_task_dreamerv3_cnn observation=pixels "
-            f"current_fraction={config.dino_fullbank_current_task_fraction}"
-        )
-    elif config.continual_method == "cnn_projector_lora_arrow":
-        print(
-            "CNN-Projector-LoRA-ARROW routing: "
-            f"experts={config.rssm_num_experts} actor_bank=per_task "
-            "base=task0_frozen_after_acquisition encoder=task0_plus_projector "
-            "rssm=task0_plus_lora actor_init=fresh "
-            f"ranks={config.task_lora_recurrent_rank}/"
-            f"{config.task_lora_representation_rank}/"
-            f"{config.task_lora_transition_rank} "
-            f"current_fraction={config.dino_fullbank_current_task_fraction}"
-        )
-    elif config.continual_method == "cnn_compact_shared_actor_arrow":
-        print(
-            "CNN-Compact-SharedActor-ARROW routing: "
-            f"experts={config.rssm_num_experts} actor=single_shared "
-            "base=task0_frozen_after_acquisition encoder=task0_plus_projector "
-            "recurrent=gru_output_adapter "
-            f"adapter_sizes={config.task_recurrent_output_adapter_features}/"
-            f"{config.task_lora_representation_rank}/"
-            f"{config.task_lora_transition_rank} "
-            "old_policy_retention=frozen_route_imagination "
-            f"current_fraction={config.dino_fullbank_current_task_fraction}"
-        )
-    elif config.continual_method in {
-        "evolving_atomic_rssm_arrow",
-        "evolving_atomic_rssm_shared_heads_arrow",
-        "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-        "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-        "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
-        "evolving_atomic_rssm_learned_base_adapters_arrow",
-    }:
-        prediction_topology = (
-            "frozen_task0_base_heads_plus_private_feature_adapters"
-            if config.task_private_prediction_adapters
-            else "single_shared_decoder_reward_continue"
+    if config.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}:
+        prediction_topology = ("single_shared_decoder_reward_continue"
             if config.uses_shared_prediction_heads
-            else "per_task_decoder_reward_continue"
-        )
-        private_topology = (
-            "projector_qfp_low_rank_prediction_adapters_actor_critic"
-            if config.task_private_prediction_adapters
-            else "projector_dense_acquire_return_gated_compact_qfp_and_behavior"
-            if config.uses_adaptive_behavior_compression
-            else "projector_dense_acquire_return_gated_compact_qfp_actor_critic"
+            else "per_task_decoder_reward_continue")
+        private_topology = ("projector_dense_acquire_return_gated_compact_qfp_actor_critic"
             if config.uses_adaptive_qfp_compression
-            else "projector_qfp_atoms_actor_critic"
-        )
-        behavior_topology = (
-            "single_shared_mlp_plus_task_adaptive_residuals"
-            if config.uses_adaptive_behavior_compression
-            else "single_shared_fastkan_stable"
-            if config.uses_replay_rehearsed_shared_behavior
-            else "per_task_mlp_bank"
-        )
+            else "projector_qfp_atoms_actor_critic")
+        behavior_topology = (("per_task_mlp_bank"))
         print(
             "Evolving-Core Atomic RSSM routing: "
             f"tasks={config.rssm_num_experts} behavior={behavior_topology} "
@@ -5101,42 +3041,8 @@ if __name__ == "__main__":
             f"parameterization={config.task_mechanism_parameterization} "
             f"reuse={config.task_mechanism_reuse}"
         )
-    elif config.continual_method == "cnn_mechanism_bank_arrow":
-        print(
-            "CNN-MechanismBank-ARROW routing: "
-            f"tasks={config.rssm_num_experts} actor_bank=per_task "
-            "base=task0_frozen_after_acquisition encoder=task0_plus_projector "
-            "rssm=shared_base_plus_residual_mechanisms actor_init=fresh "
-            f"widths={config.task_mechanism_recurrent_width}/"
-            f"{config.task_mechanism_representation_width}/"
-            f"{config.task_mechanism_transition_width} "
-            f"residual_scale={config.task_mechanism_residual_scale} "
-            f"reuse={config.task_mechanism_reuse} "
-            f"current_fraction={config.dino_fullbank_current_task_fraction}"
-        )
-    elif config.continual_method == "rec_rssm_arrow":
-        print(
-            "REC-RSSM routing: "
-            f"tasks={config.rssm_num_experts} actor_bank=per_task "
-            "base=task0_frozen_after_acquisition encoder=task0_plus_projector "
-            "rssm=reuse_expand_consolidate actor_init=fresh "
-            f"widths={config.task_mechanism_recurrent_width}/"
-            f"{config.task_mechanism_representation_width}/"
-            f"{config.task_mechanism_transition_width} "
-            f"atoms={config.task_mechanism_num_atoms} "
-            f"parameterization={config.task_mechanism_parameterization} "
-            f"reuse_probe_epochs={config.task_mechanism_reuse_probe_epochs} "
-            f"route_lr_scale={config.task_mechanism_route_lr_scale} "
-            f"current_fraction={config.dino_fullbank_current_task_fraction}"
-        )
     elif config.uses_evolving_atomic_rssm:
-        behavior_topology = (
-            "single_shared_mlp_plus_task_adaptive_residuals"
-            if config.uses_adaptive_behavior_compression
-            else "single_shared_fastkan_stable"
-            if config.uses_replay_rehearsed_shared_behavior
-            else "per_task_mlp_bank"
-        )
+        behavior_topology = (("per_task_mlp_bank"))
         print(
             "Evolving-Core Atomic RSSM routing: "
             f"tasks={config.rssm_num_experts} behavior={behavior_topology} "
@@ -5146,38 +3052,6 @@ if __name__ == "__main__":
             f"{config.task_mechanism_parameterization} "
             f"behavior_current_fraction="
             f"{config.evolving_shared_behavior_current_task_fraction}"
-        )
-    elif config.continual_method == "dino_fullbank_arrow":
-        print(
-            "DINO-FullBank-ARROW routing: "
-            f"experts={config.rssm_num_experts} actor_bank=per_task "
-            "world_model_warm_start=previous_task_once actor_init=fresh "
-            f"current_fraction={config.dino_fullbank_current_task_fraction}"
-        )
-    elif config.continual_method == "dino_patchbank_arrow":
-        print(
-            "DINO-PatchBank-ARROW routing: "
-            f"experts={config.rssm_num_experts} actor_bank=per_task "
-            "world_model_warm_start=previous_task_once actor_init=fresh "
-            "visual_input=complete_16x16x384_patches "
-            "feature_source=on_the_fly_from_replay_observations "
-            "observation=pixels "
-            f"current_fraction={config.dino_fullbank_current_task_fraction}"
-        )
-    elif config.continual_method == "dino_convbank_arrow":
-        print(
-            "DINO-ConvBank-ARROW routing: "
-            f"experts={config.rssm_num_experts} actor_bank=per_task "
-            "world_model_warm_start=previous_task_once actor_init=fresh "
-            "visual_input=complete_16x16x384_patches "
-            "shared_adapter=conv3x3_stride2_384to64 "
-            "posterior_embedding=8x8x64 observation=pixels "
-            f"current_fraction={config.dino_fullbank_current_task_fraction}"
-        )
-    if resume_payload is not None:
-        print(
-            "Initializing from analysis snapshot: "
-            f"{args.init_analysis_snapshot} mode={resume_mode}"
         )
     print(f"Actor network: {config.actor_network}")
     print(
@@ -5191,7 +3065,7 @@ if __name__ == "__main__":
 
     if config.algorithm == "sac":
         exit(0)
-    
+
     random.seed(config.seed)
     np.random.seed(config.seed)
     torch.random.manual_seed(config.seed)
@@ -5230,13 +3104,7 @@ if __name__ == "__main__":
         if config.uses_adaptive_qfp_compression
         else ()
     )
-    behavior_compression_validation_task_seeds = (
-        _adaptive_behavior_compression_task_seeds(
-            config.seed, len(config.esc.env_configs)
-        )
-        if config.uses_adaptive_behavior_compression
-        else ()
-    )
+    behavior_compression_validation_task_seeds = ()
     print("Training with seed: ", config.seed)
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
@@ -5251,59 +3119,15 @@ if __name__ == "__main__":
         config.mlp_layers,
         config.wall_time_optimisation,
         compute_dtype=config.compute_dtype,
-        observation_objective=config.observation_objective,
-        r2_barlow_loss_scale=config.r2_barlow_loss_scale,
-        r2_redundancy_scale=config.r2_redundancy_scale,
-        r2_normalization_eps=config.r2_normalization_eps,
-        observation_encoder=config.observation_encoder,
-        dinov3_model_path=config.dinov3_model_path,
-        dinov3_input_size=config.dinov3_input_size,
-        dinov3_max_batch_size=config.dinov3_max_batch_size,
-        dinov3_feature_loss_scale=config.dinov3_feature_loss_scale,
-        dinov3_feature_mode=config.dinov3_feature_mode,
-        dinov3_patch_pool_size=config.dinov3_patch_pool_size,
-        dinov3_patch_feature_dim=config.dinov3_patch_feature_dim,
-        dinov3_patch_projection=config.dinov3_patch_projection,
-        dinov3_patch_projection_seed=config.dinov3_patch_projection_seed,
-        dinov3_patch_adapter=config.dinov3_patch_adapter,
-        dinov3_feature_loss_kind=config.dinov3_feature_loss_kind,
-        dinov3_feature_std_floor=config.dinov3_feature_std_floor,
-        residual_correction=config.residual_correction,
-        residual_bottleneck_features=config.residual_bottleneck_features,
-        residual_grid_size=config.residual_grid_size,
-        residual_input_min=config.residual_input_min,
-        residual_input_max=config.residual_input_max,
-        residual_rms_norm_epsilon=config.residual_rms_norm_epsilon,
-        residual_alpha=config.residual_alpha,
-        residual_input_mode=config.residual_input_mode,
-        residual_consolidation=config.residual_consolidation,
+        observation_objective='reconstruction',
+        observation_encoder='cnn',
         num_task_experts=config.rssm_num_experts,
-        full_task_experts=config.uses_full_task_experts,
-        full_task_rssm_experts=config.uses_full_task_rssm_experts,
-        task_private_heads=config.uses_task_private_heads,
         task_shared_prediction_heads=config.uses_shared_prediction_heads,
-        task_private_prediction_adapters=(
-            config.task_private_prediction_adapters
-        ),
-        prediction_adapter_rank=config.prediction_adapter_rank,
-        prediction_adapter_residual_scale=(
-            config.prediction_adapter_residual_scale
-        ),
-        freeze_shared_prediction_heads_after_task0=(
-            config.freeze_shared_prediction_heads_after_task0
-        ),
         evolving_shared_core=config.evolving_shared_core,
-        task_banked_image_encoder=config.task_banked_image_encoder,
         task_projected_image_encoder=config.task_projected_image_encoder,
         task_symmetric_image_projectors=config.task_atomic_routes,
         task_projector_bottleneck_features=(
             config.task_projector_bottleneck_features
-        ),
-        task_lora_recurrent_rank=config.task_lora_recurrent_rank,
-        task_lora_representation_rank=config.task_lora_representation_rank,
-        task_lora_transition_rank=config.task_lora_transition_rank,
-        task_recurrent_output_adapter_features=(
-            config.task_recurrent_output_adapter_features
         ),
         task_mechanism_bank=config.task_mechanism_bank,
         task_mechanism_reuse=config.task_mechanism_reuse,
@@ -5317,45 +3141,12 @@ if __name__ == "__main__":
         task_mechanism_parameterization=(
             config.task_mechanism_parameterization
         ),
-        task_mechanism_low_rank=config.task_mechanism_low_rank,
         task_symmetric_mechanisms=config.task_atomic_routes,
     ).to(device)
     resume_world_model_opened: list[str] = []
     resume_state_report: dict[str, dict[str, list[str]]] = {}
     task1_seed_world_model_report: dict[str, int] = {}
     task0_transition_world_model_report: dict[str, Any] = {}
-    if resume_payload is not None:
-        resume_state_report["world_model"] = _load_snapshot_state(
-            wm,
-            resume_payload["world_model_state_dict"],
-            label="World-model",
-        )
-        resume_world_model_opened = _configure_resume_world_model(
-            wm,
-            str(resume_mode),
-        )
-        print(
-            "Loaded world-model weights; KAN residuals are plastic. "
-            f"Opened shared readouts: {resume_world_model_opened or 'none'}"
-        )
-    elif task1_seed_payload is not None:
-        task1_seed_world_model_report = _seed_task1_world_model_from_fullbank(
-            wm, task1_seed_payload
-        )
-        print(
-            "Loaded the completed Task-1 CNN/RSSM/heads; later routes remain "
-            "zero-effect projector/RSSM adaptations"
-        )
-    elif task0_transition_payload is not None:
-        task0_transition_world_model_report = (
-            _seed_atomic_lora_task0_world_model(
-                wm, task0_transition_payload["world_model"]
-            )
-        )
-        print(
-            "Loaded the exact Task-0 shared/core/dense-QFP/head state; future "
-            "Rank-128 atomic Q/F/P residuals and routes keep target initialization"
-        )
     evolving_shared_optimizer: Optional[torch.optim.Optimizer] = None
     evolving_private_optimizers: dict[int, torch.optim.Optimizer] = {}
     evolving_route_optimizers: dict[int, torch.optim.Optimizer] = {}
@@ -5371,15 +3162,6 @@ if __name__ == "__main__":
         # Keep ``opt`` as the shared optimizer for generic accounting paths;
         # Evolving-Core updates step the explicit optimizer bank below.
         opt = evolving_shared_optimizer
-    elif config.continual_method == "rec_rssm_arrow":
-        opt = Adam(
-            _rec_optimizer_parameter_groups(
-                wm,
-                wm_lr=config.wm_lr,
-                route_lr_scale=config.task_mechanism_route_lr_scale,
-            ),
-            fused=args.fused_adam,
-        )
     else:
         trainable_world_model_parameters = [
             parameter for parameter in wm.parameters() if parameter.requires_grad
@@ -5408,23 +3190,7 @@ if __name__ == "__main__":
             f"{training_start_epoch}; current_task={envs.current_task_index()}"
         )
     replay_storage_directory = None
-    if config.continual_method in {
-        "bounded_dream_rehearsal",
-        "cnn_fullbank_arrow",
-        "cnn_projector_lora_arrow",
-        "cnn_compact_shared_actor_arrow",
-        "cnn_mechanism_bank_arrow",
-        "rec_rssm_arrow",
-        "evolving_atomic_rssm_arrow",
-        "evolving_atomic_rssm_shared_heads_arrow",
-        "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow",
-        "evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow",
-        "evolving_atomic_rssm_atomic_lora_shared_heads_arrow",
-        "evolving_atomic_rssm_learned_base_adapters_arrow",
-        "evolving_atomic_rssm_shared_fastkan_arrow",
-        "dino_patchbank_arrow",
-        "dino_convbank_arrow",
-    } and (not distributed_context.enabled or distributed_context.is_primary):
+    if config.continual_method in {"bounded_dream_rehearsal", "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"} and (not distributed_context.enabled or distributed_context.is_primary):
         if log_dir is None:
             raise ValueError(
                 "Mapped observation replay requires --log-dir"
@@ -5436,21 +3202,6 @@ if __name__ == "__main__":
         if not distributed_context.enabled or distributed_context.is_primary
         else None
     )
-    if task0_transition_payload is not None:
-        if distributed_context.enabled or authoritative_replay is None:
-            raise ValueError(
-                "Task-0 cross-topology transition is validated only on one GPU"
-            )
-        authoritative_replay.load_state_dict(task0_transition_payload["replay"])
-        if authoritative_replay.available_task_ids() != (0,):
-            raise ValueError(
-                "Task-0 transition replay contains tasks beyond Task 0: "
-                f"{authoritative_replay.available_task_ids()}"
-            )
-        print(
-            "Restored exact Task-0 FIFO/LTDM replay into independent working mmaps: "
-            f"n_valid={authoritative_replay.n_valid}"
-        )
     replay = (
         DistributedReplaySampler(
             distributed_context,
@@ -5462,34 +3213,6 @@ if __name__ == "__main__":
         if distributed_context.enabled
         else authoritative_replay
     )
-    feature_cache = None
-    if config.observation_encoder == "dinov3_vits16":
-        cache_dtype = {
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-            "float32": torch.float32,
-        }[config.dinov3_feature_cache_dtype]
-        if config.dinov3_replay_feature_mode == "cached":
-            from clworldmodel.replay import ArrowFrozenFeatureCache
-
-            feature_cache = ArrowFrozenFeatureCache(
-                replay,
-                wm.rssm.image_embedder.output_size,
-                dtype=cache_dtype,
-            )
-        else:
-            from clworldmodel.replay import ArrowOnTheFlyFeatureSource
-
-            feature_cache = ArrowOnTheFlyFeatureSource(
-                replay,
-                wm.rssm.image_embedder,
-                wm.rssm.image_embedder.output_size,
-                dtype=cache_dtype,
-                consumer_dtype={
-                    "float32": torch.float32,
-                    "bfloat16": torch.bfloat16,
-                }[config.compute_dtype],
-            )
     if distributed_context.is_primary:
         _print_replay_buffer_debug(config, authoritative_replay)
 
@@ -5498,25 +3221,6 @@ if __name__ == "__main__":
     # random policy and would not test acquisition from Task 1.
     aco: Optional[ActorCriticOpt] = None
     resume_actor_critic_opened: list[str] = []
-    if resume_payload is not None:
-        aco = build_actor_critic_opt(
-            wm,
-            lr=config.ac_lr,
-            **_actor_critic_constructor_kwargs(config),
-        )
-        resume_state_report["actor_critic"] = _load_snapshot_state(
-            aco.ac,
-            resume_payload["actor_critic_state_dict"],
-            label="Actor-critic",
-        )
-        resume_actor_critic_opened = _configure_resume_actor_critic(
-            aco,
-            str(resume_mode),
-        )
-        print(
-            "Loaded actor-critic weights; KAN residuals are plastic. "
-            f"Opened behavior readouts: {resume_actor_critic_opened or 'none'}"
-        )
 
     actor_critic_bank = None
     shared_actor_teacher: Optional[torch.nn.Module] = None
@@ -5531,13 +3235,6 @@ if __name__ == "__main__":
         task_update_rng = np.random.default_rng(
             np.random.SeedSequence([config.seed, 0x4D4F4541])
         )
-        if config.uses_replay_rehearsed_shared_behavior:
-            # Keep behavior-route shuffling independent from Evolving-Core's
-            # old-task world-model sampling so replacing the behavior head does
-            # not silently change the v2 world-model replay sequence.
-            shared_behavior_update_rng = np.random.default_rng(
-                np.random.SeedSequence([config.seed, 0x464B414E])
-            )
 
         def build_task_actor_critic(task_id: int) -> ActorCriticOpt:
             # Task-bank construction must not perturb world-model sampling RNG.
@@ -5549,132 +3246,17 @@ if __name__ == "__main__":
                     **_actor_critic_constructor_kwargs(config),
                 )
 
-        if config.uses_shared_actor:
-            aco = build_task_actor_critic(0)
-            if task1_seed_payload is not None:
-                actor_bank_state = task1_seed_payload[
-                    "actor_critic_bank_state_dict"
-                ]
-                if not isinstance(actor_bank_state, Mapping):
-                    raise ValueError("Task-1 actor bank state must be a mapping")
-                task_states = actor_bank_state.get("tasks")
-                if not isinstance(task_states, Mapping) or not isinstance(
-                    task_states.get("0"), Mapping
-                ):
-                    raise ValueError("Task-1 actor state is missing")
-                aco.ac.load_state_dict(task_states["0"], strict=True)
-                shared_actor_teacher = copy.deepcopy(aco.ac.actor).eval()
-                shared_actor_teacher.requires_grad_(False)
-                shared_actor_teacher_seen_tasks = 1
-                print(
-                    "Loaded the completed Task-1 actor as the shared actor and "
-                    "created one transient frozen teacher"
-                )
+        if config.uses_evolving_atomic_rssm:
+            actor_bank_artifact_kind = (
+                "evolving_atomic_rssm_actor_critic_bank_resumable_state"
+            )
         else:
-            if config.continual_method == "cnn_fullbank_arrow":
-                actor_bank_artifact_kind = (
-                    "cnn_fullbank_arrow_actor_critic_bank_inference_state"
-                )
-            elif config.continual_method == "cnn_projector_lora_arrow":
-                actor_bank_artifact_kind = (
-                    "cnn_projector_lora_arrow_actor_critic_bank_inference_state"
-                )
-            elif config.continual_method == "cnn_mechanism_bank_arrow":
-                actor_bank_artifact_kind = (
-                    "cnn_mechanism_bank_arrow_actor_critic_bank_inference_state"
-                )
-            elif config.continual_method == "rec_rssm_arrow":
-                actor_bank_artifact_kind = (
-                    "rec_rssm_arrow_actor_critic_bank_inference_state"
-                )
-            elif config.continual_method == "dino_patchbank_arrow":
-                actor_bank_artifact_kind = (
-                    "dino_patchbank_arrow_actor_critic_bank_inference_state"
-                )
-            elif config.continual_method == "dino_convbank_arrow":
-                actor_bank_artifact_kind = (
-                    "dino_convbank_arrow_actor_critic_bank_inference_state"
-                )
-            elif config.uses_evolving_atomic_rssm:
-                actor_bank_artifact_kind = (
-                    "evolving_atomic_rssm_actor_critic_bank_resumable_state"
-                )
-            elif config.uses_full_task_experts:
-                actor_bank_artifact_kind = (
-                    "dino_fullbank_arrow_actor_critic_bank_inference_state"
-                )
-            else:
-                actor_bank_artifact_kind = (
-                    "moe_arrow_actor_critic_bank_inference_state"
-                )
-            actor_critic_bank = ActorCriticBank(
-                artifact_kind=actor_bank_artifact_kind
+            actor_bank_artifact_kind = (
+                "moe_arrow_actor_critic_bank_inference_state"
             )
-        if task1_seed_payload is not None and not config.uses_shared_actor:
-            seeded_actor = actor_critic_bank.ensure(0, build_task_actor_critic)
-            actor_bank_state = task1_seed_payload["actor_critic_bank_state_dict"]
-            if not isinstance(actor_bank_state, Mapping):
-                raise ValueError("Task-1 actor bank state must be a mapping")
-            task_states = actor_bank_state.get("tasks")
-            if not isinstance(task_states, Mapping) or not isinstance(
-                task_states.get("0"), Mapping
-            ):
-                raise ValueError("Task-1 actor state is missing")
-            seeded_actor.ac.load_state_dict(task_states["0"], strict=True)
-            aco = seeded_actor
-            print("Loaded and froze the completed Task-1 Actor-Critic bank entry")
-
-        if task0_transition_payload is not None:
-            if config.uses_shared_actor or actor_critic_bank is None:
-                raise RuntimeError(
-                    "Task-0 transition requires the private MLP Actor-Critic bank"
-                )
-            actor_critic_bank.load_resumable_state_dict(
-                task0_transition_payload["optimizers"]["actor_critic_bank"],
-                build_task_actor_critic,
-            )
-            if actor_critic_bank.task_ids() != (0,):
-                raise ValueError(
-                    "Task-0 transition Actor-Critic bank must contain only Task 0"
-                )
-            aco = actor_critic_bank.get(0)
-            print("Restored exact Task-0 MLP Actor-Critic and optimizer state")
-
-    task0_transition_state: dict[str, int] = {}
-    task0_transition_boundary_teacher: Optional[WorldModel] = None
-    if task0_transition_payload is not None:
-        if not config.uses_task_experts:
-            raise RuntimeError("Task-0 transition requires task experts")
-        task0_transition_boundary_teacher = copy.deepcopy(wm).eval()
-        _seed_atomic_lora_task0_world_model(
-            task0_transition_boundary_teacher,
-            task0_transition_payload["boundary_teacher"],
+        actor_critic_bank = ActorCriticBank(
+            artifact_kind=actor_bank_artifact_kind
         )
-        task0_transition_boundary_teacher.requires_grad_(False)
-        _restore_task0_transition_rng(
-            task0_transition_payload["rng"],
-            task_update_rng=task_update_rng,
-            collection_environment_seed_rng=collection_environment_seed_rng,
-            validation_environment_seed_rng=validation_environment_seed_rng,
-            final_environment_seed_rng=final_environment_seed_rng,
-        )
-        source_counters = task0_transition_payload["counters"]
-        task0_transition_state = {
-            "completed_epochs": training_start_epoch,
-            "raw_environment_frames": int(
-                source_counters["raw_environment_frames"]
-            ),
-            "world_model_updates": int(source_counters["world_model_updates"]),
-            "actor_critic_updates": int(
-                source_counters["actor_critic_updates"]
-            ),
-        }
-        task0_transition_metadata["world_model_state_transfer"] = (
-            task0_transition_world_model_report
-        )
-        # Release the source optimizer/model tensors before training while the
-        # copied working replay and compact provenance record remain live.
-        task0_transition_payload = None
 
     if log_dir is None:
         current_time = datetime.now().strftime("%b%d_%H-%M-%S")
@@ -5682,7 +3264,7 @@ if __name__ == "__main__":
         run_name = f"{current_time}_{socket.gethostname()}_{config.seed}_{job_id}"
         # One env in the schedule → single-task; multiple → continual (sequential) training
 
-        if len(config.esc.env_configs) == 1: 
+        if len(config.esc.env_configs) == 1:
             task_kind = "single"
         else:
             first_task_duration = (
@@ -5702,12 +3284,12 @@ if __name__ == "__main__":
                 task_kind = "cl_reversed"
             else:
                 task_kind = "cl_two_cycle"
-        
+
         if config.algorithm == "arrow":
             ratio = config.arrow_replay_capacity_ratio.replace("-", "_")
             log_root = Path.cwd() / "runs" / task_kind / config.algorithm / ratio
         else:
-            log_root = Path.cwd() / "runs" / task_kind / config.algorithm        
+            log_root = Path.cwd() / "runs" / task_kind / config.algorithm
 
         log_root.mkdir(parents=True, exist_ok=True)
         log_dir = log_root / run_name
@@ -5768,22 +3350,6 @@ if __name__ == "__main__":
             evaluation_seed_manifest["final_evaluation"][
                 "used_for_adaptive_width_selection"
             ] = False
-        if config.uses_adaptive_behavior_compression:
-            evaluation_seed_manifest["adaptive_behavior_validation"] = {
-                "task_base_seeds": list(
-                    behavior_compression_validation_task_seeds
-                ),
-                "seed_sequence_spawn_index": 4,
-                "reused_for_dense_teacher_and_every_candidate": True,
-                "rollouts_per_condition": config.adaptive_behavior_rollouts,
-                "used_for_actor_critic_width_selection": True,
-                "disjoint_from_periodic_final_and_qfp_seed_domains": True,
-                "training_rng_state_restored": True,
-                "evaluation_transitions_enter_replay": False,
-            }
-            evaluation_seed_manifest["final_evaluation"][
-                "used_for_actor_critic_width_selection"
-            ] = False
         evaluation_seed_path = log_dir / "evaluation_seed_manifest.json"
         temporary_evaluation_seed_path = evaluation_seed_path.with_suffix(
             ".json.tmp"
@@ -5793,80 +3359,14 @@ if __name__ == "__main__":
             encoding="utf-8",
         )
         os.replace(temporary_evaluation_seed_path, evaluation_seed_path)
-        if resume_payload is not None:
-            resume_metadata = {
-                "schema_version": 1,
-                "artifact_kind": "task_acquisition_from_analysis_snapshot",
-                "initial_snapshot": str(args.init_analysis_snapshot.expanduser().resolve()),
-                "initial_snapshot_epoch": resume_payload.get("epoch"),
-                "initial_snapshot_task": resume_payload.get("task"),
-                "adaptation_mode": resume_mode,
-                "replay_state": "reset_empty",
-                "optimizer_state": "reset_new_optimizer",
-                "rng_state": "reset_from_config_seed",
-                "collection_policy": "loaded_actor_from_snapshot",
-                "world_model_opened_modules": resume_world_model_opened,
-                "actor_critic_opened_modules": resume_actor_critic_opened,
-                "snapshot_state_report": resume_state_report,
-            }
-            (log_dir / "resume_initialization.json").write_text(
-                json.dumps(resume_metadata, indent=2) + "\n",
-                encoding="utf-8",
-            )
-        if task1_seed_payload is not None:
-            seed_metadata = {
-                "schema_version": 1,
-                "artifact_kind": "task1_boundary_seeded_incremental_training",
-                "initial_snapshot": str(
-                    args.init_task1_boundary_snapshot.expanduser().resolve()
-                ),
-                "initial_snapshot_completed_epochs": training_start_epoch,
-                "replay_state": "reset_empty",
-                "optimizer_state": "reset_new_optimizers",
-                "rng_state": "reset_from_config_seed",
-                "environment_schedule_restart_task": 1,
-                "source_task1_world_model_modules": task1_seed_world_model_report,
-                "source_task1_actor_loaded": True,
-                "actor_topology": (
-                    "single_shared_actor_critic"
-                    if config.uses_shared_actor
-                    else "per_task_actor_critic_bank"
-                ),
-                "old_real_replay_used": False,
-                "old_policy_protection": (
-                    "frozen old-route world-model imagination with one transient "
-                    "previous shared-actor teacher"
-                    if config.uses_shared_actor
-                    else "frozen task-specific actor entries"
-                ),
-                "source_snapshot_resumable": False,
-                "scientific_scope": (
-                    "snapshot-seeded Task-2/3 acquisition; not an equivalent "
-                    "resume of the source run"
-                ),
-            }
-            (log_dir / "task1_seed_initialization.json").write_text(
-                json.dumps(seed_metadata, indent=2) + "\n",
-                encoding="utf-8",
-            )
-        if task0_transition_metadata:
+        if {}:
             transition_path = log_dir / "task0_transition_initialization.json"
             temporary_transition_path = transition_path.with_suffix(".json.tmp")
             temporary_transition_path.write_text(
-                json.dumps(task0_transition_metadata, indent=2) + "\n",
+                json.dumps({}, indent=2) + "\n",
                 encoding="utf-8",
             )
             os.replace(temporary_transition_path, transition_path)
-        if feature_cache is not None:
-            feature_accounting_path = log_dir / "feature_cache_storage_accounting.json"
-            temporary_feature_accounting_path = feature_accounting_path.with_suffix(
-                ".json.tmp"
-            )
-            temporary_feature_accounting_path.write_text(
-                json.dumps(feature_cache.storage_accounting(), indent=2) + "\n",
-                encoding="utf-8",
-            )
-            os.replace(temporary_feature_accounting_path, feature_accounting_path)
         if replay_storage_directory is not None:
             replay_accounting_path = log_dir / "replay_mmap_storage_accounting.json"
             temporary_replay_accounting_path = replay_accounting_path.with_suffix(
@@ -5898,13 +3398,11 @@ if __name__ == "__main__":
     adaptive_behavior_compression_updates = 0
     profile_stages = args.profile_stages and distributed_context.is_primary
 
-    
+
     total_env_steps = (
-        task0_transition_state["raw_environment_frames"]
-        if task0_transition_state
-        else int(task1_seed_payload.get("total_raw_environment_frames", 0))
-        if task1_seed_payload is not None
-        else 0
+        {}["raw_environment_frames"]
+        if {}
+        else (0)
     )  # number of *real* environment interactions so far
     if total_env_steps % config.env_repeat:
         raise ValueError("Raw environment-frame counter is not decision aligned")
@@ -5916,24 +3414,14 @@ if __name__ == "__main__":
     dream_rehearsal_selected_trajectories = 0
     encountered_replay_task_ids = set(replay.available_task_ids())
 
-    best_rews_mean = float("-inf")
-    best_validation_seen_task_raw_mean = float("-inf")
+    best_rews_mean = -float("inf")
+    best_validation_seen_task_raw_mean = -float("inf")
     global_step = (
-        task0_transition_state["world_model_updates"]
-        if task0_transition_state
-        else int(task1_seed_payload.get("world_model_updates", 0))
-        if task1_seed_payload is not None
-        else 0
+        {}["world_model_updates"]
+        if {}
+        else (0)
     )  # gradient updates so far
-    shared_core_frozen = resume_payload is not None
-    boundary_teacher: Optional[WorldModel] = task0_transition_boundary_teacher
-    capture_kan_parameter_values = None
-    protect_kan_parameter_updates = None
-    if config.residual_consolidation == "replay_functional":
-        from clworldmodel.continual import (
-            capture_kan_parameter_values,
-            protect_kan_parameter_updates,
-        )
+    boundary_teacher: Optional[WorldModel] = None
 
     for epoch in range(training_start_epoch, config.epochs):
         print("Starting Epoch ", epoch)
@@ -5942,52 +3430,10 @@ if __name__ == "__main__":
         if config.uses_task_experts:
             current_task_id = envs.current_task_index()
             mechanism_phase = "full"
-            if config.continual_method == "rec_rssm_arrow":
-                _, task_epoch = _sequential_task_position(config, epoch)
-                task_local_epoch = task_epoch - 1
-                if (
-                    current_task_id >= 2
-                    and task_local_epoch < config.task_mechanism_reuse_probe_epochs
-                ):
-                    mechanism_phase = "reuse_probe"
-            warm_start_from = (
-                0
-                if config.continual_method in {
-                    "cnn_projector_lora_arrow",
-                    "cnn_compact_shared_actor_arrow",
-                }
-                and current_task_id > 0
-                else current_task_id - 1
+            warm_start_from = (current_task_id - 1
                 if current_task_id > 0
-                else None
-            )
-            if config.uses_shared_actor:
-                if aco is None:
-                    raise RuntimeError("Shared actor was not initialized")
-                if warm_start_from is not None:
-                    initialized = wm.initialize_task_expert(
-                        current_task_id, warm_start_from
-                    )
-                    if initialized:
-                        print(
-                            f"Warm-started world-model expert {current_task_id} "
-                            f"from expert {warm_start_from}"
-                        )
-                if current_task_id > shared_actor_teacher_seen_tasks:
-                    if current_task_id != shared_actor_teacher_seen_tasks + 1:
-                        raise RuntimeError(
-                            "Shared-actor teacher tasks must advance sequentially"
-                        )
-                    shared_actor_teacher = copy.deepcopy(aco.ac.actor).eval()
-                    shared_actor_teacher.requires_grad_(False)
-                    shared_actor_teacher_seen_tasks = current_task_id
-                    print(
-                        "Refreshed the one transient shared-actor teacher before "
-                        f"task {current_task_id}; old routes={tuple(range(current_task_id))}"
-                    )
-                aco.ac.activate_training_task(current_task_id)
-                wm.activate_task_expert(current_task_id)
-            elif current_task_id not in actor_critic_bank:
+                else None)
+            if current_task_id not in actor_critic_bank:
                 if warm_start_from is not None:
                     if warm_start_from not in actor_critic_bank:
                         raise RuntimeError(
@@ -6005,31 +3451,17 @@ if __name__ == "__main__":
                 actor_critic_bank.ensure(
                     current_task_id,
                     build_task_actor_critic,
-                    warm_start_from=(
-                        warm_start_from
-                        if config.continual_method == "moe_arrow"
-                        else None
-                    ),
+                    warm_start_from=(None),
                 )
                 print(
                     f"Initialized independent actor-critic for task {current_task_id}"
                 )
-            if config.uses_task_private_heads or config.uses_evolving_atomic_rssm:
+            if (config.uses_evolving_atomic_rssm):
                 wm.activate_task_expert(
                     current_task_id, mechanism_phase=mechanism_phase
                 )
                 if actor_critic_bank is not None:
                     actor_critic_bank.activate(current_task_id)
-                if config.continual_method == "rec_rssm_arrow":
-                    writer.add_scalar(
-                        "RECRSSM/reuse_probe_active",
-                        int(mechanism_phase == "reuse_probe"),
-                        global_step,
-                    )
-                    print(
-                        "REC-RSSM mechanism phase: "
-                        f"task={current_task_id} phase={mechanism_phase}"
-                    )
             if actor_critic_bank is not None:
                 aco = actor_critic_bank.get(current_task_id)
             if config.uses_evolving_atomic_rssm:
@@ -6059,56 +3491,12 @@ if __name__ == "__main__":
             else current_task_id
         )
         task_boundary = epoch > 0 and envs.is_new_env()
-        if config.residual_consolidation == "replay_functional" and task_boundary:
-            if aco is None:
-                raise RuntimeError(
-                    "The actor-critic must be initialized before KAN consolidation"
-                )
-            diagnostics = _consolidate_kan_from_replay(
-                config=config,
-                wm=wm,
-                aco=aco,
-                feature_cache=feature_cache,
-                epoch=epoch,
-                global_step=global_step,
-                log_dir=log_dir,
-                writer=writer,
-            )
-            print(
-                "Consolidated replay-important KAN coefficients at task boundary "
-                f"{_sequential_task_position(config, epoch)[0]}: "
-                f"modules={len(diagnostics)}"
-            )
-        if (
-            config.shared_core_mode == "freeze_after_first_task"
-            and not shared_core_frozen
-            and task_boundary
-        ):
-            if aco is None:
-                raise RuntimeError(
-                    "The actor-critic must be initialized before freezing the shared core"
-                )
-            wm.freeze_shared_core()
-            aco.ac.freeze_shared_core()
-            if config.residual_consolidation == "replay_functional":
-                from clworldmodel.continual import freeze_kan_coordinate_maps
-
-                freeze_kan_coordinate_maps(
-                    {"world_model": wm, "actor_critic": aco.ac}
-                )
-            _restrict_optimizer_to_trainable(opt, wm)
-            _restrict_optimizer_to_trainable(aco.opt, aco.ac)
-            shared_core_frozen = True
-            print("Frozen shared world-model and actor-critic cores after task 1")
-            writer.add_scalar("Continual/shared_core_frozen", 1, global_step)
         epoch_started = _stage_clock(profile_stages)
         collect_started = _stage_clock(profile_stages)
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
         if distributed_context.is_primary:
-            if resume_payload is not None:
-                random_policy = False
-            elif config.random_policy == "first":
+            if config.random_policy == "first":
                 random_policy = epoch == 0
             elif config.random_policy == "new":
                 random_policy = envs.is_new_env()
@@ -6117,56 +3505,44 @@ if __name__ == "__main__":
                 if random_policy and config.pretrain_enabled
                 else 1
             ):
+                collection_routing = {}
+                collection_behavior = None if random_policy else (
+                    _autorouted_behavior(config, aco, actor_critic_bank, current_task_id + 1)
+                    if config.uses_reconstruction_task_inference else aco.ac
+                )
                 _acts, _obss, _rews, _conts, _resets = reinterpret_nt_to_t_n(
                     *generate_trajectories(
                         config.n_sync * config.gen_seq_len,
                         config.n_sync,
                         wm=wm,
-                        ac=None if random_policy else aco.ac,
+                        ac=collection_behavior,
                         env_fns=envs.funcs(),
                         env_repeat=config.env_repeat,
                         seed=_next_environment_seed(collection_environment_seed_rng),
-                        task_id=current_task_id,
+                        task_id=None if config.uses_reconstruction_task_inference else current_task_id,
+                        eligible_route_ids=(tuple(range(current_task_id + 1))
+                                            if config.uses_reconstruction_task_inference else None),
+                        routing_diagnostics=collection_routing,
+
                     ),
                     config.data_t,
                     config.data_n,
                 )
-                frozen_features = None
-                if feature_cache is not None and feature_cache.requires_recording:
-                    encoder = wm.rssm.image_embedder
-                    if getattr(encoder, "requires_projection_fit", False):
-                        if epoch != 0 or not random_policy or global_step != 0:
-                            raise RuntimeError(
-                                "Task-1 patch PCA must be fitted before model training"
-                            )
-                        projection_metadata = _fit_dinov3_patch_projection(
-                            wm,
-                            _obss,
-                            calibration_frames=config.dinov3_patch_projection_frames,
-                        )
-                        projection_path = log_dir / "dinov3_patch_projection.json"
-                        temporary_projection_path = projection_path.with_suffix(
-                            ".json.tmp"
-                        )
-                        temporary_projection_path.write_text(
-                            json.dumps(projection_metadata, indent=2) + "\n",
-                            encoding="utf-8",
-                        )
-                        os.replace(temporary_projection_path, projection_path)
-                        writer.add_scalar(
-                            "DINOv3/patch_projection_explained_variance",
-                            projection_metadata["explained_variance_ratio"],
-                            global_step,
-                        )
-                        print(
-                            "Fitted and froze Task-1 DINOv3 patch PCA: "
-                            f"{projection_metadata}"
-                        )
-                    frozen_features = _encode_frozen_observation_features(
-                        wm,
-                        _obss,
-                        batch_size=config.dinov3_max_batch_size,
+                if config.uses_reconstruction_task_inference:
+                    from clworldmodel.routing import routing_audit
+
+                    collection_routing["audit"] = routing_audit(
+                        collection_routing["routing_events"], true_task_id=current_task_id,
+                        task_count=config.rssm_num_experts,
                     )
+                    collection_routing["epoch"] = epoch
+                    collection_routing["world_model_updates"] = global_step
+                    collection_routing["replay_label_source"] = "training scheduler, never inferred route"
+                    _write_routing_diagnostic(
+                        log_dir / "task_routing" / f"collection_epoch_{epoch:04d}_batch_{_:02d}.json",
+                        collection_routing,
+                    )
+                frozen_features = None
                 write_slots = replay.add(
                     _acts,
                     _obss,
@@ -6177,8 +3553,6 @@ if __name__ == "__main__":
                 )
                 if replay_task_id is not None:
                     encountered_replay_task_ids.add(replay_task_id)
-                if feature_cache is not None and feature_cache.requires_recording:
-                    feature_cache.record(write_slots, frozen_features)
                 print(f"{replay.n_valid=}")
                 num_new_env_steps = (
                     _acts.shape[0] * _acts.shape[1] * config.env_repeat
@@ -6222,6 +3596,7 @@ if __name__ == "__main__":
                     for _ in envs.eval_funcs()
                 )
             )
+            periodic_routing = []
             eval_results_mean, eval_results_std = _evaluate_policy_tasks(
                 config,
                 wm,
@@ -6230,7 +3605,15 @@ if __name__ == "__main__":
                 periodic_task_seeds,
                 actor_critic_bank=actor_critic_bank,
                 distributed_context=distributed_context,
+                eligible_task_count=current_task_id + 1,
+                routing_diagnostics=periodic_routing,
             )
+            if config.uses_reconstruction_task_inference:
+                _write_routing_diagnostic(
+                    log_dir / "task_routing" / f"periodic_epoch_{epoch:04d}.json",
+                    {"epoch": epoch, "world_model_updates": global_step,
+                     "evaluation_transitions_enter_replay": False, "tasks": periodic_routing},
+                )
             eval_raw_mean, eval_raw_std = _raw_return_statistics(
                 config.esc.env_configs, eval_results_mean, eval_results_std
             )
@@ -6277,6 +3660,7 @@ if __name__ == "__main__":
                         raw_means=eval_raw_mean,
                         raw_stds=eval_raw_std,
                         cohort="periodic_validation",
+                        eligible_task_count=current_task_id + 1,
                     )
                     seen_task_count = min(
                         len(eval_raw_mean),
@@ -6329,27 +3713,9 @@ if __name__ == "__main__":
             )
             for task_id, update_count in world_model_allocation.items():
                 writer.add_scalar(
-                    (
-                        f"CNNFullBankArrow/world_model_updates_task_{task_id}"
-                        if config.continual_method == "cnn_fullbank_arrow"
-                        else f"CNNProjectorLoraArrow/world_model_updates_task_{task_id}"
-                        if config.continual_method == "cnn_projector_lora_arrow"
-                        else f"CNNCompactSharedActor/world_model_updates_task_{task_id}"
-                        if config.continual_method == "cnn_compact_shared_actor_arrow"
-                        else f"CNNMechanismBank/world_model_updates_task_{task_id}"
-                        if config.continual_method == "cnn_mechanism_bank_arrow"
-                        else f"RECRSSM/world_model_updates_task_{task_id}"
-                        if config.continual_method == "rec_rssm_arrow"
-                        else f"EvolvingCore/world_model_updates_task_{task_id}"
+                    (f"EvolvingCore/world_model_updates_task_{task_id}"
                         if config.uses_evolving_atomic_rssm
-                        else f"DINOPatchBankArrow/world_model_updates_task_{task_id}"
-                        if config.continual_method == "dino_patchbank_arrow"
-                        else f"DINOConvBankArrow/world_model_updates_task_{task_id}"
-                        if config.continual_method == "dino_convbank_arrow"
-                        else f"DINOFullBankArrow/world_model_updates_task_{task_id}"
-                        if config.uses_full_task_experts
-                        else f"MoEArrow/world_model_updates_task_{task_id}"
-                    ),
+                        else (f"MoEArrow/world_model_updates_task_{task_id}")),
                     update_count,
                     global_step,
                 )
@@ -6366,7 +3732,6 @@ if __name__ == "__main__":
             )
             if args.compile_world_model:
                 torch.compiler.cudagraph_mark_step_begin()
-            observation_features = None
             if epoch > 0 or not config.pretrain_enabled:
                 mb_t_size = config.mb_t_size
                 global_mb_n_size = config.mb_n_size
@@ -6391,9 +3756,7 @@ if __name__ == "__main__":
                         boundary_teacher=boundary_teacher,
                         actor_critic_bank=actor_critic_bank,
                         frozen_actor=(
-                            shared_actor_teacher
-                            if config.uses_replay_rehearsed_shared_behavior
-                            else None
+                            (None)
                         ),
                         replay_buffer=replay,
                         current_task_id=current_task_id,
@@ -6438,26 +3801,12 @@ if __name__ == "__main__":
             replay_sample_kwargs = {}
             if update_task_id is not None:
                 replay_sample_kwargs["task_id"] = update_task_id
-            if feature_cache is None:
-                mb_acts, mb_obss, mb_rews, mb_conts, mb_resets = replay.minibatch(
-                    mb_t_size, mb_n_size, **replay_sample_kwargs
-                )
-            else:
-                (
-                    mb_acts,
-                    mb_obss,
-                    observation_features,
-                    mb_rews,
-                    mb_conts,
-                    mb_resets,
-                ) = feature_cache.minibatch(
-                    mb_t_size,
-                    mb_n_size,
-                    **replay_sample_kwargs,
-                )
+            mb_acts, mb_obss, mb_rews, mb_conts, mb_resets = replay.minibatch(
+                mb_t_size, mb_n_size, **replay_sample_kwargs
+            )
 
             world_model_loss_kwargs = {
-                "observation_features": observation_features,
+
             }
             if update_task_id is not None:
                 world_model_loss_kwargs["task_id"] = update_task_id
@@ -6470,18 +3819,12 @@ if __name__ == "__main__":
                     mb_resets,
                     **world_model_loss_kwargs,
                 )
-
-            protected_values = None
-            if shared_core_frozen and capture_kan_parameter_values is not None:
-                protected_values = capture_kan_parameter_values(wm)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 _optimizer_parameters(opt), 1000
             )
             opt.step()
-            if protected_values is not None:
-                protect_kan_parameter_updates(wm, protected_values)
 
             # Optional progress bar logging
             # if global_step % 10 == 0:
@@ -6494,11 +3837,8 @@ if __name__ == "__main__":
                     for metric_key, metric_value in metrics.items():
                         writer.add_scalar(metric_key, metric_value, global_step)
 
-                    if (
-                        distributed_context.is_primary
-                        and log_images
-                        and config.observation_objective == "reconstruction"
-                    ):
+                    if (distributed_context.is_primary
+                        and log_images):
                         original = _obss[:16, 0:2].to(device)
                         writer.add_images(
                             "original", original.swapaxes(0, 1).flatten(0, 1), global_step
@@ -6575,22 +3915,6 @@ if __name__ == "__main__":
         actor_critic_kwargs = {
             "dream_steps": config.ac_dream_steps,
             "actor_network": config.actor_network,
-            "actor_kan_hidden_features": config.actor_kan_hidden_features,
-            "actor_kan_grid_size": config.actor_kan_grid_size,
-            "actor_kan_spline_order": config.actor_kan_spline_order,
-            "actor_kan_input_min": config.actor_kan_input_min,
-            "actor_kan_input_max": config.actor_kan_input_max,
-            "actor_kan_normalize_recurrent_state": (
-                config.actor_kan_normalize_recurrent_state
-            ),
-            "fastkan_hidden_features": config.fastkan_hidden_features,
-            "fastkan_hidden_layers": config.fastkan_hidden_layers,
-            "fastkan_grid_size": config.fastkan_grid_size,
-            "fastkan_input_min": config.fastkan_input_min,
-            "fastkan_input_max": config.fastkan_input_max,
-            "fastkan_rms_norm_epsilon": config.fastkan_rms_norm_epsilon,
-            "fastkan_actor_output_scale": config.fastkan_actor_output_scale,
-            "fastkan_actor_unimix": config.fastkan_actor_unimix,
             "optimizer_name": config.ac_optimizer,
             "optimizer_eps": config.ac_optimizer_eps,
             "optimizer_beta1": config.ac_optimizer_beta1,
@@ -6610,30 +3934,7 @@ if __name__ == "__main__":
             "corrected_imagination_bootstrap": (
                 config.ac_corrected_imagination_bootstrap
             ),
-            "residual_correction": config.residual_correction,
-            "residual_bottleneck_features": config.residual_bottleneck_features,
-            "residual_grid_size": config.residual_grid_size,
-            "residual_input_min": config.residual_input_min,
-            "residual_input_max": config.residual_input_max,
-            "residual_rms_norm_epsilon": config.residual_rms_norm_epsilon,
-            "residual_alpha": config.residual_alpha,
-            "residual_input_mode": config.residual_input_mode,
-            "residual_consolidation": config.residual_consolidation,
-            "adaptive_behavior_residuals": config.adaptive_behavior_residuals,
-            "adaptive_behavior_num_tasks": config.rssm_num_experts,
-            "adaptive_behavior_hidden_features": (
-                config.adaptive_behavior_hidden_features
-            ),
-            "adaptive_behavior_residual_scale": (
-                config.adaptive_behavior_residual_scale
-            ),
-            "adaptive_behavior_num_atoms": config.adaptive_behavior_num_atoms,
-            "adaptive_behavior_reuse": config.adaptive_behavior_reuse,
-            "protect_residual_updates": (
-                shared_core_frozen
-                and config.residual_consolidation == "replay_functional"
-            ),
-            "feature_cache": feature_cache,
+            "protect_residual_updates": False,
             "distributed_context": distributed_context,
         }
 
@@ -6641,115 +3942,7 @@ if __name__ == "__main__":
             config.ac_train_sync
         )
 
-        if config.uses_replay_rehearsed_shared_behavior:
-            if (
-                current_task_id is None
-                or aco is None
-                or shared_behavior_update_rng is None
-            ):
-                raise RuntimeError(
-                    "Shared behavior replay rehearsal requires an active route and "
-                    "actor-critic plus its independent schedule RNG"
-                )
-            replay_task_ids = replay.available_task_ids()
-            expected_replay_task_ids = tuple(range(current_task_id + 1))
-            if replay_task_ids != expected_replay_task_ids:
-                raise RuntimeError(
-                    "Shared behavior fixed-budget rehearsal requires Replay coverage "
-                    "for every seen task route: "
-                    f"available={replay_task_ids}, expected={expected_replay_task_ids}"
-                )
-            behavior_allocation = allocate_task_updates(
-                config.ac_train_steps,
-                current_task_id=current_task_id,
-                available_task_ids=replay_task_ids,
-                current_task_fraction=(
-                    config.evolving_shared_behavior_current_task_fraction
-                ),
-            )
-            behavior_schedule = shuffled_task_schedule(
-                behavior_allocation, shared_behavior_update_rng
-            )
-            behavior_metric_namespace = (
-                "EvolvingCoreAdaptiveBehavior"
-                if config.uses_adaptive_behavior_compression
-                else "EvolvingCoreSharedFastKAN"
-            )
-            for task_id, task_steps in behavior_allocation.items():
-                writer.add_scalar(
-                    f"{behavior_metric_namespace}/actor_critic_updates_task_{task_id}",
-                    task_steps,
-                    (epoch + 1) * config.ac_train_steps,
-                )
-                shared_behavior_replay_updates[task_id] = (
-                    shared_behavior_replay_updates.get(task_id, 0) + task_steps
-                )
-            aco, approx_perf, actor_critic_metrics = train_ac_from_wm(
-                wm,
-                replay,
-                config.ac_train_steps,
-                local_ac_train_sync,
-                aco=aco,
-                lr=scheduled_ac_lr,
-                task_id_schedule=behavior_schedule,
-                training_task_id=(
-                    current_task_id
-                    if config.uses_adaptive_behavior_compression
-                    else None
-                ),
-                **actor_critic_kwargs,
-            )
-        elif config.uses_shared_actor:
-            if current_task_id is None:
-                raise RuntimeError("Shared-actor training requires a current task route")
-            distillation_kwargs = {}
-            if current_task_id > 0:
-                if shared_actor_teacher is None:
-                    raise RuntimeError(
-                        "Old-task actor distillation requires the frozen teacher"
-                    )
-                distillation_kwargs = {
-                    "actor_teacher": shared_actor_teacher,
-                    "actor_distill_task_ids": tuple(range(current_task_id)),
-                    "actor_distill_scale": config.shared_actor_distill_scale,
-                    "actor_distill_interval": config.shared_actor_distill_interval,
-                    "actor_distill_n_sync": config.shared_actor_distill_n_sync,
-                    "actor_distill_burnin_steps": (
-                        config.shared_actor_distill_burnin_steps
-                    ),
-                    "actor_distill_steps": config.shared_actor_distill_steps,
-                }
-            aco, approx_perf, actor_critic_metrics = train_ac_from_wm(
-                wm,
-                replay,
-                config.ac_train_steps,
-                local_ac_train_sync,
-                aco=aco,
-                lr=scheduled_ac_lr,
-                task_id=current_task_id,
-                **distillation_kwargs,
-                **actor_critic_kwargs,
-            )
-            writer.add_scalar(
-                f"CNNCompactSharedActor/actor_updates_task_{current_task_id}",
-                config.ac_train_steps,
-                (epoch + 1) * config.ac_train_steps,
-            )
-            shared_actor_distillation_counters["optimizer_updates"] += (
-                config.ac_train_steps
-            )
-            shared_actor_distillation_counters["distillation_batches"] += int(
-                actor_critic_metrics["shared_actor_distillation_batches"]
-            )
-            shared_actor_distillation_counters["distilled_states"] += int(
-                actor_critic_metrics["shared_actor_distillation_states"]
-            )
-            shared_actor_distillation_counters["burnin_state_uses"] += int(
-                actor_critic_metrics[
-                    "shared_actor_distillation_burnin_state_uses"
-                ]
-            )
-        elif config.uses_task_experts:
+        if config.uses_task_experts:
             replay_task_ids = replay.available_task_ids()
             actor_available_tasks = tuple(
                 task_id
@@ -6766,25 +3959,9 @@ if __name__ == "__main__":
             approx_perf_total = 0.0
             for task_id, task_steps in actor_allocation.items():
                 writer.add_scalar(
-                    (
-                        f"CNNFullBankArrow/actor_critic_updates_task_{task_id}"
-                        if config.continual_method == "cnn_fullbank_arrow"
-                        else f"CNNProjectorLoraArrow/actor_critic_updates_task_{task_id}"
-                        if config.continual_method == "cnn_projector_lora_arrow"
-                        else f"CNNMechanismBank/actor_critic_updates_task_{task_id}"
-                        if config.continual_method == "cnn_mechanism_bank_arrow"
-                        else f"RECRSSM/actor_critic_updates_task_{task_id}"
-                        if config.continual_method == "rec_rssm_arrow"
-                        else f"EvolvingCore/actor_critic_updates_task_{task_id}"
+                    (f"EvolvingCore/actor_critic_updates_task_{task_id}"
                         if config.uses_evolving_atomic_rssm
-                        else f"DINOPatchBankArrow/actor_critic_updates_task_{task_id}"
-                        if config.continual_method == "dino_patchbank_arrow"
-                        else f"DINOConvBankArrow/actor_critic_updates_task_{task_id}"
-                        if config.continual_method == "dino_convbank_arrow"
-                        else f"DINOFullBankArrow/actor_critic_updates_task_{task_id}"
-                        if config.uses_full_task_experts
-                        else f"MoEArrow/actor_critic_updates_task_{task_id}"
-                    ),
+                        else (f"MoEArrow/actor_critic_updates_task_{task_id}")),
                     task_steps,
                     (epoch + 1) * config.ac_train_steps,
                 )
@@ -7007,7 +4184,7 @@ if __name__ == "__main__":
         actor_seconds = _stage_elapsed(actor_started, profile_stages)
         if distributed_context.is_primary and (
             actor_critic_bank is not None
-            or config.uses_shared_actor
+            or False
             or not actor_accounting_path.exists()
         ):
             actor_accounting = _active_actor_critic_parameter_accounting(
@@ -7017,90 +4194,6 @@ if __name__ == "__main__":
                 shared_actor_teacher=shared_actor_teacher,
             )
             _write_json_atomically(actor_accounting_path, actor_accounting)
-            if config.uses_replay_rehearsed_shared_behavior:
-                replay_accounting = {
-                    "schema_version": 1,
-                    "artifact_kind": (
-                        "evolving_core_shared_behavior_replay_accounting"
-                    ),
-                    "method": config.continual_method,
-                    "topology": (
-                        "single_shared_mlp_plus_task_adaptive_residuals"
-                        if config.uses_adaptive_behavior_compression
-                        else "single_shared_fastkan_actor_critic"
-                    ),
-                    "fixed_optimizer_updates_per_epoch": config.ac_train_steps,
-                    "optimizer_updates_are_extra": False,
-                    "current_task_fraction_when_old_tasks_exist": (
-                        config.evolving_shared_behavior_current_task_fraction
-                    ),
-                    "old_task_allocation": "uniform_over_available_completed_tasks",
-                    "route_schedule": "independently_seeded_shuffled_exact_counts",
-                    "replay_source": (
-                        "task-conditioned ARROW mixed replay; unchanged FIFO/LTDM "
-                        "weights are renormalized over sub-buffers containing the "
-                        "requested task"
-                    ),
-                    "real_old_task_replay_used": any(
-                        task_id < current_task_id
-                        and update_count > 0
-                        for task_id, update_count in shared_behavior_replay_updates.items()
-                    ),
-                    "evaluation_transitions_enter_training": False,
-                    "actor_and_critic_both_updated_on_rehearsal": True,
-                    "world_model_interface_teacher": (
-                        "one transient frozen cumulative shared actor from the "
-                        "previous task boundary"
-                    ),
-                    "actor_imagination_distillation": False,
-                    "optimizer_updates_by_task_route": dict(
-                        sorted(shared_behavior_replay_updates.items())
-                    ),
-                    "optimizer_updates_total": sum(
-                        shared_behavior_replay_updates.values()
-                    ),
-                }
-                replay_accounting_path = (
-                    log_dir / "shared_behavior_replay_accounting.json"
-                )
-                temporary_replay_accounting_path = (
-                    replay_accounting_path.with_suffix(".json.tmp")
-                )
-                temporary_replay_accounting_path.write_text(
-                    json.dumps(replay_accounting, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-                os.replace(
-                    temporary_replay_accounting_path,
-                    replay_accounting_path,
-                )
-            elif config.uses_shared_actor:
-                distillation_accounting = {
-                    "schema_version": 1,
-                    "method": config.continual_method,
-                    "real_old_task_replay_samples": 0,
-                    "evaluation_transitions_enter_training": False,
-                    "old_state_source": (
-                        "zero_initialized_frozen_world_model_routes"
-                    ),
-                    "teacher_topology": "one transient previous shared actor",
-                    "teacher_persistent": False,
-                    "counts": dict(shared_actor_distillation_counters),
-                }
-                distillation_accounting_path = (
-                    log_dir / "shared_actor_distillation_accounting.json"
-                )
-                temporary_distillation_accounting_path = (
-                    distillation_accounting_path.with_suffix(".json.tmp")
-                )
-                temporary_distillation_accounting_path.write_text(
-                    json.dumps(distillation_accounting, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-                os.replace(
-                    temporary_distillation_accounting_path,
-                    distillation_accounting_path,
-                )
         writer.add_scalar("Perf/approx_perf", approx_perf, global_step)
         actor_critic_updates = (epoch + 1) * config.ac_train_steps
         writer.add_scalar(
@@ -7142,17 +4235,7 @@ if __name__ == "__main__":
                 raise RuntimeError(
                     "Evolving-Core boundary requires its shared optimizer"
                 )
-            if config.uses_replay_rehearsed_shared_behavior:
-                if (
-                    actor_critic_bank is not None
-                    or aco is None
-                    or shared_behavior_update_rng is None
-                ):
-                    raise RuntimeError(
-                        "Shared behavior boundary requires one actor-critic and its "
-                        "route-schedule RNG"
-                    )
-            elif actor_critic_bank is None:
+            if actor_critic_bank is None:
                 raise RuntimeError(
                     "Private-behavior Evolving-Core boundary requires an actor bank"
                 )
@@ -7172,17 +4255,13 @@ if __name__ == "__main__":
                 route_optimizers=evolving_route_optimizers,
                 actor_critic_bank=actor_critic_bank,
                 aco=(
-                    aco if config.uses_replay_rehearsed_shared_behavior else None
+                    (None)
                 ),
                 shared_behavior_update_rng=(
-                    shared_behavior_update_rng
-                    if config.uses_replay_rehearsed_shared_behavior
-                    else None
+                    (None)
                 ),
                 shared_behavior_replay_updates=(
-                    shared_behavior_replay_updates
-                    if config.uses_replay_rehearsed_shared_behavior
-                    else None
+                    (None)
                 ),
                 replay_buffer=replay,
                 environment_schedule=envs,
@@ -7190,9 +4269,7 @@ if __name__ == "__main__":
                 current_task_id=completed_task_id,
                 world_model_updates=global_step,
                 actor_critic_updates=actor_critic_updates,
-                adaptive_behavior_compression_updates=(
-                    adaptive_behavior_compression_updates
-                ),
+                adaptive_behavior_compression_updates=0,
                 total_env_steps=total_env_steps,
                 task_update_rng=task_update_rng,
                 collection_environment_seed_rng=collection_environment_seed_rng,
@@ -7212,9 +4289,7 @@ if __name__ == "__main__":
                     replay_buffer=replay,
                     actor_critic_bank=actor_critic_bank,
                     aco=(
-                        aco
-                        if config.uses_replay_rehearsed_shared_behavior
-                        else None
+                        (None)
                     ),
                     completed_task_id=completed_task_id,
                     eval_funcs=envs.eval_funcs(),
@@ -7270,11 +4345,6 @@ if __name__ == "__main__":
                         wm=wm,
                         replay_buffer=replay,
                         actor_critic_bank=actor_critic_bank,
-                        aco=(
-                            aco
-                            if config.uses_adaptive_behavior_compression
-                            else None
-                        ),
                         completed_task_id=completed_task_id,
                         eval_env_fns=envs.eval_funcs()[completed_task_id],
                         validation_seed=(
@@ -7338,85 +4408,6 @@ if __name__ == "__main__":
                     f"dense_fallback={compression['selected_dense_fallback']} "
                     f"layout={compression['selected_layout']}"
                 )
-            if config.uses_adaptive_behavior_compression:
-                if aco is None:
-                    raise RuntimeError(
-                        "Adaptive behavior compression requires its shared "
-                        "Actor-Critic"
-                    )
-                behavior_dense_state = copy.deepcopy(
-                    _actor_critic_opt_resumable_state_dict(aco)
-                )
-                try:
-                    behavior_compression = _compress_evolving_task_actor_critic(
-                        config=config,
-                        wm=wm,
-                        aco=aco,
-                        replay_buffer=replay,
-                        completed_task_id=completed_task_id,
-                        eval_env_fns=envs.eval_funcs()[completed_task_id],
-                        validation_seed=(
-                            behavior_compression_validation_task_seeds[
-                                completed_task_id
-                            ]
-                        ),
-                        epoch=epoch,
-                        actor_critic_updates=actor_critic_updates,
-                        compression_updates_before=(
-                            adaptive_behavior_compression_updates
-                        ),
-                        log_dir=log_dir,
-                        writer=writer,
-                        fused_adam=args.fused_adam,
-                    )
-                except Exception as exc:
-                    _load_actor_critic_opt_resumable_state_dict(
-                        aco, behavior_dense_state
-                    )
-                    aco.ac.set_task_route(completed_task_id)
-                    failure = {
-                        "schema_version": 1,
-                        "artifact_kind": (
-                            "adaptive_actor_critic_compression_failure"
-                        ),
-                        "task_id": completed_task_id,
-                        "exception_type": type(exc).__name__,
-                        "message": str(exc),
-                        "pre_consolidation_checkpoint": str(pre_checkpoint),
-                        "dense_topology_and_optimizer_restored_before_failure": True,
-                        "training_stopped": True,
-                        "final_heldout_data_used": False,
-                    }
-                    failure_dir = log_dir / "adaptive_behavior_compression"
-                    failure_dir.mkdir(parents=True, exist_ok=True)
-                    failure_path = failure_dir / (
-                        f"task_{completed_task_id:02d}_failure.json"
-                    )
-                    temporary_failure = failure_path.with_suffix(".json.tmp")
-                    temporary_failure.write_text(
-                        json.dumps(failure, indent=2) + "\n", encoding="utf-8"
-                    )
-                    os.replace(temporary_failure, failure_path)
-                    raise
-                adaptive_behavior_compression_updates += int(
-                    behavior_compression["optimizer_updates"]
-                )
-                behavior_dense_state = None
-                writer.add_scalar(
-                    "Counters/adaptive_behavior_compression_updates",
-                    adaptive_behavior_compression_updates,
-                    actor_critic_updates,
-                )
-                print(
-                    "Compressed completed task Actor/Critic residuals after "
-                    "Dense acquisition: "
-                    f"task={completed_task_id} "
-                    "selected_fraction="
-                    f"{behavior_compression['selected_width_fraction']} "
-                    "dense_fallback="
-                    f"{behavior_compression['selected_dense_fallback']} "
-                    f"layout={behavior_compression['selected_layout']}"
-                )
             # The per-epoch artifacts above describe the full-width acquisition
             # topology. Rewrite them after both selectors so the boundary (and,
             # for the last task, final) ledger describes the modules that are
@@ -7451,17 +4442,13 @@ if __name__ == "__main__":
                 route_optimizers=evolving_route_optimizers,
                 actor_critic_bank=actor_critic_bank,
                 aco=(
-                    aco if config.uses_replay_rehearsed_shared_behavior else None
+                    (None)
                 ),
                 shared_behavior_update_rng=(
-                    shared_behavior_update_rng
-                    if config.uses_replay_rehearsed_shared_behavior
-                    else None
+                    (None)
                 ),
                 shared_behavior_replay_updates=(
-                    shared_behavior_replay_updates
-                    if config.uses_replay_rehearsed_shared_behavior
-                    else None
+                    (None)
                 ),
                 replay_buffer=replay,
                 environment_schedule=envs,
@@ -7469,9 +4456,7 @@ if __name__ == "__main__":
                 current_task_id=completed_task_id,
                 world_model_updates=global_step,
                 actor_critic_updates=actor_critic_updates,
-                adaptive_behavior_compression_updates=(
-                    adaptive_behavior_compression_updates
-                ),
+                adaptive_behavior_compression_updates=0,
                 total_env_steps=total_env_steps,
                 task_update_rng=task_update_rng,
                 collection_environment_seed_rng=collection_environment_seed_rng,
@@ -7494,41 +4479,6 @@ if __name__ == "__main__":
                 "EvolvingCoreConsolidation/succeeded",
                 int(consolidation_succeeded),
                 global_step,
-            )
-        if (
-            distributed_context.is_primary
-            and config.continual_method == "rec_rssm_arrow"
-            and boundary_snapshot_metadata is not None
-            and int(boundary_snapshot_metadata["task_index"]) >= 1
-        ):
-            completed_task_id = int(boundary_snapshot_metadata["task_index"])
-            if current_task_id != completed_task_id:
-                raise RuntimeError(
-                    "REC-RSSM boundary task does not match the active route: "
-                    f"{completed_task_id} != {current_task_id}"
-                )
-            if aco is None:
-                raise RuntimeError(
-                    "REC-RSSM consolidation requires the completed task actor"
-                )
-            consolidation = _consolidate_rec_routes(
-                config=config,
-                wm=wm,
-                aco=aco,
-                replay_buffer=replay,
-                completed_task_id=completed_task_id,
-                eval_env_fns=envs.eval_funcs()[completed_task_id],
-                validation_seed=validation_task_seeds[completed_task_id],
-                epoch=epoch,
-                global_step=global_step,
-                log_dir=log_dir,
-                writer=writer,
-            )
-            print(
-                "Consolidated REC-RSSM atom route: "
-                f"task={completed_task_id} "
-                f"candidates={consolidation['candidate_count']} "
-                f"rollback={consolidation['rollback']}"
             )
 
         if distributed_context.is_primary and (
@@ -7660,6 +4610,7 @@ if __name__ == "__main__":
                 for _ in eval_funcs
             )
         )
+        final_routing = []
         final_scaled_means, final_scaled_stds = _evaluate_policy_tasks(
             config,
             wm,
@@ -7668,6 +4619,8 @@ if __name__ == "__main__":
             final_eval_task_seeds,
             actor_critic_bank=actor_critic_bank,
             distributed_context=distributed_context,
+            eligible_task_count=len(eval_funcs),
+            routing_diagnostics=final_routing,
         )
         final_raw_means, final_raw_stds = _raw_return_statistics(
             task_configs, final_scaled_means, final_scaled_stds
@@ -7716,6 +4669,14 @@ if __name__ == "__main__":
                 )
             ],
         }
+        if config.uses_reconstruction_task_inference:
+            final_evaluation.update({
+                "policy": "first_frame_reconstruction_episode_lock_argmax_latent_mode_arrow_legacy_evaluator",
+                "task_identity_exposed_during_inference": False,
+                "task_aware_training": True,
+                "eligible_route_ids": list(range(len(eval_funcs))),
+                "episode_count_mode": "legacy", "routing": final_routing,
+            })
         if distributed_context.is_primary:
             final_evaluation_path = log_dir / "final_evaluation.json"
             temporary_final_evaluation_path = final_evaluation_path.with_suffix(
@@ -7766,6 +4727,7 @@ if __name__ == "__main__":
                     raw_means=final_raw_means,
                     raw_stds=final_raw_stds,
                     cohort="heldout_final",
+                    eligible_task_count=len(eval_funcs),
                 )
     writer.close()
     if swanlab_run is not None:

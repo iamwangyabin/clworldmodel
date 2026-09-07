@@ -1,0 +1,31 @@
+{
+  "provenance": {
+    "description": "Fixed MLP actor-critic initialization and outputs captured from actual working-tree ac.py before F/StableTargets retirement; no optimizer or environment steps.",
+    "source_sha256": "f6cd1e934a42fc6d505ba8d84218a50d28aa4ca7cc0aec2e2c1e97fa5c614042",
+    "torch_version": "2.3.0",
+    "seed": 20260907
+  },
+  "initial_state_sha256": "4c020e3d48db3018746d9aad285da65d83c292ac709f5a20ee9962dabe048157",
+  "log_probs": [
+    [
+      -1.6932461261749268,
+      -1.3707776069641113,
+      -1.738192081451416,
+      -0.9510605931282043
+    ],
+    [
+      -1.4593394994735718,
+      -2.1183969974517822,
+      -0.7430345416069031,
+      -1.7619025707244873
+    ]
+  ],
+  "values": [
+    [
+      -0.0
+    ],
+    [
+      -0.0
+    ]
+  ]
+}

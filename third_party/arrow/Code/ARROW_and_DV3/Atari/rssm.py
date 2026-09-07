@@ -96,26 +96,10 @@ class Rssm(nn.Module):
         mlp_layers: int,
         wto: bool = False,
         observation_encoder: str = "cnn",
-        dinov3_model_path: Optional[str] = None,
-        dinov3_input_size: int = 256,
-        dinov3_max_batch_size: int = 128,
-        dinov3_feature_mode: str = "cls",
-        dinov3_patch_pool_size: int = 4,
-        dinov3_patch_feature_dim: int = 384,
-        dinov3_patch_projection: str = "none",
-        dinov3_patch_projection_seed: int = 0,
-        dinov3_patch_adapter: str = "none",
         num_task_experts: int = 1,
-        full_task_experts: bool = False,
-        full_task_rssm_experts: Optional[bool] = None,
-        task_banked_image_encoder: bool = False,
         task_projected_image_encoder: bool = False,
         task_symmetric_image_projectors: bool = False,
         task_projector_bottleneck_features: int = 64,
-        task_lora_recurrent_rank: int = 0,
-        task_lora_representation_rank: int = 0,
-        task_lora_transition_rank: int = 0,
-        task_recurrent_output_adapter_features: int = 0,
         task_mechanism_bank: bool = False,
         task_mechanism_reuse: bool = True,
         task_mechanism_recurrent_width: int = 512,
@@ -124,70 +108,21 @@ class Rssm(nn.Module):
         task_mechanism_residual_scale: float = 0.1,
         task_mechanism_num_atoms: int = 1,
         task_mechanism_parameterization: str = "dense_private",
-        task_mechanism_low_rank: int = 0,
         task_symmetric_mechanisms: bool = False,
-        residual_correction: str = "none",
-        residual_bottleneck_features: int = 64,
-        residual_grid_size: int = 8,
-        residual_input_min: float = -2.0,
-        residual_input_max: float = 2.0,
-        residual_rms_norm_epsilon: float = 1e-4,
-        residual_alpha: float = 0.1,
-        residual_input_mode: str = "base_output",
-        residual_consolidation: str = "none",
         image_embedder: Optional[nn.Module] = None,
         compute_dtype: str = "float32",
     ) -> None:
         super().__init__()
-        if full_task_rssm_experts is None:
-            # Legacy callers used one flag for copied RSSMs and private heads.
-            full_task_rssm_experts = full_task_experts
-        if not isinstance(full_task_rssm_experts, bool):
-            raise TypeError("full_task_rssm_experts must be a boolean")
+        if observation_encoder != "cnn":
+            raise ValueError("Only the CNN observation encoder is supported")
         if num_task_experts < 1:
             raise ValueError("num_task_experts must be positive")
-        if (full_task_experts or full_task_rssm_experts) and num_task_experts < 2:
-            raise ValueError("Full task experts require at least two task routes")
-        if task_banked_image_encoder and not full_task_experts:
-            raise ValueError(
-                "A task-banked image encoder requires complete task experts"
-            )
-        if task_banked_image_encoder and dinov3_patch_adapter != "none":
-            raise ValueError(
-                "A task-banked image encoder does not use a shared observation adapter"
-            )
-        if task_projected_image_encoder and not (
-            full_task_experts or full_task_rssm_experts or task_mechanism_bank
-        ):
+        if task_projected_image_encoder and not (task_mechanism_bank):
             raise ValueError(
                 "A projected shared image encoder requires task-routed components"
             )
-        if task_projected_image_encoder and task_banked_image_encoder:
-            raise ValueError(
-                "Projected and fully banked image encoders are mutually exclusive"
-            )
-        task_lora_ranks = (
-            task_lora_recurrent_rank,
-            task_lora_representation_rank,
-            task_lora_transition_rank,
-        )
-        if any(rank < 0 for rank in task_lora_ranks):
+        if any(rank < 0 for rank in (0, 0, 0)):
             raise ValueError("Task RSSM LoRA ranks must be non-negative")
-        if task_recurrent_output_adapter_features < 0:
-            raise ValueError("Task recurrent output adapter size must be non-negative")
-        if (
-            task_lora_recurrent_rank > 0
-            and task_recurrent_output_adapter_features > 0
-        ):
-            raise ValueError(
-                "Recurrent matrix LoRA and recurrent output adapters are mutually exclusive"
-            )
-        if task_mechanism_bank and (
-            any(task_lora_ranks) or task_recurrent_output_adapter_features
-        ):
-            raise ValueError(
-                "RSSM mechanism banks and LoRA/output adapters are mutually exclusive"
-            )
         mechanism_widths = (
             task_mechanism_recurrent_width,
             task_mechanism_representation_width,
@@ -208,9 +143,6 @@ class Rssm(nn.Module):
         if task_mechanism_parameterization not in {
             "dense_private",
             "adaptive_dense_width",
-            "shared_frozen_down_film",
-            "learned_task0_low_rank",
-            "dense_task0_low_rank_atoms",
         }:
             raise ValueError(
                 "Unknown RSSM mechanism parameterization: "
@@ -223,43 +155,6 @@ class Rssm(nn.Module):
             raise ValueError(
                 "A non-default RSSM mechanism parameterization requires mechanism banks"
             )
-        if task_mechanism_low_rank < 0:
-            raise ValueError("RSSM mechanism low-rank size must be non-negative")
-        if task_mechanism_parameterization in {
-            "learned_task0_low_rank",
-            "dense_task0_low_rank_atoms",
-        }:
-            if not task_symmetric_mechanisms:
-                raise ValueError(
-                    "Dense Task-0 low-rank mechanisms require symmetric mechanisms"
-                )
-            if (
-                task_mechanism_parameterization == "learned_task0_low_rank"
-                and task_mechanism_reuse
-            ):
-                raise ValueError(
-                    "Learned Task-0 low-rank mechanisms disable old-atom reuse"
-                )
-            if (
-                task_mechanism_parameterization
-                == "dense_task0_low_rank_atoms"
-                and not task_mechanism_reuse
-            ):
-                raise ValueError(
-                    "Atomic low-rank mechanisms require old-atom reuse"
-                )
-            if task_mechanism_low_rank < 1:
-                raise ValueError(
-                    "Dense Task-0 low-rank mechanisms require a positive rank"
-                )
-            if task_mechanism_low_rank % task_mechanism_num_atoms:
-                raise ValueError(
-                    "RSSM mechanism low-rank size must be divisible by atoms"
-                )
-        elif task_mechanism_low_rank:
-            raise ValueError(
-                "RSSM mechanism low-rank size requires a low-rank parameterization"
-            )
         if task_mechanism_bank and not task_projected_image_encoder:
             raise ValueError("RSSM mechanism banks require task image projectors")
         if task_symmetric_image_projectors and not task_projected_image_encoder:
@@ -270,48 +165,12 @@ class Rssm(nn.Module):
             raise ValueError(
                 "The evolving atomic topology requires symmetric projectors and mechanisms"
             )
-        task_rssm_adaptation_enabled = bool(
-            any(task_lora_ranks) or task_recurrent_output_adapter_features
-        )
-        if task_rssm_adaptation_enabled and not (
-            task_lora_representation_rank > 0
-            and task_lora_transition_rank > 0
-            and (
-                task_lora_recurrent_rank > 0
-                or task_recurrent_output_adapter_features > 0
-            )
-        ):
-            raise ValueError(
-                "Task RSSM adaptation requires posterior/prior LoRA and one "
-                "recurrent adaptation mechanism"
-            )
-        if task_rssm_adaptation_enabled and not full_task_rssm_experts:
-            raise ValueError(
-                "Task RSSM adaptation requires complete task experts"
-            )
-        if num_task_experts > 1 and residual_correction != "none":
-            raise ValueError(
-                "Task-routed RSSM experts do not compose with residual corrections"
-            )
         self.ls = ls
         self.h_dim = h_dim
         self.num_task_experts = num_task_experts
-        self.full_task_experts = full_task_experts
-        self.full_task_rssm_experts = full_task_rssm_experts
-        self.task_banked_image_encoder = task_banked_image_encoder
         self.task_projected_image_encoder = task_projected_image_encoder
         self.task_symmetric_image_projectors = bool(
             task_symmetric_image_projectors
-        )
-        self.task_lora_recurrent_rank = task_lora_recurrent_rank
-        self.task_lora_representation_rank = task_lora_representation_rank
-        self.task_lora_transition_rank = task_lora_transition_rank
-        self.task_lora_enabled = any(rank > 0 for rank in task_lora_ranks)
-        self.task_recurrent_output_adapter_features = (
-            task_recurrent_output_adapter_features
-        )
-        self.task_recurrent_output_adapter_enabled = (
-            task_recurrent_output_adapter_features > 0
         )
         self.task_mechanism_bank_enabled = bool(task_mechanism_bank)
         self.task_mechanism_reuse = bool(task_mechanism_reuse)
@@ -323,7 +182,6 @@ class Rssm(nn.Module):
         self.task_mechanism_residual_scale = task_mechanism_residual_scale
         self.task_mechanism_num_atoms = task_mechanism_num_atoms
         self.task_mechanism_parameterization = task_mechanism_parameterization
-        self.task_mechanism_low_rank = int(task_mechanism_low_rank)
         self.task_symmetric_mechanisms = bool(task_symmetric_mechanisms)
 
         self.recurrent = Recurrent(
@@ -332,67 +190,31 @@ class Rssm(nn.Module):
             h_dim,
             mlp_features,
             mlp_layers if not wto else 0,
-            residual_correction=residual_correction,
-            residual_bottleneck_features=residual_bottleneck_features,
-            residual_grid_size=residual_grid_size,
-            residual_input_min=residual_input_min,
-            residual_input_max=residual_input_max,
-            residual_rms_norm_epsilon=residual_rms_norm_epsilon,
-            residual_alpha=residual_alpha,
-            residual_input_mode=residual_input_mode,
-            residual_consolidation=residual_consolidation,
-        )
+            )
         if self.task_mechanism_bank_enabled:
             self.recurrent_experts = nn.ModuleList()
-        elif self.task_recurrent_output_adapter_enabled:
-            from clworldmodel.models.rssm_lora import TaskRecurrentOutputRoute
-
-            self.recurrent_experts = nn.ModuleList(
-                TaskRecurrentOutputRoute(
-                    self.recurrent,
-                    output_features=h_dim,
-                    bottleneck_features=task_recurrent_output_adapter_features,
-                )
-                for _ in range(num_task_experts - 1)
-            )
         else:
             self.recurrent_experts = nn.ModuleList(
                 copy.deepcopy(self.recurrent) for _ in range(num_task_experts - 1)
             )
         if image_embedder is not None:
             self.image_embedder = image_embedder
-        elif observation_encoder == "cnn":
-            self.image_embedder = Encoder(img_channels, cnn_depth)
-        elif observation_encoder == "dinov3_vits16":
-            from clworldmodel.models.frozen_dinov3 import FrozenDinoV3Encoder
-
-            self.image_embedder = FrozenDinoV3Encoder(
-                dinov3_model_path,
-                input_size=dinov3_input_size,
-                max_batch_size=dinov3_max_batch_size,
-                feature_mode=dinov3_feature_mode,
-                patch_pool_size=dinov3_patch_pool_size,
-                patch_feature_dim=dinov3_patch_feature_dim,
-                patch_projection=dinov3_patch_projection,
-                patch_projection_seed=dinov3_patch_projection_seed,
-                compute_dtype=compute_dtype,
-            )
         else:
-            raise ValueError(f"Unknown observation encoder: {observation_encoder!r}")
+            self.image_embedder = Encoder(img_channels, cnn_depth)
         if not hasattr(self.image_embedder, "output_size"):
             raise TypeError("Image embedder must declare output_size")
         self.image_embedder_experts = nn.ModuleList(
             copy.deepcopy(self.image_embedder)
-            for _ in range(num_task_experts - 1 if task_banked_image_encoder else 0)
+            for _ in range((0))
         )
         self.image_projectors = nn.ModuleList()
         self.image_projector_identity = nn.Identity()
         if task_projected_image_encoder:
-            if observation_encoder != "cnn" or self.image_embedder.output_size != 4096:
+            if (self.image_embedder.output_size != 4096):
                 raise ValueError(
                     "The first projected-encoder protocol requires 4096-wide CNN features"
                 )
-            from clworldmodel.models.rssm_lora import SpatialFeatureProjector
+            from clworldmodel.models.projector import SpatialFeatureProjector
 
             self.image_projectors.extend(
                 SpatialFeatureProjector(
@@ -404,28 +226,8 @@ class Rssm(nn.Module):
                     else num_task_experts - 1
                 )
             )
-        self.observation_adapter_kind = dinov3_patch_adapter
         self.observation_adapter: nn.Module = nn.Identity()
         self.observation_embedding_size = self.image_embedder.output_size
-        if dinov3_patch_adapter == "conv_3x3_stride2":
-            from clworldmodel.models.dinov3_adapter import DinoPatchConvAdapter
-
-            adapter = DinoPatchConvAdapter(
-                patch_grid_size=dinov3_patch_pool_size,
-                in_channels=dinov3_patch_feature_dim,
-                out_channels=64,
-            )
-            if adapter.input_size != self.image_embedder.output_size:
-                raise ValueError(
-                    "DINO patch adapter input does not match the image embedder: "
-                    f"{adapter.input_size} != {self.image_embedder.output_size}"
-                )
-            self.observation_adapter = adapter
-            self.observation_embedding_size = adapter.output_size
-        elif dinov3_patch_adapter != "none":
-            raise ValueError(
-                f"Unknown DINOv3 patch adapter: {dinov3_patch_adapter!r}"
-            )
         self.representation = Representation(
             ls,
             self.observation_embedding_size,
@@ -433,19 +235,8 @@ class Rssm(nn.Module):
             mlp_features,
             mlp_layers if not wto else 1,
             uniform=0.01,
-            residual_correction=residual_correction,
-            residual_bottleneck_features=residual_bottleneck_features,
-            residual_grid_size=residual_grid_size,
-            residual_input_min=residual_input_min,
-            residual_input_max=residual_input_max,
-            residual_rms_norm_epsilon=residual_rms_norm_epsilon,
-            residual_alpha=residual_alpha,
-            residual_input_mode=residual_input_mode,
-            residual_consolidation=residual_consolidation,
-        )
+            )
         representation_expert_count = 0
-        if full_task_rssm_experts and not self.task_mechanism_bank_enabled:
-            representation_expert_count = num_task_experts - 1
         self.representation_experts = nn.ModuleList(
             copy.deepcopy(self.representation)
             for _ in range(representation_expert_count)
@@ -456,16 +247,7 @@ class Rssm(nn.Module):
             mlp_features,
             mlp_layers,
             uniform=0.01,
-            residual_correction=residual_correction,
-            residual_bottleneck_features=residual_bottleneck_features,
-            residual_grid_size=residual_grid_size,
-            residual_input_min=residual_input_min,
-            residual_input_max=residual_input_max,
-            residual_rms_norm_epsilon=residual_rms_norm_epsilon,
-            residual_alpha=residual_alpha,
-            residual_input_mode=residual_input_mode,
-            residual_consolidation=residual_consolidation,
-        )
+            )
         transition_expert_count = (
             0 if self.task_mechanism_bank_enabled else num_task_experts - 1
         )
@@ -488,10 +270,8 @@ class Rssm(nn.Module):
                     residual_scale=task_mechanism_residual_scale,
                     reuse_enabled=task_mechanism_reuse,
                     num_atoms=task_mechanism_num_atoms,
-                    include_task0=self.task_symmetric_mechanisms,
                     parameterization=task_mechanism_parameterization,
-                    low_rank_rank=task_mechanism_low_rank,
-                )
+                    )
                 self.representation_mechanism_bank = MechanismBank(
                     num_tasks=num_task_experts,
                     in_features=self.observation_embedding_size + h_dim,
@@ -500,10 +280,8 @@ class Rssm(nn.Module):
                     residual_scale=task_mechanism_residual_scale,
                     reuse_enabled=task_mechanism_reuse,
                     num_atoms=task_mechanism_num_atoms,
-                    include_task0=self.task_symmetric_mechanisms,
                     parameterization=task_mechanism_parameterization,
-                    low_rank_rank=task_mechanism_low_rank,
-                )
+                    )
                 self.transition_mechanism_bank = MechanismBank(
                     num_tasks=num_task_experts,
                     in_features=h_dim,
@@ -512,10 +290,8 @@ class Rssm(nn.Module):
                     residual_scale=task_mechanism_residual_scale,
                     reuse_enabled=task_mechanism_reuse,
                     num_atoms=task_mechanism_num_atoms,
-                    include_task0=self.task_symmetric_mechanisms,
                     parameterization=task_mechanism_parameterization,
-                    low_rank_rank=task_mechanism_low_rank,
-                )
+                    )
             self.task_mechanism_reports = {
                 "recurrent": self.recurrent_mechanism_bank.parameter_report(),
                 "representation": (
@@ -524,60 +300,7 @@ class Rssm(nn.Module):
                 "transition": self.transition_mechanism_bank.parameter_report(),
             }
         self.task_lora_reports: list[dict[str, object]] = []
-        if task_rssm_adaptation_enabled:
-            from clworldmodel.models.rssm_lora import (
-                install_affine_lora,
-                reset_affine_lora_from,
-            )
 
-            for task_index in range(1, num_task_experts):
-                report: dict[str, object] = {"task_index": task_index}
-                if task_lora_recurrent_rank:
-                    report["recurrent"] = install_affine_lora(
-                        self.recurrent_for(task_index),
-                        task_lora_recurrent_rank,
-                    )
-                    reset_affine_lora_from(
-                        self.recurrent_for(task_index), self.recurrent
-                    )
-                elif self.task_recurrent_output_adapter_enabled:
-                    route = self.recurrent_for(task_index)
-                    report["recurrent"] = route.parameter_report()
-                if task_lora_representation_rank:
-                    report["representation"] = install_affine_lora(
-                        self.representation_for(task_index),
-                        task_lora_representation_rank,
-                    )
-                    reset_affine_lora_from(
-                        self.representation_for(task_index), self.representation
-                    )
-                if task_lora_transition_rank:
-                    report["transition"] = install_affine_lora(
-                        self.transition_for(task_index),
-                        task_lora_transition_rank,
-                    )
-                    reset_affine_lora_from(
-                        self.transition_for(task_index), self.transition
-                    )
-                self.task_lora_reports.append(report)
-
-    def freeze_shared_core(self) -> None:
-        """Freeze base RSSM functions while leaving residual adapters plastic."""
-        self.image_embedder.requires_grad_(False)
-        for image_embedder in self.image_embedder_experts:
-            image_embedder.requires_grad_(False)
-        self.observation_adapter.requires_grad_(False)
-        for projector in self.image_projectors:
-            projector.requires_grad_(False)
-        self.recurrent.freeze_shared_core()
-        for recurrent in self.recurrent_experts:
-            recurrent.freeze_shared_core()
-        self.representation.freeze_shared_core()
-        for representation in self.representation_experts:
-            representation.freeze_shared_core()
-        self.transition.freeze_shared_core()
-        for transition in self.transition_experts:
-            transition.freeze_shared_core()
 
     def _task_index(self, task_id: Optional[int | torch.Tensor]) -> int:
         if task_id is None:
@@ -612,8 +335,7 @@ class Rssm(nn.Module):
         self, task_id: Optional[int | torch.Tensor]
     ) -> nn.Module:
         task_index = self._task_index(task_id)
-        if task_index == 0 or not self.task_banked_image_encoder:
-            return self.image_embedder
+        return self.image_embedder
         return self.image_embedder_experts[task_index - 1]
 
     def image_projector_for(
@@ -644,8 +366,7 @@ class Rssm(nn.Module):
         task_index = self._task_index(task_id)
         if self.task_mechanism_bank_enabled:
             return self.representation
-        if task_index == 0 or not self.full_task_experts:
-            return self.representation
+        return self.representation
         return self.representation_experts[task_index - 1]
 
     def recurrent_step(
@@ -727,42 +448,12 @@ class Rssm(nn.Module):
                     else target_task_id - 1
                 )
                 self.image_projectors[projector_index].reset_parameters()
-        elif (
-            self.task_lora_enabled or self.task_recurrent_output_adapter_enabled
-        ) and target_task_id > 0:
-            from clworldmodel.models.rssm_lora import reset_affine_lora_from
-
-            if self.task_recurrent_output_adapter_enabled:
-                self.recurrent_for(target_task_id).reset_delta()
-            elif self.task_lora_recurrent_rank:
-                reset_affine_lora_from(
-                    self.recurrent_for(target_task_id),
-                    self.recurrent_for(source_task_id),
-                )
-            if self.task_lora_transition_rank:
-                reset_affine_lora_from(
-                    self.transition_for(target_task_id),
-                    self.transition_for(source_task_id),
-                )
-            if self.task_lora_representation_rank:
-                reset_affine_lora_from(
-                    self.representation_for(target_task_id),
-                    self.representation_for(source_task_id),
-                )
         else:
             self.recurrent_for(target_task_id).load_state_dict(
                 self.recurrent_for(source_task_id).state_dict()
             )
             self.transition_for(target_task_id).load_state_dict(
                 self.transition_for(source_task_id).state_dict()
-            )
-            if self.full_task_experts:
-                self.representation_for(target_task_id).load_state_dict(
-                    self.representation_for(source_task_id).state_dict()
-                )
-        if self.task_banked_image_encoder:
-            self.image_embedder_for(target_task_id).load_state_dict(
-                self.image_embedder_for(source_task_id).state_dict()
             )
 
     def __call__(
@@ -1048,22 +739,9 @@ class Recurrent(nn.Module):
         h_dim: int,
         mlp_features: int,
         mlp_layers: int,
-        *,
-        residual_correction: str = "none",
-        residual_bottleneck_features: int = 64,
-        residual_grid_size: int = 8,
-        residual_input_min: float = -2.0,
-        residual_input_max: float = 2.0,
-        residual_rms_norm_epsilon: float = 1e-4,
-        residual_alpha: float = 0.1,
-        residual_input_mode: str = "base_output",
-        residual_consolidation: str = "none",
-    ) -> None:
+        ) -> None:
         super().__init__()
-        if residual_input_mode not in {"base_output", "module_input"}:
-            raise ValueError(f"Unknown residual input mode: {residual_input_mode!r}")
         z_dim = ls[0] * ls[1]
-        self.residual_input_mode = residual_input_mode
         self.za_fcs = nn.Sequential(
             *get_mlp_layers(
                 z_dim + a_dim,
@@ -1073,51 +751,15 @@ class Recurrent(nn.Module):
             )
         )
         self.rnn = nn.GRUCell(mlp_features if mlp_layers > 0 else z_dim + a_dim, h_dim)
-        if residual_correction == "none":
-            self.residual = None
-        else:
-            from clworldmodel.models.residual_corrections import (
-                build_residual_correction,
-            )
-
-            # Keep every downstream ARROW parameter identical under a shared seed.
-            with torch.random.fork_rng(devices=[]):
-                self.residual = build_residual_correction(
-                    residual_correction,
-                    (
-                        h_dim
-                        if residual_input_mode == "base_output"
-                        else z_dim + a_dim + h_dim
-                    ),
-                    h_dim,
-                    bottleneck_features=residual_bottleneck_features,
-                    grid_min=residual_input_min,
-                    grid_max=residual_input_max,
-                    num_grids=residual_grid_size,
-                    rms_norm_epsilon=residual_rms_norm_epsilon,
-                    alpha=residual_alpha,
-                    consolidation_enabled=residual_consolidation != "none",
-                )
+        pass
 
     def forward(self, prev_z: LatentT, prev_a: ActionT, prev_h: HiddenT) -> HiddenT:
         assert len(prev_z.shape) == 3  # [ N 32 32 ]
         assert len(prev_a.shape) == 2  # [ N n_acts ]
         za = torch.cat((prev_z.flatten(1), prev_a), dim=1)
         hidden = self.rnn(self.za_fcs(za), prev_h)
-        if self.residual is not None:
-            residual_input = (
-                hidden
-                if self.residual_input_mode == "base_output"
-                else torch.cat((za, prev_h), dim=-1)
-            )
-            hidden = hidden + self.residual(residual_input)
         return hidden
 
-    def freeze_shared_core(self) -> None:
-        self.za_fcs.requires_grad_(False)
-        self.rnn.requires_grad_(False)
-        if self.residual is not None:
-            self.residual.requires_grad_(True)
 
 
 class Representation(nn.Module):
@@ -1132,22 +774,10 @@ class Representation(nn.Module):
         mlp_features: int,
         mlp_layers: int,
         uniform: float = 0,
-        residual_correction: str = "none",
-        residual_bottleneck_features: int = 64,
-        residual_grid_size: int = 8,
-        residual_input_min: float = -2.0,
-        residual_input_max: float = 2.0,
-        residual_rms_norm_epsilon: float = 1e-4,
-        residual_alpha: float = 0.1,
-        residual_input_mode: str = "base_output",
-        residual_consolidation: str = "none",
-    ) -> None:
+        ) -> None:
         super().__init__()
-        if residual_input_mode not in {"base_output", "module_input"}:
-            raise ValueError(f"Unknown residual input mode: {residual_input_mode!r}")
         self.ls = ls
         self.uniform = uniform
-        self.residual_input_mode = residual_input_mode
         n_dis, n_cls = ls
         self.eh_to_inter = nn.Sequential(
             *get_mlp_layers(
@@ -1167,30 +797,7 @@ class Representation(nn.Module):
             nn.Unflatten(-1, (n_dis, n_cls)),
             nn.LogSoftmax(-1),
         )
-        if residual_correction == "none":
-            self.residual = None
-        else:
-            from clworldmodel.models.residual_corrections import (
-                build_residual_correction,
-            )
-
-            with torch.random.fork_rng(devices=[]):
-                self.residual = build_residual_correction(
-                    residual_correction,
-                    (
-                        n_dis * n_cls
-                        if residual_input_mode == "base_output"
-                        else embed_dim + h_dim
-                    ),
-                    n_dis * n_cls,
-                    bottleneck_features=residual_bottleneck_features,
-                    grid_min=residual_input_min,
-                    grid_max=residual_input_max,
-                    num_grids=residual_grid_size,
-                    rms_norm_epsilon=residual_rms_norm_epsilon,
-                    alpha=residual_alpha,
-                    consolidation_enabled=residual_consolidation != "none",
-                )
+        pass
 
     def __call__(self, e: EmbedT, h: HiddenT) -> LatentLogDistT:
         return super().__call__(e, h)
@@ -1205,9 +812,6 @@ class Representation(nn.Module):
         x1 = self.eh_to_inter(eh)
         if self.e_to_inter is not None:
             x1 = x1 + self.e_to_inter(e)
-        if self.residual is not None:
-            residual_input = x1 if self.residual_input_mode == "base_output" else eh
-            x1 = x1 + self.residual(residual_input)
         return x1
 
     def distribution_from_logits(self, logits: torch.Tensor) -> LatentLogDistT:
@@ -1220,13 +824,6 @@ class Representation(nn.Module):
             return ((1 - self.uniform) * probs + self.uniform / self.ls[1]).log()
         return post_log_probs
 
-    def freeze_shared_core(self) -> None:
-        self.eh_to_inter.requires_grad_(False)
-        if self.e_to_inter is not None:
-            self.e_to_inter.requires_grad_(False)
-        self.inter_to_z_dist.requires_grad_(False)
-        if self.residual is not None:
-            self.residual.requires_grad_(True)
 
 
 class Transition(nn.Module):
@@ -1237,22 +834,10 @@ class Transition(nn.Module):
         mlp_features: int,
         mlp_layers: int,
         uniform: float = 0,
-        residual_correction: str = "none",
-        residual_bottleneck_features: int = 64,
-        residual_grid_size: int = 8,
-        residual_input_min: float = -2.0,
-        residual_input_max: float = 2.0,
-        residual_rms_norm_epsilon: float = 1e-4,
-        residual_alpha: float = 0.1,
-        residual_input_mode: str = "base_output",
-        residual_consolidation: str = "none",
-    ) -> None:
+        ) -> None:
         super().__init__()
-        if residual_input_mode not in {"base_output", "module_input"}:
-            raise ValueError(f"Unknown residual input mode: {residual_input_mode!r}")
         self.ls = ls
         self.uniform = uniform
-        self.residual_input_mode = residual_input_mode
 
         n_dis, n_cls = ls
         self.h_to_z_prior = nn.Sequential(
@@ -1267,52 +852,17 @@ class Transition(nn.Module):
             nn.LogSoftmax(-1),
         )
         self._logit_layer_count = len(self.h_to_z_prior) - 2
-        if residual_correction == "none":
-            self.residual = None
-        else:
-            from clworldmodel.models.residual_corrections import (
-                build_residual_correction,
-            )
-
-            n_logits = n_dis * n_cls
-            with torch.random.fork_rng(devices=[]):
-                self.residual = build_residual_correction(
-                    residual_correction,
-                    n_logits if residual_input_mode == "base_output" else h_dim,
-                    n_logits,
-                    bottleneck_features=residual_bottleneck_features,
-                    grid_min=residual_input_min,
-                    grid_max=residual_input_max,
-                    num_grids=residual_grid_size,
-                    rms_norm_epsilon=residual_rms_norm_epsilon,
-                    alpha=residual_alpha,
-                    consolidation_enabled=residual_consolidation != "none",
-                )
+        pass
 
     def forward(self, h: HiddenT) -> LatentLogDistT:
-        if self.residual is None:
-            return self.distribution_from_logits(self.logits(h))
+        return self.distribution_from_logits(self.logits(h))
         prior_log_probs = self.h_to_z_prior(h)
-        if self.residual is not None:
-            prior_logits = prior_log_probs.flatten(-2)
-            residual_input = (
-                prior_logits if self.residual_input_mode == "base_output" else h
-            )
-            prior_logits = prior_logits + self.residual(residual_input)
-            prior_log_probs = torch.log_softmax(
-                prior_logits.unflatten(-1, self.ls), dim=-1
-            )
         if self.uniform:
             probs = prior_log_probs.exp()
             return ((1 - self.uniform) * probs + self.uniform / self.ls[1]).log()
         return prior_log_probs
-
     def logits(self, h: HiddenT) -> torch.Tensor:
         """Return flat pre-categorical prior logits for residual composition."""
-        if self.residual is not None:
-            raise RuntimeError(
-                "Raw prior logits are unavailable with legacy residual corrections"
-            )
         logits = h
         for index in range(self._logit_layer_count):
             logits = self.h_to_z_prior[index](logits)
@@ -1326,8 +876,3 @@ class Transition(nn.Module):
             probs = prior_log_probs.exp()
             return ((1 - self.uniform) * probs + self.uniform / self.ls[1]).log()
         return prior_log_probs
-
-    def freeze_shared_core(self) -> None:
-        self.h_to_z_prior.requires_grad_(False)
-        if self.residual is not None:
-            self.residual.requires_grad_(True)

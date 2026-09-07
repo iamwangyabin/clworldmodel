@@ -36,7 +36,6 @@ if torch is not None:
         PROTOCOL,
         SHARED_DISTILLED_HEADS_PROFILE,
         SHARED_DISTILLED_HEADS_ORIGINAL_SIX_PROTOCOL,
-        SHARED_FASTKAN_STABLE_BEHAVIOR,
         TASK_ORDERS,
         _behavior_update_budget,
         _budget_manifest,
@@ -335,131 +334,6 @@ class EvolvingAtomicRssmLauncherTests(unittest.TestCase):
                 ORIGINAL_SIX_MINIMUM_FREE_BYTES,
             )
 
-    def test_shared_down_fastkan_is_one_persistent_stable_behavior_pair(self) -> None:
-        data = _resolved_config(
-            self._source(),
-            task_order="mspacman-boxing-crazyclimber",
-            behavior_profile=SHARED_FASTKAN_STABLE_BEHAVIOR,
-        )
-        config = Config.from_dict(data)
-
-        self.assertEqual(
-            config.continual_method,
-            "evolving_atomic_rssm_shared_fastkan_arrow",
-        )
-        self.assertTrue(config.uses_evolving_atomic_rssm)
-        self.assertTrue(config.uses_shared_actor)
-        self.assertTrue(config.uses_replay_rehearsed_shared_behavior)
-        self.assertFalse(config.task_private_actor_critic)
-        self.assertEqual(
-            config.task_mechanism_parameterization,
-            "shared_frozen_down_film",
-        )
-        self.assertEqual(config.actor_network, "fast_kan_ac_stable")
-        self.assertEqual(config.fastkan_hidden_features, 53)
-        self.assertEqual(config.ac_optimizer, "laprop")
-        self.assertEqual(config.ac_lr, 4e-5)
-        self.assertEqual(config.ac_replay_critic_loss_scale, 0.3)
-        self.assertTrue(config.ac_use_slow_critic_targets)
-        self.assertTrue(config.ac_corrected_imagination_bootstrap)
-        self.assertEqual(
-            config.evolving_shared_behavior_current_task_fraction, 0.75
-        )
-        self.assertFalse(config.shared_actor_imagination_distillation)
-
-        data["evolving_shared_behavior_current_task_fraction"] = 0.5
-        with self.assertRaisesRegex(ValueError, "fixed optimizer, replay, interface"):
-            Config.from_dict(data)
-
-        data = _resolved_config(
-            self._source(),
-            task_order="mspacman-boxing-crazyclimber",
-            behavior_profile=SHARED_FASTKAN_STABLE_BEHAVIOR,
-        )
-        data["task_mechanism_parameterization"] = "dense_private"
-        with self.assertRaisesRegex(ValueError, "requires mechanism parameterization"):
-            Config.from_dict(data)
-
-        legacy = _resolved_config(
-            self._source(),
-            task_order="mspacman-boxing-crazyclimber",
-        )
-        legacy["task_mechanism_parameterization"] = "shared_frozen_down_film"
-        with self.assertRaisesRegex(ValueError, "requires mechanism parameterization"):
-            Config.from_dict(legacy)
-
-    def test_shared_behavior_rehearsal_preserves_the_216k_update_budget(self) -> None:
-        data = _resolved_config(
-            self._source(),
-            task_order="mspacman-boxing-crazyclimber",
-            behavior_profile=SHARED_FASTKAN_STABLE_BEHAVIOR,
-        )
-
-        self.assertEqual(
-            _behavior_update_budget(data),
-            {"0": 99_000, "1": 63_000, "2": 54_000},
-        )
-        budget = _budget_manifest(data)
-        self.assertEqual(budget["actor_critic_updates"], 216_000)
-        self.assertEqual(
-            sum(budget["actor_critic_updates_by_task_route"].values()),
-            216_000,
-        )
-        self.assertFalse(
-            budget["shared_behavior_rehearsal_adds_optimizer_steps"]
-        )
-
-    def test_shared_fastkan_parameter_ledger_combines_shared_down_and_behavior(self) -> None:
-        data = _resolved_config(
-            self._source(),
-            task_order="mspacman-boxing-crazyclimber",
-            behavior_profile=SHARED_FASTKAN_STABLE_BEHAVIOR,
-        )
-        parameters = _parameter_manifest(data)
-
-        self.assertEqual(parameters["world_model_parameters"], 42_675_539)
-        self.assertEqual(
-            parameters["mechanism_parameterization"],
-            "shared_frozen_down_film",
-        )
-        self.assertEqual(parameters["shared_frozen_down_parameters"], 2_753_792)
-        self.assertEqual(parameters["behavior_parameters"], 1_700_670)
-        self.assertEqual(parameters["online_parameters"], 44_376_209)
-        self.assertEqual(
-            parameters["comparison_to_matched_world_model_private_mlp"][
-                "difference"
-            ],
-            -3_447_285,
-        )
-        self.assertEqual(
-            parameters["comparison_to_dense_evolving_v2_private_mlp"][
-                "difference"
-            ],
-            -8_947_189,
-        )
-        self.assertEqual(
-            parameters["comparison_to_arrow_50"]["difference"],
-            23_161_371,
-        )
-        self.assertEqual(
-            parameters["per_task_world_model_additions"],
-            {"0": 1_099_200, "1": 9_661_841, "2": 9_661_853},
-        )
-        self.assertEqual(
-            parameters["training_only_behavior_copies"][
-                "peak_behavior_parameters_excluding_optimizer"
-            ],
-            3_401_340,
-        )
-
-    def test_shared_fastkan_rejects_relabeling_the_v1_world_model(self) -> None:
-        with self.assertRaisesRegex(ValueError, "inherits the fixed_v2"):
-            _resolved_config(
-                self._source(),
-                task_order="mspacman-boxing-crazyclimber",
-                task0_profile="fixed_v1",
-                behavior_profile=SHARED_FASTKAN_STABLE_BEHAVIOR,
-            )
 
     def test_shared_distilled_heads_change_only_prediction_head_ownership(self) -> None:
         dense = _resolved_config(
@@ -535,22 +409,6 @@ class EvolvingAtomicRssmLauncherTests(unittest.TestCase):
             8_562_629,
         )
 
-    def test_shared_distilled_heads_reject_shared_behavior_or_compressed_qfp(self) -> None:
-        with self.assertRaisesRegex(ValueError, "private MLP Actor-Critic"):
-            _resolved_config(
-                self._source(),
-                task_order="mspacman-boxing-crazyclimber",
-                behavior_profile=SHARED_FASTKAN_STABLE_BEHAVIOR,
-                prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
-            )
-
-        with self.assertRaisesRegex(ValueError, "dense matched_512"):
-            _resolved_config(
-                self._source(),
-                task_order="arrow-original-six",
-                mechanism_profile=COMPACT_MECHANISM_PROFILE,
-                prediction_head_profile=SHARED_DISTILLED_HEADS_PROFILE,
-            )
 
     def test_command_is_from_scratch_single_gpu_and_uncompiled(self) -> None:
         command = _training_command(

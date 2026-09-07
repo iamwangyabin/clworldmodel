@@ -1,5 +1,10 @@
 # ARROW-FastKANAC-StableTargets-50 continual Atari protocol
 
+> Historical protocol: execution code retired by user decision on 2026-09-07
+> (Decision 0058). Use the recorded run revision; these commands are not
+> supported by the current checkout. Protocol semantics and evidence below
+> are preserved, not redefined.
+
 ## Status and question
 
 This is a seed-0, six-task continual-learning pilot. The preceding 90-epoch

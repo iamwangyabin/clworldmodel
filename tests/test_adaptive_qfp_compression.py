@@ -18,6 +18,7 @@ VENDORED_ATARI = (
 sys.path.insert(0, str(SCRIPTS))
 from run_evolving_atomic_rssm import (  # noqa: E402
     ADAPTIVE_QFP_COMPRESSION_PROTOCOL,
+    PRIVATE_PREDICTION_HEADS_PROFILE,
     SHARED_DISTILLED_HEADS_PROFILE,
     _budget_manifest,
     _parameter_manifest,
@@ -131,6 +132,7 @@ class AdaptiveQfpLauncherStaticTests(unittest.TestCase):
             _resolved_config(
                 _source_dict(),
                 task_order="arrow-original-six",
+                prediction_head_profile=PRIVATE_PREDICTION_HEADS_PROFILE,
                 adaptive_qfp_compression=True,
             )
 
