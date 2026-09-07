@@ -222,6 +222,7 @@ def main() -> int:
         args.method_profile,
     )
     world_model = _world_model(config, device)
+    train._world_model_parameter_accounting(world_model)
     world_model.activate_task_expert(0)
     boundary_teacher = copy.deepcopy(world_model).eval()
     boundary_teacher.requires_grad_(False)
@@ -478,6 +479,7 @@ def main() -> int:
             "route": _optimizer_step(route_optimizer),
         },
         "old_private_gradients_are_none": True,
+        "world_model_parameter_accounting": train._world_model_parameter_accounting(world_model),
         "shared_behavior_route_schedule": (
             [0, 1] if behavior_metrics is not None else None
         ),

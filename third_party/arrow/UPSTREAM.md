@@ -28,6 +28,14 @@ through config validation and stops before CUDA initialization, covering both
 omitted and explicit MLP arguments. The launch manifest also now consistently
 labels adaptive compression selection as completed-task oracle validation.
 
+The first two-seed startup attempts then exposed stale parameter-report
+consumers: the retained bank always includes Task 0, but accounting still read
+the removed `include_task0` flag and called retired prediction adapters. Index
+the retained per-task bank directly and report zero private prediction-adapter
+parameters. Dense/compact module-count tests and the CUDA smoke now cover this
+startup report. No parameters, update rule, replay semantics or budgets change;
+the failed attempts stopped before environment interaction or optimizer updates.
+
 Decision 0058 retires FastKAN StableTargets and F/D-AutoKAN at the user's
 request. Atari's typed config and CLI reject those selectors; the FastKAN
 constructor arguments, branches, preset validation and shared-FastKAN training

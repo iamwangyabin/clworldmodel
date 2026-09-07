@@ -1114,18 +1114,11 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
         }
         mechanism_parameters_per_later_task = {
             str(task_id): sum(
-                report["mechanism_parameters_per_task"][
-                    task_id if report["include_task0"] else task_id - 1
-                ]
-                + report["route_parameters_per_later_task"][
-                    task_id if report["include_task0"] else task_id - 1
-                ]
+                report["mechanism_parameters_per_task"][task_id]
+                + report["route_parameters_per_later_task"][task_id]
                 for report in mechanism_banks.values()
             )
-            for task_id in range(
-                0 if wm.rssm.task_symmetric_mechanisms else 1,
-                wm.rssm.num_task_experts,
-            )
+            for task_id in range(wm.rssm.num_task_experts)
         }
     return {
         "schema_version": 1,
@@ -1178,13 +1171,7 @@ def _world_model_parameter_accounting(wm: WorldModel) -> dict:
             else "single_task"),
         "task_shared_prediction_heads": wm.task_shared_prediction_heads,
         "prediction_adapter_parameters_per_task": {
-            str(task_id): sum(
-                parameter.numel()
-                for head_name in ("observation", "reward", "continue")
-                for adapter in [wm.prediction_adapter_for(head_name, task_id)]
-                if adapter is not None
-                for parameter in adapter.parameters()
-            )
+            str(task_id): 0
             for task_id in range(wm.rssm.num_task_experts)
         },
         "reward_head": _parameter_accounting(wm.reward_fc),

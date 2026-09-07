@@ -145,6 +145,27 @@ class DAutorouteLauncherTests(unittest.TestCase):
 
 @unittest.skipUnless(vendor_available, "requires pinned Atari imports, no ROMs")
 class DAutorouteIntegrationTests(unittest.TestCase):
+    def test_parameter_accounting_covers_dense_and_compact_retained_models(self):
+        from retained_method_support import retained_world_model
+
+        wm = retained_world_model()
+        for compact in (False, True):
+            if compact:
+                train._structured_adaptive_qfp_candidate(
+                    wm=wm, dense_teacher=copy.deepcopy(wm), task_id=1, fraction=.5,
+                )
+            report = train._world_model_parameter_accounting(wm)
+            json.dumps(report)
+            self.assertEqual(report["world_model"]["parameters"],
+                             sum(p.numel() for p in wm.parameters()))
+            self.assertEqual(report["prediction_adapter_parameters_per_task"],
+                             {str(k): 0 for k in range(3)})
+            self.assertEqual(
+                sum(report["rssm_task_mechanism_parameters_per_later_task"].values()),
+                sum(p.numel() for bank in wm.rssm.mechanism_banks().values()
+                    for p in bank.parameters()),
+            )
+
     def test_real_trainer_cli_preserves_config_before_cuda_initialization(self):
         from clworldmodel.distributed import DistributedContext
 

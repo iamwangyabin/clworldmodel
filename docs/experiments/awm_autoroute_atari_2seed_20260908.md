@@ -57,6 +57,15 @@ fixture and numerical tolerances remain unchanged. The initial failed
 preflight is preserved. This is a platform-specific fixed-trace reference,
 not a new performance measurement or a change to training precision.
 
+Initial pilot attempts at `929efce7f552686d9972bcbdc3bd5844e47941e2` exited
+during startup parameter reporting, before any environment interaction or
+optimizer updates: `KeyError: include_task0`. Their outputs and exit records
+are preserved, not overwritten. The accounting consumer also retained a call
+to deleted prediction adapters. Repair only those reporting contracts and
+cover dense/compact reports in unit tests and the target-CUDA smoke before
+starting replacement attempts. Do not mislabel these as learned checkpoints
+or resumed training.
+
 Monitor both new runs alongside the old campaign, but grant automatic diagnosis
 and safe recovery only to these two new runs. Preserve failed attempts and all
 raw metrics. Check real process identity, logs, CPU progress, GPU activity,
