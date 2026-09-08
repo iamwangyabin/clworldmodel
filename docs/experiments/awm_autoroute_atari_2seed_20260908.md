@@ -1,6 +1,9 @@
 # AWM-AutoRoute Atari two-seed pilot (2026-09-08)
 
-## Predeclared scope
+> Current execution uses **v4** after the user-requested state-isolation fix.
+> The v3 account below is historical; see the final section for the fresh restarts.
+
+## Original predeclared scope (v3, historical)
 
 The user requests two **new, from-scratch** AWM-AutoRoute Atari pilots:
 seed index 0 (123456789) on 4090-1 and seed index 1 (1337) on 4090-2.
@@ -131,3 +134,42 @@ continuation with fresh environment resets, not bitwise mid-episode recovery.
 Never hot-edit the still-running other seed's source tree. Runtime smoke and
 deployment outcomes belong in the ignored campaign manifest, not an advance
 claim that a repaired run has completed.
+
+
+## User-requested v4 state-isolation correction and fresh restarts
+
+On 2026-09-08 the user requested correcting AutoRoute's extra policy-state
+reset and restarting these same two seeds from scratch. See Decision 0063 and
+[protocol v4](../protocols/awm_autoroute_v4_atari.md). Only actual expert changes
+substitute candidate history; a new scoring window on the same expert leaves
+AWM's policy state and previous action unchanged. Routing score math and all
+training/evaluation budgets remain fixed.
+
+The current v3 attempts were intentionally stopped, not classified as new
+crashes: S0 `atari_s0.resume1` had 185 complete epochs and an incomplete epoch
+185; S1 `atari_s1.resume2` had 97 complete epochs and an incomplete epoch 97.
+Their full logs, metrics, checkpoints and provenance remain historical; no
+partial-epoch optimizer count is invented. On the space-constrained S1 host,
+the stopped v3 working Replay arrays were losslessly archived and verified
+against per-file SHA256, then backed up locally and checked against archive
+SHA256 before removing only the redundant uncompressed copies. Restore markers
+record the paths/checksums; checkpoint-owned Replay and the old ten runs were
+not modified. The 48 GiB launch preflight was not lowered.
+
+Both fresh pilots execute commit
+`12d317eaf98eaebeb462894894b6fc83bb5e7041`, pushed and fetched with zero
+upstream divergence before launch, in independent clean checkouts. The original
+v3 sources were not edited. Current attempt IDs are `atari_s0.v4.pilot1` and
+`atari_s1.v4.pilot1`; the same predeclared seeds and hosts are retained.
+No resume argument, inherited training prefix, old weights or old Replay is
+used. Both hosts passed all 75 targeted tests and the production-width BF16
+CUDA smoke, including exact same-route reset state/action/RNG parity, WM/AC
+optimizer updates and adaptive-compression topology restoration. Historical
+suite limitations remain as recorded in Decision 0063.
+
+Deployment manifests and live acceptance/monitor state record actual PIDs,
+progress, GPU UUIDs, source/config hashes and resources. The monitor now follows
+only these current v4 attempts for authorized recovery, while the old ten runs
+remain read-only. Prior v3 attempts must not be automatically resumed into v4.
+Passing the regression and restarting is not evidence of recovered 4000+
+returns; new raw evaluations will be assessed at matched training checkpoints.
