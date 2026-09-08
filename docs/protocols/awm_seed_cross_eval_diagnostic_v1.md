@@ -65,3 +65,15 @@ matrix does **not** isolate weight initialization from exploration/Replay,
 world model from actor, hardware effects during training, or establish the
 variance over a population of training seeds. Neither selecting the favorable
 cell nor treating episodes as independent training seeds is permitted.
+
+Rebuild the investigation's tables and unsmoothed learning curves from preserved
+host audit JSON (including raw logs/scalars), effective-import/RNG probes, and
+the independently saved completed cross-evaluation manifests:
+
+```bash
+python scripts/report_awm_seed_audit.py --audit-dir /absolute/audit \
+  --metrics-dir /absolute/audit/latest_raw_capture --output-dir /absolute/report
+```
+
+The report records input SHA-256 and keeps collection proxies separate from
+official raw episode-return means. Missing cross-evaluation rows remain missing.

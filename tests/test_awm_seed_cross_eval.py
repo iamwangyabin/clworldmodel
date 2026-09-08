@@ -12,6 +12,13 @@ import awm_seed_cross_eval as audit
 
 
 class CrossSeedDiagnosticTests(unittest.TestCase):
+    def test_report_uses_matching_epoch_and_excludes_final_or_later_task_scores(self):
+        from report_awm_seed_audit import periodic_task0, chart
+        log = ("Starting Epoch  20\nEval raw means: [12.5, 3]\n"
+               "Starting Epoch  100\nEval raw means: [99]\nFinal eval raw means: [100]")
+        self.assertEqual(periodic_task0(log), {20: 12.5})
+        self.assertIn("polyline", chart([{20: 12.5}, {20: 11.}]))
+
     def test_reject_other_protocol_progress_and_seed(self):
         payload = {
             "artifact_kind": "task_bank_boundary_inference_snapshot",
