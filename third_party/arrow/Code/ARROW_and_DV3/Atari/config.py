@@ -208,6 +208,7 @@ class Config(Serialisable):
     task_route_inference: Literal[
         "oracle", "two_frame_probability_reconstruction"
     ] = "oracle"
+    task_route_inference_version: int = 0
     evaluation_episode_count_mode: Literal["legacy", "exact"] = "legacy"
     evaluation_max_agent_decisions_per_episode: int = 32768
     evaluation_task_seed_offset: int = 0
@@ -373,6 +374,9 @@ class Config(Serialisable):
         expected_episode_mode = "legacy"
         if self.task_route_inference != expected_inference:
             raise ValueError("Task route inference must match the separately named protocol")
+        if (type(self.task_route_inference_version) is not int
+                or self.task_route_inference_version != (4 if is_evolving_autoroute else 0)):
+            raise ValueError("Task route inference version must be 4 for AWM-AutoRoute, 0 otherwise; historical configs require their recorded revision")
         if self.evaluation_episode_count_mode != expected_episode_mode:
             raise ValueError("Evaluation episode counting must match the named protocol")
         if (

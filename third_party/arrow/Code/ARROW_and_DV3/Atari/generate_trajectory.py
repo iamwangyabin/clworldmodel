@@ -24,9 +24,9 @@ def _two_frame_route_inputs(wm, router, obs, z, h, previous_action, reset, route
     """Score deterministic candidate histories; restore own history on a switch.
 
     Decoder alone receives posterior probabilities. The selected policy keeps
-    its ordinary hard/stochastic state when its route is unchanged. On episode
-    start or a second-frame switch it uses the selected candidate's own prior
-    hard state, never the previous expert's hidden state.
+    its ordinary hard/stochastic state and previous action when its route is
+    unchanged, including across episode starts. Only an actual route switch
+    uses the selected candidate's own prior, never another expert's history.
     """
     old_routes = router.routes.clone() if router.routes is not None else None
     priors = {}
@@ -60,7 +60,11 @@ def _two_frame_route_inputs(wm, router, obs, z, h, previous_action, reset, route
         return routes, z, h, previous_action
     policy_z, policy_h, policy_action = z.clone(), h.clone(), previous_action.clone()
     for route_id, (rows, first, prior_z, prior_h, prior_action) in priors.items():
-        changed = first if old_routes is None else first | (old_routes[rows] != routes[rows])
+        # A fresh scoring window must not introduce a second policy reset on
+        # top of ARROW's NextStep/RSSM bookkeeping. Initial policy state belongs
+        # to the collector; candidate histories are substituted only on a switch.
+        changed = (torch.zeros_like(first) if old_routes is None else
+                   (old_routes[rows] >= 0) & (old_routes[rows] != routes[rows]))
         use = changed & (routes[rows] == route_id)
         selected = rows[use]
         policy_z[selected] = prior_z[use].to(policy_z)
@@ -453,7 +457,7 @@ def generate_trajectories(
                         act_t[:, 0] = 1
                     z, h, act = _routed_policy_step(
                         wm, ac, router,
-                        torch.from_numpy(obs).float().permute(0, 3, 1, 2).to(z.device) / 255,
+                        torch.from_numpy(obs / 255).float().permute(0, 3, 1, 2).to(z.device),
                         z, h, act_t,
                         torch.from_numpy(reset).float().unsqueeze(-1).to(z.device),
                         stochastic=not deterministic_policy,

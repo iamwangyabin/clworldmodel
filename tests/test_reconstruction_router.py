@@ -112,18 +112,21 @@ class ReconstructionRouterIntegrationTests(unittest.TestCase):
         fixture.close.assert_called_once()
 
 
-    def test_grouped_posterior_uses_episode_dummy_then_executed_actions(self):
+    def test_probe_dummy_does_not_replace_policy_previous_action(self):
         wm, ac = fixed_models()
         router = TwoFrameReconstructionRouter((0, 1))
         z, h = wm.rssm.initial_state(2)
         x = torch.tensor([0., 1.])[:, None, None, None].expand(2, 3, 2, 2)
         previous = torch.nn.functional.one_hot(torch.tensor([7, 8]), 18)
         rng = torch.random.get_rng_state().clone()
-        z, h, action = trajectory._routed_policy_step(
-            wm, ac, router, x, z, h, previous, torch.ones(2, 1), stochastic=False,
-        )
+        with mock.patch.object(wm.rssm, "forward", wraps=wm.rssm.forward) as calls:
+            z, h, action = trajectory._routed_policy_step(
+                wm, ac, router, x, z, h, previous, torch.ones(2, 1), stochastic=False,
+            )
+            for probe in calls.call_args_list[:2]:
+                self.assertEqual(probe.args[1].argmax(-1).tolist(), [0, 0])
         self.assertEqual(action.tolist(), [0, 1])
-        self.assertEqual(wm.rssm.last_action.argmax(-1).tolist(), [0])
+        self.assertEqual(wm.rssm.last_action.argmax(-1).tolist(), [8])
         z, h, action = trajectory._routed_policy_step(
             wm, ac, router, x, z, h, previous, torch.zeros(2, 1), stochastic=False,
         )

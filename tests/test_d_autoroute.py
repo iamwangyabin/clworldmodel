@@ -78,7 +78,7 @@ class DAutorouteLauncherTests(unittest.TestCase):
         )
         changed = {k for k in data.keys() | old.keys() if data.get(k) != old.get(k)}
         self.assertEqual(changed, {
-            "continual_method", "task_route_inference",
+            "continual_method", "task_route_inference", "task_route_inference_version",
         })
         self.assertEqual(data["continual_method"], METHOD)
         self.assertTrue(data["task_private_actor_critic"])
@@ -112,7 +112,8 @@ class DAutorouteLauncherTests(unittest.TestCase):
         self.assertTrue(launch["task_identity_exposed_during_training"])
         self.assertEqual(launch["inference_routing"]["mode"], "two_frame_probability_reconstruction")
         self.assertEqual(launch["inference_routing"]["maximum_scored_observations_per_episode"], 2)
-        self.assertIn("-v3-", launch["protocol"])
+        self.assertIn("-v4-", launch["protocol"])
+        self.assertEqual(launch["inference_routing"]["protocol_version"], 4)
         self.assertEqual(launch["parameter_budget"]["behavior_parameters"], 10_295_910)
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             entry._parser().parse_args(["--behavior-profile", "shared_fastkan_autoroute"])
@@ -233,6 +234,13 @@ class DAutorouteIntegrationTests(unittest.TestCase):
         # There is one maintained router; historical configs must fail closed.
         with self.assertRaises(ValueError):
             Config.from_dict({**data, "task_route_inference": "first_frame_reconstruction"})
+        historical = dict(data)
+        historical.pop("task_route_inference_version")
+        with self.assertRaisesRegex(ValueError, "inference version"):
+            Config.from_dict(historical)
+        for version in (3, 4.0, True):
+            with self.assertRaisesRegex(ValueError, "inference version"):
+                Config.from_dict({**data, "task_route_inference_version": version})
         self.assertNotIn("adaptive_behavior_residuals", config.to_dict())
         for key, value in {
             "task_private_actor_critic": False, "actor_network": "fast_kan_ac_stable",
@@ -516,6 +524,7 @@ class DAutorouteIntegrationTests(unittest.TestCase):
             self.assertEqual(payload["schema_version"], 1)
             self.assertEqual(payload["inference_routing"]["eligible_route_ids"], [0, 1])
             self.assertEqual(payload["inference_routing"]["mode"], "two_frame_probability_reconstruction")
+            self.assertEqual(payload["inference_routing"]["protocol_version"], 4)
             draws = [g.integers(0, 100000) for g in generators]
             wm.load_state_dict(dense.state_dict(), strict=True)
             with torch.no_grad():
@@ -529,6 +538,11 @@ class DAutorouteIntegrationTests(unittest.TestCase):
             self.assertEqual([g.integers(0, 100000) for g in generators], draws)
             self.assertEqual(schedule._step, 180)
             replay.load_state_dict.assert_called_once_with({"fixture": "no transitions"})
+            old_payload = copy.deepcopy(payload)
+            old_payload["config"].pop("task_route_inference_version")
+            with mock.patch.object(train.torch, "load", return_value=old_payload):
+                with self.assertRaisesRegex(ValueError, "Resolved config changed"):
+                    train._restore_evolving_resumable_checkpoint(path, **common, actor_critic_factory=factory)
             old_payload = copy.deepcopy(payload)
             old_payload["config"]["task_route_inference"] = "first_frame_reconstruction"
             with mock.patch.object(train.torch, "load", return_value=old_payload):

@@ -92,7 +92,7 @@ D_AUTOROUTE_METHOD = (
 )
 D_AUTOROUTE_PROTOCOL = (
     "Evolving-Core-DenseAcquire-AdaptiveQFP-SharedHeads-PrivateMLPAC-"
-    "TwoFrameProbabilityRouter-ARROWParity-v3-OriginalSix-Atari-"
+    "TwoFrameProbabilityRouter-ARROWParity-v4-OriginalSix-Atari-"
     "TaskAwareTraining-TaskIDFreeInference-Pilot"
 )
 AUTOROUTE_METHODS = (D_AUTOROUTE_METHOD,)
@@ -483,6 +483,7 @@ def _resolved_config(
         if behavior_profile == PRIVATE_MLP_AUTOROUTE_BEHAVIOR:
             config["continual_method"] = D_AUTOROUTE_METHOD
         config["task_route_inference"] = "two_frame_probability_reconstruction"
+        config["task_route_inference_version"] = 4
     for replay_config in config["replay_buffers"]:
         replay_config["rb_device"] = "cpu"
     return config
@@ -1023,6 +1024,10 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "inference_routing": {
             "mode": config.get("task_route_inference", "oracle"),
+            "protocol_version": config.get("task_route_inference_version", 0),
+            "same_route_policy_state": "unchanged from AWM, including across episode resets",
+            "switch_policy_state": ("selected candidate's own prior history"
+                                    if args.behavior_profile in AUTOROUTE_BEHAVIORS else None),
             "eligible_routes": "acquired slots plus currently acquiring slot; never future slots",
             "episode_lock": args.behavior_profile in AUTOROUTE_BEHAVIORS,
             "maximum_scored_observations_per_episode": (

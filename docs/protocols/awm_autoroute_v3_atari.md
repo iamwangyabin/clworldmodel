@@ -1,5 +1,9 @@
 # AWM-AutoRoute: two-observation probability reconstruction
 
+> Historical protocol: superseded by [v4](awm_autoroute_v4_atari.md) on
+> 2026-09-08 (Decision 0063). The behavior below is preserved for provenance,
+> not current runtime support. Reproduce it with its recorded revision.
+
 ## Identity
 
 - Method remains **AWM-AutoRoute** (Accumulative World Modeling).

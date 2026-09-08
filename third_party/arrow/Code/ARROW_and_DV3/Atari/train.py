@@ -724,6 +724,7 @@ def _save_evolving_resumable_checkpoint(
     if getattr(config, "uses_reconstruction_task_inference", False):
         payload["inference_routing"] = {
             "mode": config.task_route_inference,
+            "protocol_version": config.task_route_inference_version,
             "eligible_route_ids": list(range(current_task_id + 1)),
             "episode_state_checkpointed": False,
             "resume_semantics": "boundary checkpoint; collection starts with fresh environment resets",
@@ -914,6 +915,7 @@ def _restore_evolving_resumable_checkpoint(
         checkpoint_config = dict(checkpoint_config)
         for name, default in (
             ("task_route_inference", "oracle"),
+            ("task_route_inference_version", 0),
             ("evaluation_episode_count_mode", "legacy"),
             ("evaluation_max_agent_decisions_per_episode", 32768),
         ):
@@ -928,7 +930,8 @@ def _restore_evolving_resumable_checkpoint(
         completed_id = int(payload["schedule"]["current_task_id"])
         if (not 0 <= completed_id < config.rssm_num_experts
                 or routing.get("eligible_route_ids") != list(range(completed_id + 1))
-                or routing.get("mode") != config.task_route_inference):
+                or routing.get("mode") != config.task_route_inference
+                or routing.get("protocol_version") != config.task_route_inference_version):
             raise ValueError("Checkpoint inference eligibility does not match acquisition state")
 
     wm.load_state_dict(payload["world_model"], strict=True)
@@ -2607,6 +2610,7 @@ def _save_task_bank_evaluation_snapshot(
     if getattr(config, "uses_reconstruction_task_inference", False):
         payload["inference_routing"] = {
             "mode": config.task_route_inference,
+            "protocol_version": config.task_route_inference_version,
             "eligible_route_ids": list(range(eligible_task_count)),
             "task_identity_input": False,
         }
@@ -2726,6 +2730,7 @@ def _save_task_bank_boundary_snapshot(
     if getattr(config, "uses_reconstruction_task_inference", False):
         payload["inference_routing"] = {
             "mode": config.task_route_inference,
+            "protocol_version": config.task_route_inference_version,
             "eligible_route_ids": list(range(task_id + 1)),
             "task_identity_input": False,
         }

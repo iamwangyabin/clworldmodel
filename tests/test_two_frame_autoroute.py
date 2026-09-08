@@ -1,4 +1,4 @@
-"""AWM-AutoRoute v3: fixed tensors only, no simulator or training."""
+"""AWM-AutoRoute: fixed tensors only, no simulator or training."""
 
 import unittest
 import copy
@@ -73,6 +73,75 @@ class TwoFrameRouterTests(unittest.TestCase):
 
 @unittest.skipUnless(vendor_available, "requires pinned vendor imports")
 class TwoFrameAdapterTests(unittest.TestCase):
+    def test_same_route_matches_oracle_real_rssm_through_next_step_resets(self):
+        from retained_method_support import retained_world_model
+        from clworldmodel.routing import RoutedActorBank
+        from ac import zh_to_ac_state
+
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(20260908)
+            wm = retained_world_model().eval()
+            actor = torch.nn.Linear(wm.ls[0] * wm.ls[1] + wm.h_dim, wm.a_dim)
+            behavior = RoutedActorBank({0: actor})
+            frames = torch.linspace(0, 1, 8 * 2 * 3 * 64 * 64).reshape(8, 2, 3, 64, 64)
+            # The terminal frame is followed by NextStep's reset frame. Workers
+            # finish at different times; a route-window reset is NOT a policy reset.
+            resets = torch.tensor([[0, 0], [0, 0], [1, 0], [0, 0],
+                                   [0, 1], [0, 0], [0, 0], [0, 0]]).float()
+            route_resets = torch.cat((torch.ones(1, 2), resets[:-1])).bool()
+            for stochastic in (False, True):
+                traces = []
+                for routed in (False, True):
+                    torch.manual_seed(42)
+                    z, h = wm.rssm.initial_state(2)
+                    action = torch.nn.functional.one_hot(torch.zeros(2, dtype=torch.long), wm.a_dim)
+                    router = TwoFrameReconstructionRouter((0,))
+                    trace = []
+                    with torch.no_grad():
+                        for t in range(len(frames)):
+                            if routed:
+                                z, h, selected = trajectory._routed_policy_step(
+                                    wm, behavior, router, frames[t], z, h, action,
+                                    resets[t, :, None], stochastic=stochastic,
+                                    route_reset=route_resets[t],
+                                )
+                            else:
+                                _, z, h = wm.rssm(z, action, h, frames[t], resets[t, :, None],
+                                                  task_id=0, stochastic=stochastic)
+                                logits = actor(zh_to_ac_state(z, h)).float()
+                                selected = (torch.distributions.Categorical(logits=logits).sample()
+                                            if stochastic else logits.argmax(-1))
+                            action = torch.nn.functional.one_hot(selected, wm.a_dim)
+                            trace.append((z.clone(), h.clone(), action.clone(),
+                                          torch.random.get_rng_state().clone()))
+                    traces.append(trace)
+                for t, (oracle, routed) in enumerate(zip(*traces)):
+                    with self.subTest(stochastic=stochastic, observation=t):
+                        torch.testing.assert_close(routed, oracle, rtol=0, atol=0)
+
+    def test_first_frame_only_replaces_policy_history_for_actual_route_switch(self):
+        from test_reconstruction_router import fixed_models
+        wm, _ = fixed_models()
+        router = TwoFrameReconstructionRouter((0, 1))
+        obs = torch.zeros(2, 3, 2, 2)
+        initial_z, initial_h = wm.rssm.initial_state(2)
+        previous = torch.nn.functional.one_hot(torch.tensor([3, 4]), 18)
+        # Initialize both workers on route 0, then restart both scoring windows.
+        trajectory._two_frame_route_inputs(wm, router, obs, initial_z, initial_h,
+                                            previous, torch.zeros(2, 1), torch.ones(2))
+        z, h = initial_z + 7, initial_h + 9
+        obs[1] = 1
+        routes, policy_z, policy_h, policy_action = trajectory._two_frame_route_inputs(
+            wm, router, obs, z, h, previous, torch.zeros(2, 1), torch.ones(2),
+        )
+        self.assertEqual(routes.tolist(), [0, 1])
+        torch.testing.assert_close((policy_z[0], policy_h[0], policy_action[0]),
+                                   (z[0], h[0], previous[0]), rtol=0, atol=0)
+        torch.testing.assert_close((policy_z[1], policy_h[1]),
+                                   (initial_z[1], initial_h[1]), rtol=0, atol=0)
+        self.assertEqual(policy_action[1].argmax().item(), 0)
+        torch.testing.assert_close((z, h), (initial_z + 7, initial_h + 9))
+
     def test_policy_batch_promotes_mixed_route_output_dtypes(self):
         from test_reconstruction_router import fixed_models
         for low_precision_route in (0, 1):

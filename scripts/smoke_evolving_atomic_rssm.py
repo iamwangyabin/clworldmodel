@@ -316,7 +316,40 @@ def main() -> int:
                 previous = torch.nn.functional.one_hot(actions, config.action_space)
         if actions.shape != (2,) or len(router.events) != 4 or router.counts.tolist() != [2, 2]:
             raise RuntimeError("Two-frame autoroute smoke did not cover both workers")
-        routing_smoke = {"events": router.events, "accuracy_claimed": False}
+        # Production-width BF16 regression: restarting a scoring window on the
+        # same route must preserve AWM's state, action and sampling RNG exactly.
+        from ac import zh_to_ac_state
+        from generate_trajectory import _autocast_context
+        from clworldmodel.routing import RoutedActorBank
+        same_policy = RoutedActorBank({0: routing_policy.actors["0"]})
+        same_router = TwoFrameReconstructionRouter((0,))
+        frames = torch.full((2, 3, config.img_size, config.img_size), .2, device=device)
+        previous = torch.nn.functional.one_hot(torch.tensor([3, 4], device=device), config.action_space)
+        with torch.no_grad(), torch.random.fork_rng(devices=[device.index]):
+            z, h = world_model.rssm.initial_state(2)
+            z, h, _ = _routed_policy_step(world_model, same_policy, same_router, frames,
+                                          z, h, previous, torch.zeros(2, 1, device=device),
+                                          stochastic=False)
+            for stochastic in (False, True):
+                rng = torch.cuda.get_rng_state(device)
+                with _autocast_context(device, config.compute_dtype):
+                    _, oracle_z, oracle_h = world_model.rssm(
+                        z, previous, h, frames, torch.zeros(2, 1, device=device),
+                        task_id=0, stochastic=stochastic,
+                    )
+                    logits = same_policy.actors["0"](zh_to_ac_state(oracle_z, oracle_h)).float()
+                oracle_action = (torch.distributions.Categorical(logits=logits).sample()
+                                 if stochastic else logits.argmax(-1))
+                oracle_rng = torch.cuda.get_rng_state(device)
+                torch.cuda.set_rng_state(rng, device)
+                actual = _routed_policy_step(world_model, same_policy, same_router, frames,
+                                              z, h, previous, torch.zeros(2, 1, device=device),
+                                              stochastic=stochastic,
+                                              route_reset=torch.ones(2, device=device))
+                torch.testing.assert_close(actual, (oracle_z, oracle_h, oracle_action), rtol=0, atol=0)
+                torch.testing.assert_close(torch.cuda.get_rng_state(device), oracle_rng, rtol=0, atol=0)
+        routing_smoke = {"events": router.events, "accuracy_claimed": False,
+                         "same_route_reset_state_action_rng_parity": True}
     old_private = tuple(world_model.private_parameters(0))
 
     metrics, diagnostics, gradient_norm = train._evolving_world_model_update(

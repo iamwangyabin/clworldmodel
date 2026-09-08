@@ -824,6 +824,21 @@ complete by this change. See Decision 0058 for the validation scope.
     state and exercises mixed compact/dense BF16 inference without a simulator.
     See the two-seed 2026-09-08 experiment record for the failure and validation.
 
+68. On 2026-09-08, correct AWM-AutoRoute policy-state handling at the user's
+    request (Decision 0063 / protocol v4). A new routing window clears only
+    candidate histories/scores. On an unchanged expert ID, preserve AWM's policy
+    state and previous action rather than copying the candidate's zero state
+    into the policy. Only actual expert switches restore candidate-owned prior
+    history. Match the oracle path's uint8/255 observation conversion exactly.
+    Original AWM/ARROW reset masks, NextStep mode, stored actions, reward/continue
+    shifts, return extraction, losses, AC and budgets are untouched. Add a
+    strict resolved inference-version field (AutoRoute 4, other methods 0),
+    persist it in checkpoints, reject cross-version continuation, and normalize
+    only the default-off field for historical oracle AWM checkpoints. Real-RSSM
+    state/action/RNG regressions fail before the fix and pass afterward; retain
+    switch and mixed-dtype tests plus production-width target-CUDA parity smoke.
+    Historical v3 artifacts remain separate; new runs restart from scratch.
+
 ## Method retirement in progress — 2026-09-06
 
 User-authorized retirement removes historical representation/KARROW/task-bank,

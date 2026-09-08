@@ -714,13 +714,14 @@ and the private Actor retain hard categorical states. No later candidate
 probes or learned router parameters are added. Training/Replay still use true
 task labels; inference does not. It retains AWM's implicit NextStep collector,
 legacy evaluation budget, oracle consolidation/compression gates and 480 nominal
-selector rollouts. Episode-local policy initialization and switch-state handling
-are explicitly versioned routing changes, not claimed action parity with AWM.
+selector rollouts. Restarting a scoring window does not reset the selected
+policy again: an unchanged route preserves AWM's state and previous action.
+Only an actual expert switch substitutes that candidate's own history.
 AC parameters remain AWM's `10,295,910`. Old first-frame routing is no longer
-selectable; its results remain historical. The internal protocol ID retains
-`v3` for provenance, not as a menu of supported methods. No new training or
-return result is claimed. See
-[`AWM-AutoRoute`](docs/protocols/awm_autoroute_v3_atari.md).
+selectable; its results remain historical. Protocol **v4** corrects v3's
+episode-start policy overwrite. Historical v3 configs/checkpoints are not
+silently resumed as v4. No return improvement is claimed. See
+[`AWM-AutoRoute`](docs/protocols/awm_autoroute_v4_atari.md).
 
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control
