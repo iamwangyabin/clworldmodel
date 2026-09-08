@@ -17,6 +17,19 @@ documented here, covered by focused parity tests, and followed by regenerating
 `MANIFEST.sha256`. Clean project-owned implementations still belong under
 `src/clworldmodel/`.
 
+## First-task host control (2026-09-08)
+
+User-approved S1-on-4090-1 control adds a default-off
+`--stop-after-first-task` option to the Atari trainer. The 540-epoch config,
+initialization, all sampling/loss/update code and full-run behavior remain
+unchanged. Only after the first complete boundary and its checkpoints does the
+named control perform one isolated task-0 periodic-cohort evaluation and exit,
+without task-1 training or final-heldout evaluation. Launcher manifests report
+the 90-epoch prefix budget separately. Focused tests cover unchanged config
+construction, fixed counters and a stopping predicate that consumes no RNG;
+retained state/action/RNG parity and target CUDA smoke remain required.
+See `docs/protocols/awm_v4_s1_host_control.md` for scope and inference limits.
+
 ## Current retirement update (2026-09-07)
 
 Launch preflight correction (2026-09-08): Atari's actual CLI still injected the

@@ -35,6 +35,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--classification", choices=("pilot",), default="pilot")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume-from", type=Path)
+    parser.add_argument("--stop-after-first-task", action="store_true",
+                        help="Named 90-epoch host control; keep the full training config unchanged.")
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
@@ -65,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
             command.extend(("--" + name.replace("_", "-"), resolved(value)))
     if args.dry_run:
         command.append("--dry-run")
+    if args.stop_after_first_task:
+        command.append("--stop-after-first-task")
     return _launch(command)
 
 

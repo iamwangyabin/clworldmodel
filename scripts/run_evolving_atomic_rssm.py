@@ -395,6 +395,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume-from", type=Path)
+    parser.add_argument("--stop-after-first-task", action="store_true")
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
@@ -897,8 +898,33 @@ def _budget_manifest(config: dict) -> dict:
     }
 
 
+def _first_task_control_budget(config: dict) -> dict:
+    budget = _budget_manifest(config)
+    for name in (
+        "raw_environment_frames", "online_world_model_updates",
+        "boundary_consolidation_world_model_updates", "adaptive_compression_world_model_updates",
+        "adaptive_compression_sequences", "adaptive_compression_validation_rollouts",
+        "total_world_model_optimizer_steps", "actor_critic_updates",
+        "total_actor_critic_optimizer_steps", "consolidation_sequences",
+    ):
+        budget[name] //= budget["task_count"]
+    budget.update(task_count=1, task_duration_epochs=[90],
+                  online_current_sequences=90 * config["steps_per_batch"] * config["mb_n_size"],
+                  online_memory_sequences=0,
+                  actor_critic_updates_by_task_route={"0": 90 * config["ac_train_steps"]},
+                  boundary_validation_rollouts=16,
+                  boundary_validation_cohort="existing_task0_periodic_validation",
+                  final_heldout_evaluation_rollouts=0)
+    budget["peak_boundary_replay_asset_bytes"] = budget["retained_boundary_replay_asset_bytes"]
+    budget["minimum_live_plus_peak_replay_observation_bytes"] = 2 * budget["replay"]["observation_bytes"]
+    return budget
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.stop_after_first_task and (args.resume_from is not None
+            or args.behavior_profile != PRIVATE_MLP_AUTOROUTE_BEHAVIOR):
+        raise ValueError("First-task host control requires fresh AWM-AutoRoute training")
     if args.cpu_threads < 1:
         raise ValueError("--cpu-threads must be positive")
     project_git = (
@@ -977,6 +1003,9 @@ def main(argv: list[str] | None = None) -> int:
         task_snapshot_dir=task_snapshot_dir,
         project_commit=str(project_git["commit"]),
     )
+    if args.stop_after_first_task:
+        command.remove("--evaluate-final")
+        command.append("--stop-after-first-task")
     resume_lineage = None
     if args.resume_from is not None:
         from d_autoroute_resume import inspect_resume
@@ -1169,6 +1198,17 @@ def main(argv: list[str] | None = None) -> int:
         "command": command,
         "resume_lineage": resume_lineage,
     }
+    if args.stop_after_first_task:
+        launch["parent_protocol"] = protocol
+        launch["protocol"] = protocol + "-FirstTask90-HostControl-v1"
+        launch["configured_full_curriculum_budgets"] = launch["budgets"]
+        launch["budgets"] = _first_task_control_budget(config)
+        launch["stop_after_completed_epochs"] = 90
+        launch["metric_reporting"] = {
+            "schema": "arrow-paper-v1", "automatic_after_training": False,
+            "reason": "First-task host control is not a completed continual benchmark",
+            "raw_checkpoint_matrix_preserved": True,
+        }
     print(json.dumps(launch, indent=2))
     rendered_env = [f"{key}={value}" for key, value in thread_env.items()]
     rendered_env.append(f"PYTHONPATH={env['PYTHONPATH']}")
@@ -1205,6 +1245,28 @@ def main(argv: list[str] | None = None) -> int:
         log_path=output_dir / "train.log",
         **resume_log_options,
     )
+    if args.stop_after_first_task:
+        required = ["first_task_control_complete.json", "first_task_control_evaluation.json",
+                    "task_boundary_snapshots/boundary_01_task_00_completed_0090.pt",
+                    "task_boundary_snapshots/boundary_01_task_00_completed_0090.pt.sha256",
+                    "evolving_core_checkpoints/task_00_post_consolidation.pt",
+                    "evolving_core_checkpoints/task_00_post_consolidation.pt.sha256",
+                    "adaptive_qfp_compression/task_00_boundary.json"]
+        missing = [name for name in required if not (output_dir / name).is_file()]
+        stop = (json.loads((output_dir / required[0]).read_text())
+                if (output_dir / required[0]).is_file() else {})
+        complete = (return_code == 0 and not missing and stop.get("completed_epochs") == 90
+                    and stop.get("world_model_updates") == 92_000
+                    and stop.get("actor_critic_updates") == 72_000)
+        _write_json(output_dir / "run_status.json", {
+            "complete": complete, "full_curriculum_complete": False,
+            "intentional_first_task_control": True, "completed_epochs": stop.get("completed_epochs"),
+            "return_code": return_code, "missing_required_outputs": missing,
+            "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+        })
+        if not complete:
+            raise RuntimeError(f"First-task control did not complete its fixed boundary: {stop}, {missing}, exit={return_code}")
+        return 0
     required = [
         "save_wm.pt",
         "save_ac.pt",

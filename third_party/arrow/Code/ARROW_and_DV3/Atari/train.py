@@ -2815,6 +2815,17 @@ def _init_swanlab(
     )
 
 
+def _first_task_control_boundary(enabled, task_metadata, completed_epochs,
+                                 world_model_updates, actor_critic_updates):
+    """Default-off termination predicate: never changes the training prefix."""
+    if not enabled or task_metadata is None:
+        return False
+    if (task_metadata["boundary_index"] != 1 or task_metadata["task_index"] != 0
+            or (completed_epochs, world_model_updates, actor_critic_updates) != (90, 92000, 72000)):
+        raise RuntimeError("First-task host control reached an unexpected boundary/budget")
+    return True
+
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -2916,6 +2927,8 @@ if __name__ == "__main__":
         help="Evaluate the final frozen policy after all configured training epochs.",
     )
     parser.add_argument("--resume-evolving-checkpoint", type=Path)
+    parser.add_argument("--stop-after-first-task", action="store_true",
+                        help="Stop a named fresh AutoRoute host control after the intact first boundary.")
     args = parser.parse_args()
 
     save_nets = False
@@ -2966,6 +2979,11 @@ if __name__ == "__main__":
         )
     if distributed_context.enabled and log_dir is None:
         raise ValueError("multi-GPU training requires an explicit --log-dir")
+    if args.stop_after_first_task and (
+            not config.uses_reconstruction_task_inference or log_dir is None
+            or task_bank_snapshot_dir is None or args.resume_evolving_checkpoint is not None
+            or args.evaluate_final):
+        raise ValueError("First-task control requires fresh AutoRoute, snapshots/logs, and no final-heldout evaluation")
     _require_cuda_compute_support(config.compute_dtype)
     if config.uses_evolving_atomic_rssm and args.compile_world_model:
         raise ValueError(
@@ -4678,6 +4696,41 @@ if __name__ == "__main__":
                 f"overhead={max(0.0, epoch_seconds - measured):.3f}s "
                 f"total={epoch_seconds:.3f}s"
             )
+
+        if _first_task_control_boundary(args.stop_after_first_task,
+                boundary_snapshot_metadata, epoch + 1, global_step,
+                (epoch + 1) * config.ac_train_steps):
+            # The immutable snapshot and full post-boundary checkpoint already
+            # exist. This single diagnostic replaces the parent's task-0
+            # periodic evaluation at epoch 90, without initializing task 1.
+            wm.eval()
+            routing = []
+            means, stds = _evaluate_policy_tasks(
+                config, wm, aco, envs.eval_funcs()[:1], validation_task_seeds[:1],
+                actor_critic_bank=actor_critic_bank, distributed_context=distributed_context,
+                eligible_task_count=1, routing_diagnostics=routing,
+            )
+            scale = config.esc.env_configs[0].rew_scale
+            _write_json_atomically(log_dir / "first_task_control_evaluation.json", {
+                "classification": "debug", "cohort": "existing_periodic_validation",
+                "completed_epochs": epoch + 1, "evaluation_seed": validation_task_seeds[0],
+                "raw_return_mean": means[0] / scale, "raw_return_std": stds[0] / scale,
+                "scaled_return_mean": means[0], "scaled_return_std": stds[0],
+                "nominal_rollouts": 16, "eligible_route_ids": [0], "routing": routing,
+                "evaluation_transitions_enter_replay": False,
+            })
+            writer.flush()
+            writer.close()
+            _write_json_atomically(log_dir / "first_task_control_complete.json", {
+                "completed_epochs": epoch + 1, "world_model_updates": global_step,
+                "actor_critic_updates": (epoch + 1) * config.ac_train_steps,
+                "total_raw_environment_frames": total_env_steps,
+                "configured_curriculum_epochs": config.epochs, "full_curriculum_complete": False,
+                "stop_reason": "predeclared_first_task_host_control_not_score_based",
+                "project_git_commit": args.project_git_commit,
+            })
+            print("[first-task-control] Completed 90 epochs and boundary validation; no task-1 training.")
+            break
 
     if args.evaluate_final:
         eval_funcs = envs.eval_funcs()

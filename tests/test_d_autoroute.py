@@ -40,6 +40,32 @@ def new_config():
 
 
 class DAutorouteLauncherTests(unittest.TestCase):
+    def test_host_control_preserves_full_config_and_only_caps_execution(self):
+        launcher = importlib.import_module("run_evolving_atomic_rssm")
+        entry = importlib.import_module("run_evolving_atomic_rssm_d_autoroute")
+        with mock.patch.object(launcher, "_resolved_config", wraps=launcher._resolved_config) as resolved:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                entry.main(["--seed", "1", "--cpu-threads", "8", "--stop-after-first-task", "--dry-run"])
+        manifest, _ = json.JSONDecoder().raw_decode(output.getvalue())
+        self.assertEqual(manifest["seed"], 1337)
+        self.assertTrue(manifest["protocol"].endswith("-FirstTask90-HostControl-v1"))
+        self.assertEqual(manifest["parent_protocol"], entry.PROTOCOL)
+        self.assertEqual(manifest["configured_full_curriculum_budgets"]["total_world_model_optimizer_steps"], 552000)
+        self.assertIn("--stop-after-first-task", manifest["command"])
+        self.assertNotIn("--evaluate-final", manifest["command"])
+        self.assertEqual(resolved.call_args.kwargs["task_order"], "arrow-original-six")
+        budget = manifest["budgets"]
+        self.assertEqual(budget["total_world_model_optimizer_steps"], 92000)
+        self.assertEqual(budget["actor_critic_updates"], 72000)
+        self.assertEqual(budget["raw_environment_frames"], 5898240)
+        self.assertEqual(budget["adaptive_compression_validation_rollouts"], 80)
+        self.assertEqual(budget["online_memory_sequences"], 0)
+        self.assertEqual(budget["boundary_validation_rollouts"], 16)
+        self.assertEqual(budget["replay"], launcher._budget_manifest(new_config())["replay"])
+        with self.assertRaisesRegex(ValueError, "fresh"):
+            entry.main(["--stop-after-first-task", "--resume-from", "/unused"])
+
     def test_awm_names_preserve_method_identifiers_and_version_routing_protocol(self):
         launcher = importlib.import_module("run_evolving_atomic_rssm")
         for profile, name, method, protocol in (
@@ -146,6 +172,17 @@ class DAutorouteLauncherTests(unittest.TestCase):
 
 @unittest.skipUnless(vendor_available, "requires pinned Atari imports, no ROMs")
 class DAutorouteIntegrationTests(unittest.TestCase):
+    def test_host_control_boundary_predicate_does_not_touch_rng_or_stop_early(self):
+        boundary = {"boundary_index": 1, "task_index": 0}
+        rng = torch.random.get_rng_state().clone()
+        for epoch in range(90):
+            self.assertFalse(train._first_task_control_boundary(False, boundary, epoch, 0, 0))
+            self.assertFalse(train._first_task_control_boundary(True, None, epoch, 0, 0))
+        self.assertTrue(train._first_task_control_boundary(True, boundary, 90, 92000, 72000))
+        with self.assertRaises(RuntimeError):
+            train._first_task_control_boundary(True, boundary, 90, 90000, 72000)
+        torch.testing.assert_close(rng, torch.random.get_rng_state(), rtol=0, atol=0)
+
     def test_private_mlp_actor_updates_without_retired_consolidation_interface(self):
         from ac import ActorCriticTrainingStep, build_actor_critic_opt, train_ac_from_wm
         from replay import FifoReplay
