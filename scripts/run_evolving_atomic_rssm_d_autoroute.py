@@ -25,13 +25,17 @@ from run_evolving_atomic_rssm import (
     PRIVATE_MLP_AUTOROUTE_BEHAVIOR,
     ROOT,
     SEEDS,
+    _seed_value,
     main as _launch,
 )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("--seed", type=int, choices=range(len(SEEDS)), default=0)
+    seeds = parser.add_mutually_exclusive_group()
+    seeds.add_argument("--seed", type=int, choices=range(len(SEEDS)))
+    seeds.add_argument("--seed-value", type=_seed_value,
+                       help="Explicit run seed instead of a baseline preset index.")
     parser.add_argument("--classification", choices=("pilot",), default="pilot")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume-from", type=Path)
@@ -44,6 +48,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.seed is None:
+        args.seed = 0
     def resolved(path: Path) -> str:
         expanded = path.expanduser()
         return str((expanded if expanded.is_absolute() else ROOT / expanded).resolve())
@@ -54,11 +60,12 @@ def main(argv: list[str] | None = None) -> int:
         "--prediction-head-profile", "shared_distilled",
         "--adaptive-qfp-compression",
         "--behavior-profile", PRIVATE_MLP_AUTOROUTE_BEHAVIOR,
-        "--seed", str(args.seed),
         "--classification", args.classification,
         "--python", resolved(args.python),
         "--cpu-threads", str(args.cpu_threads),
     ]
+    command.extend(("--seed", str(args.seed)) if args.seed_value is None else
+                   ("--seed-value", str(args.seed_value)))
     for name in ("output_dir", "replay_mmap_root", "resume_from"):
         value = getattr(args, name)
         if value is not None:

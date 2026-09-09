@@ -330,9 +330,19 @@ ADAPTIVE_BEHAVIOR_ACTOR_DISTILL_SCALE = 1.0
 ADAPTIVE_BEHAVIOR_CRITIC_DISTILL_SCALE = 1.0
 
 
+def _seed_value(value: str) -> int:
+    seed = int(value)
+    if not 0 <= seed < 2**32:
+        raise argparse.ArgumentTypeError("seed value must be in [0, 2**32)")
+    return seed
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seed", type=int, choices=range(len(SEEDS)), default=0)
+    seeds = parser.add_mutually_exclusive_group()
+    seeds.add_argument("--seed", type=int, choices=range(len(SEEDS)))
+    seeds.add_argument("--seed-value", type=_seed_value,
+                       help="Explicit AWM run seed; leaves the baseline seed presets unchanged.")
     parser.add_argument(
         "--task-order",
         choices=tuple(TASK_ORDERS),
@@ -899,6 +909,8 @@ def _budget_manifest(config: dict) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.seed is None:
+        args.seed = 0
     if args.cpu_threads < 1:
         raise ValueError("--cpu-threads must be positive")
     project_git = (
@@ -916,6 +928,9 @@ def main(argv: list[str] | None = None) -> int:
         prediction_head_profile=args.prediction_head_profile,
         adaptive_qfp_compression=args.adaptive_qfp_compression,
     )
+    if args.seed_value is not None:
+        config["seed"] = args.seed_value
+    seed_label = f"s{args.seed}" if args.seed_value is None else f"seed{args.seed_value}"
     task_count = len(TASK_ORDERS[args.task_order])
     resolved_task0_profile = config["evolving_task0_profile"]
     protocol = _protocol_for_task_order(
@@ -965,7 +980,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{prediction_head_output_suffix}{adaptive_compression_output_suffix}_"
             f"{args.task_order}"
             f"{mechanism_output_suffix}_"
-            f"s{args.seed}_{args.classification}"
+            f"{seed_label}_{args.classification}"
         )
     )
     config_path = output_dir / "resolved_training_config.json"
@@ -1013,8 +1028,8 @@ def main(argv: list[str] | None = None) -> int:
         "project_git": project_git,
         "upstream_arrow_commit": UPSTREAM_COMMIT,
         "source_config": str(source_path),
-        "seed_index": args.seed,
-        "seed": SEEDS[args.seed],
+        "seed_index": args.seed if args.seed_value is None else None,
+        "seed": config["seed"],
         "task_order": list(TASK_ORDERS[args.task_order]),
         "task_identity_exposed_to_agent": True,
         "task_agnostic_claimed": False,
