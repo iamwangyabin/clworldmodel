@@ -111,6 +111,13 @@ The formal method name is **AWM — Accumulative World Modeling**, adopted on
 existing method keys, protocol IDs, launcher paths and historical evidence for
 compatibility and provenance; this is a naming-only change (Decision 0060).
 
+On 2026-09-11 the user explicitly authorized five new capacity-organization
+controls under a separately named protocol (Decision 0064): shared, wider
+shared, full per-task WM bank, frozen shared core with residuals, and independent
+residuals. This is not permission to restore the retired legacy implementations.
+Use the common trainer and the new `capacity_control_v1` composition; retain
+pilot labels and disclose all AWM budget/protection differences.
+
 As of 2026-09-08, maintain exactly one **AWM-AutoRoute** implementation: the
 two-frame probability-reconstruction router recorded under protocol v4.
 Historical v1/v2 first-frame routing and v3 episode-start policy-state replacement
