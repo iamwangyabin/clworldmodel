@@ -4,6 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -113,7 +114,10 @@ class CapacityControlTests(unittest.TestCase):
         independent = small_model("independent")
         self.assertFalse(independent.models[0].rssm.task_mechanism_reuse)
 
-    def test_two_task_update_actor_and_inference_roundtrip(self):
+    @patch("torch.cuda.is_available", return_value=False)
+    def test_two_task_update_actor_and_inference_roundtrip(self, _cuda_unavailable):
+        # Explicit CPU test: Adam must not query a CUDA capture stream merely
+        # because the virtualized runtime advertises GPUs. GPU smoke is separate.
         for control in CONTROLS:
             with self.subTest(control=control):
                 torch.manual_seed(123)

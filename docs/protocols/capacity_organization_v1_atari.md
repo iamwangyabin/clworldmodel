@@ -92,3 +92,7 @@ The versioned `--smoke` override uses the first two tasks for one epoch each,
 2 WM and 2 AC steps/epoch, four environments x64 decisions/epoch, time64 replay
 with 8 slots/buffer. It preserves production network widths, batch32x16 and
 AC parallel128; manifest budgets are recomputed and classification is `smoke`.
+
+CPU ownership tests explicitly simulate CUDA unavailable: PyTorch 2.3 Adam's
+capture-health check otherwise initializes a CUDA stream even for CPU tensors.
+This does not replace the unmocked target GPU smoke or qualify a failed card.
