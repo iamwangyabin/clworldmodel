@@ -20,7 +20,7 @@ NAMES = {"shared": "Shared WM + Private AC", "wide": "Wider Shared WM + Private 
          "independent": "Independent residuals + plastic shared core"}
 
 
-def resolved_config(control, seed_index=0):
+def resolved_config(control, seed_index=0, *, smoke=False):
     if control not in CONTROLS or seed_index not in range(5):
         raise ValueError("Unknown control or seed index")
     source = next((ROOT / "third_party/arrow/Configs/Atari configs/CL-task configs/Original Order").glob(f"*-s{seed_index}-arrow.json"))
@@ -33,7 +33,27 @@ def resolved_config(control, seed_index=0):
                   mlp_features=1536 if control == "wide" else 512)
     for buffer in config["replay_buffers"]:
         buffer["rb_device"] = "cpu"
+    if smoke:
+        config["esc"]["env_configs"] = config["esc"]["env_configs"][:2]
+        config["esc"]["kwargs"]["swap_sched"] = 1
+        config.update(epochs=2, rssm_num_experts=2, steps_per_batch=2,
+                      ac_train_steps=2, n_sync=4, gen_seq_len=64,
+                      data_n=4, data_t=64, data_n_max=8, log_frequency=1)
     return config
+
+
+def budgets(config):
+    slots = 2 * config["data_n_max"]
+    transitions = slots * config["data_t"]
+    observations = transitions * 3 * config["img_size"] ** 2
+    decisions = config["epochs"] * config["n_sync"] * config["gen_seq_len"]
+    return {"world_model_updates": config["epochs"] * config["steps_per_batch"],
+            "actor_critic_updates": config["epochs"] * config["ac_train_steps"],
+            "agent_decisions": decisions, "raw_environment_frames": decisions * config["env_repeat"],
+            "replay_trajectories": slots, "replay_observation_bytes": observations,
+            "replay_tensor_bytes_without_task_metadata": observations + transitions * (config["action_space"] + 3) * 4,
+            "replay_task_id_tensor_bytes": slots * 8,
+            "replay_index_overhead": "Python LTDM priority index; not included in tensor bytes"}
 
 
 def main():
@@ -44,11 +64,12 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--smoke", action="store_true", help="Two-task, production-width/minibatch validation, not a result")
     args = parser.parse_args()
     if args.cpu_threads < 1:
         parser.error("CPU thread count must be positive")
     state = git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
-    config = resolved_config(args.control, args.seed)
+    config = resolved_config(args.control, args.seed, smoke=args.smoke)
     output = args.output_dir.resolve()
     env = os.environ.copy()
     env.update({key: str(args.cpu_threads) for key in (
@@ -58,16 +79,18 @@ def main():
                "--config", str(output / "resolved_training_config.json"),
                "--log-dir", str(output), "--task-bank-snapshot-dir", str(output / "task_boundary_snapshots"),
                "--project-git-commit", state["commit"], "--evaluate-final", "--fused-adam", "--tf32", "--profile-stages"]
-    manifest = {"method": NAMES[args.control], "classification": "pilot",
+    manifest = {"method": NAMES[args.control], "classification": "smoke" if args.smoke else "pilot",
                 "protocol": f"CapacityOrganization-{args.control}-OriginalSix-Atari-TaskAware-v1",
+                "smoke_override": args.smoke,
                 "project_git": state, "seed_id": args.seed, "seed": config["seed"],
                 "resolved_training_config": config, "cpu_threads": args.cpu_threads,
                 "command": command, "output_dir": str(output),
                 "upstream_arrow_pin": "cb05e7d97ed83c3cf6e528960db0da6868e29232",
-                "budgets": {"world_model_updates": 540000, "actor_critic_updates": 432000,
-                            "agent_decisions": 8847360, "raw_environment_frames": 35389440,
-                            "replay_trajectories": 1024, "replay_observation_bytes": 6442450944,
-                            "replay_tensor_bytes_without_task_metadata": 6486491136},
+                "budgets": budgets(config),
+                "fully_resolved_schema_config": "config.json (written by common trainer)",
+                "backend_settings": {"compute": "BF16", "parameter_dtype": "FP32", "fused_adam": True,
+                    "tf32": True, "compile_world_model": False, "deterministic_algorithms": False,
+                    "known_nondeterminism": "CUDA reductions and platform scheduling; seeds do not promise bitwise replay"},
                 "research_limits": ["No functional protection, conflict projection, boundary consolidation or RCC",
                     "AWM has 12000 extra boundary WM updates; not a compute-matched AWM superiority test",
                     "Frozen/independent are organization controls, not exact one-switch AWM ablations",

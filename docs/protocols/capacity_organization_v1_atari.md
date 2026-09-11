@@ -87,3 +87,8 @@ Validation gate: typed-config rejection, all five two-task CPU WM/imagined-AC
 updates, storage/frozen ownership, model/optimizer serialization, retained
 baseline/AWM parity, and production-width target GPU two-task smoke before each
 pilot. Record failed attempts without overwriting them.
+
+The versioned `--smoke` override uses the first two tasks for one epoch each,
+2 WM and 2 AC steps/epoch, four environments x64 decisions/epoch, time64 replay
+with 8 slots/buffer. It preserves production network widths, batch32x16 and
+AC parallel128; manifest budgets are recomputed and classification is `smoke`.

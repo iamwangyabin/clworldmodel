@@ -15,7 +15,7 @@ from config import Config
 from wm import WorldModel
 from ac import build_actor_critic_opt, train_ac_from_wm
 from replay import FifoReplay, LongTermReplay, MultiTypeReplay
-from run_capacity_control_atari import resolved_config
+from run_capacity_control_atari import budgets, resolved_config
 from clworldmodel.reference.capacity_controls import (
     CONTROLS, build_capacity_model, capacity_world_model_update,
 )
@@ -74,6 +74,16 @@ class CapacityControlTests(unittest.TestCase):
         bad["continual_method"] = "none"
         with self.assertRaises(ValueError):
             Config.from_dict(bad)
+
+    def test_smoke_changes_budget_not_width_or_minibatches(self):
+        for control in CONTROLS:
+            full, smoke = resolved_config(control), resolved_config(control, smoke=True)
+            Config.from_dict(smoke)
+            self.assertEqual(budgets(full)["world_model_updates"], 540000)
+            self.assertEqual(budgets(full)["replay_tensor_bytes_without_task_metadata"], 6486491136)
+            self.assertEqual(budgets(smoke)["world_model_updates"], 4)
+            for key in ("mb_t_size", "mb_n_size", "ac_train_sync", "gru_units", "mlp_features"):
+                self.assertEqual(smoke[key], full[key])
 
     def test_shared_loss_matches_underlying_model(self):
         model = small_model("shared")
