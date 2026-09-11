@@ -3710,7 +3710,7 @@ if __name__ == "__main__":
                 periodic_task_seeds,
                 actor_critic_bank=actor_critic_bank,
                 distributed_context=distributed_context,
-                eligible_task_count=current_task_id + 1,
+                eligible_task_count=(current_task_id + 1 if current_task_id is not None else None),
                 routing_diagnostics=periodic_routing,
             )
             if config.uses_reconstruction_task_inference:

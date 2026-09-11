@@ -1,4 +1,5 @@
 """Storage-only DV3 launch contracts; no environment or optimizer updates."""
+import ast
 import json
 import subprocess
 import sys
@@ -10,6 +11,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DV3CPUReplayLauncherTests(unittest.TestCase):
+    def test_periodic_evaluation_does_not_require_baseline_task_identity(self):
+        tree = ast.parse((ROOT / "third_party/arrow/Code/ARROW_and_DV3/Atari/train.py").read_text())
+        expressions = [kw.value for node in ast.walk(tree)
+                       if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                       and node.func.id == "_evaluate_policy_tasks"
+                       for kw in node.keywords if kw.arg == "eligible_task_count"
+                       and any(isinstance(child, ast.Name) and child.id == "current_task_id"
+                               for child in ast.walk(kw.value))]
+        self.assertEqual(len(expressions), 1)
+        expression = compile(ast.Expression(expressions[0]), "periodic_eligibility", "eval")
+        for task_id, expected in ((None, None), (0, 1), (5, 6)):
+            self.assertEqual(eval(expression, {"current_task_id": task_id}), expected)
+
     def dry_run(self, *extra):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "not_created"

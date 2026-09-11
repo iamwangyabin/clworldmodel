@@ -17,6 +17,16 @@ documented here, covered by focused parity tests, and followed by regenerating
 `MANIFEST.sha256`. Clean project-owned implementations still belong under
 `src/clworldmodel/`.
 
+## Baseline evaluation eligibility repair (2026-09-11)
+
+The retained Atari trainer's periodic evaluation caller unconditionally added
+one to `current_task_id`, which is correctly `None` for task-agnostic ARROW/DV3.
+Pass `None` in that case, retaining `task_id + 1` for task-bank methods. This
+repairs a pre-evaluation crash without exposing task labels, changing evaluator
+sampling, or changing any update/interaction budget. A deterministic AST-level
+caller regression checks the real keyword expression for both baseline and
+task-bank inputs; the target tiny DV3 run exercises the actual evaluator.
+
 ## First-task host control (2026-09-08)
 
 User-approved S1-on-4090-1 control adds a default-off
