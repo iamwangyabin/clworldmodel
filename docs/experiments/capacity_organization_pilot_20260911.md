@@ -124,3 +124,21 @@ The running Frozen and Independent source trees and processes were untouched.
 Host4 GPU0 remains unallocated pending the user's scope decision about second
 control seeds. No AWM main run, automatic retry, or automatic future queue was
 started. These startup records are not completion claims.
+
+## Prospective second-seed allocation — 2026-09-13
+
+Before inspecting any S1 outcome, the user authorized immediately filling every
+usable idle card with new experiments. Use original published seed index S1
+(1337) for the five capacity controls, rather than inventing or selecting seeds
+from S0 results. The fixed queue is FullBank, Independent, Frozen, Shared, then
+Wider, assigning a control when a healthy card becomes idle. Never overwrite or
+resume an S0 run, never use unavailable host1, and do not launch retired methods
+or a new AWM main run as filler. Each S1 launch remains a pilot and keeps the
+same `capacity_control_v1` protocol, budgets, task order, held-out evaluation,
+capacity accounting and inference-only snapshot limitations as S0.
+
+The first allocation is FullBank S1 on currently idle host4 logical GPU0.
+Independent S0 remains active on GPU1 and must not be interrupted. Subsequent
+queue entries require a fresh live-idle check, clean/pushed/upstream-synced
+source check, existing-output refusal, target CUDA validation, and a recorded
+launch manifest. A failed run is reported rather than silently retried.
