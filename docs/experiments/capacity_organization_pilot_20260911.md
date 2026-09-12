@@ -91,3 +91,36 @@ snapshots cannot restart these pilots equivalently.
 
 All six processes were alive at this snapshot. This is not a completion claim.
 The two host1 full pilots remain blocked; they have no fake started status.
+
+## Additional allocation — 2026-09-12
+
+After the user requested more experiments, reassign the two not-yet-launched
+S0 controls from unavailable host1 to host2, whose DV3 S3 and FullBank S0 had
+finished with exit code 0. Do not restart or overwrite their completed runs.
+
+| New run | Host / logical GPU | Seed | Start (UTC) | Launcher PID |
+| --- | --- | ---: | --- | ---: |
+| Shared S0 | 2 / 0 | 123456789 | 2026-09-12 15:47:13 | 34313 |
+| Wider S0 | 2 / 1 | 123456789 | 2026-09-12 15:47:13 | 34314 |
+| DV3/FIFO S4 | 3 / 1 | 987654321 | 2026-09-12 15:47:30 | 32941 |
+
+Shared/Wider launch commit: `566b79f171544a167a64a3b0a1467bf27460dcee`
+(documentation-only successor to the existing control implementation).
+Sixteen focused target tests passed, and both assigned GPUs passed a fresh
+two-task production-width smoke including held-out final evaluation before
+the full-length pilots started. The target fetched the verified incremental
+bundle with SHA-256 `d051e508ea49ac9cbb749ab49754dc1dc48851ea30833e7845f5a1eecf841a94`.
+
+DV3 S4 launch commit: `b783d2fd9395b0434b5ce3cdc489135a08794399`.
+The remaining published seed is prospectively recorded in the CPU float32
+replay profile; no seed is selected from favorable results. Eleven focused
+target tests and a fresh CUDA matrix probe passed; the previous target-GPU
+DV3 smoke also exited 0. Bundle SHA-256:
+`3c34f77d0d0b067e8338576585a7f6fc651a016e3a7bcfae83502d83f9e8df02`.
+
+All three launch manifests record clean, pushed, upstream-synced code. The
+controller fetched GitHub before deployment; targets fetched verified bundles.
+The running Frozen and Independent source trees and processes were untouched.
+Host4 GPU0 remains unallocated pending the user's scope decision about second
+control seeds. No AWM main run, automatic retry, or automatic future queue was
+started. These startup records are not completion claims.
