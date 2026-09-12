@@ -8,6 +8,14 @@ two-GPU S4 instances. Supplement Atari seeds S1/S2/S3 (1337/31337/42), selected
 before their results. Existing S0 and previous unsuccessful attempts remain
 separate. Do not launch duplicate seeds merely to occupy remaining devices.
 
+On 2026-09-12 the user requested additional experiments after S1/S2/S3 had
+completed. Extend the allocation to the remaining original published seed
+S4 (987654321), not a new or result-selected seed. The experiment registry and
+cloud launch records contain no completed or active Atari DV3 S4 run. Existing
+S0 stays separate; do not rerun it simply to fill an idle card. All execution
+settings and budgets below are unchanged. This completes the planned seed
+coverage only if S4 succeeds; the CPU/GPU replay distinction still applies.
+
 The full FIFO observation allocation alone is 25,769,803,776 bytes (24 GiB),
 larger than the 24,555 MiB logical GPU capacity before model/workspace memory.
 Store FIFO on CPU without shrinking capacity or changing dtype: 1024 trajectories,
