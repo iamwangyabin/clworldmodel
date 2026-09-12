@@ -142,3 +142,11 @@ Independent S0 remains active on GPU1 and must not be interrupted. Subsequent
 queue entries require a fresh live-idle check, clean/pushed/upstream-synced
 source check, existing-output refusal, target CUDA validation, and a recorded
 launch manifest. A failed run is reported rather than silently retried.
+
+FullBank S1 actually started at `2026-09-12T16:21:47Z` on host4 logical GPU0,
+launcher PID 33683, from clean synchronized commit
+`948ff0b23fae0888463b8ab23e4c546cd7227d57`. Sixteen focused tests and a
+target-GPU BF16 matrix probe passed immediately before launch. The target used
+bundle SHA-256 `be2228505bf6a4fbc83db6601cd2328acdda31a2174782d5a862b7702100f733`.
+The manifest resolves seed index1 to 1337 and the full 540-epoch budget. The
+process reached epoch0 initialization; this is not a completion claim.
