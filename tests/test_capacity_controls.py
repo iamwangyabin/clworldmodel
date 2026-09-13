@@ -7,7 +7,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
-import torch
+
+try:
+    import torch
+except ModuleNotFoundError:  # pragma: no cover - minimal hosts omit PyTorch.
+    raise unittest.SkipTest("test_capacity_controls requires PyTorch")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "third_party/arrow/Code/ARROW_and_DV3/Atari"))
