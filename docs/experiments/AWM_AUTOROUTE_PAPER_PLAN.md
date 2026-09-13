@@ -62,11 +62,14 @@ task-ID-free 的 AWM-AutoRoute 冒充完全同协议排名。
 | Shared WM + private AC | RUN | RUN | TODO | 3 |
 | Wider shared + private AC | RUN | RUN | TODO | 3 |
 | FullBank + private AC | COMPLETE | RUN | RUN | 3 |
-| Frozen core + residuals | COMPLETE | RUN | TODO | 3 |
-| Independent residuals | COMPLETE | RUN | TODO | 3 |
+| Frozen core + residuals | COMPLETE | RUN | RUN | 3 |
+| Independent residuals | COMPLETE | RUN | RUN | 3 |
 
 这里采用已批准的 `CapacityOrganization-v1-Atari` 协议。旧的 Task-0、三任务
 FullBank 以及其他退休结构不填这些格。
+Frozen S2 与 Independent S2 已于 2026-09-13 在空闲的 h3 两张 GPU 上从
+已推送、clean 且与上游同步的 `9d0f47b399f1e391b962cea1bf58572a9706555b`
+启动；seed 均为预声明的 `31337`。
 
 ### 2.3 机制消融：12 个完整训练单元
 
@@ -118,12 +121,12 @@ Oracle routing 只是相同模型的诊断读出，名称写成
 | 状态 | 数量 | 比例 |
 |---|---:|---:|
 | COMPLETE | 19 | 33.3% |
-| RUN | 13 | 22.8% |
-| TODO | 25 | 43.9% |
+| RUN | 15 | 26.3% |
+| TODO | 23 | 40.4% |
 | **总计** | **57** | **100%** |
 
 训练完成度为 `COMPLETE / 57 = 33.3%`，已有/在途覆盖率为
-`(COMPLETE + RUN) / 57 = 56.1%`。`COMPLETE` 是确实跑完，不代表已经通过
+`(COMPLETE + RUN) / 57 = 59.6%`。`COMPLETE` 是确实跑完，不代表已经通过
 最终论文可比性审计。七个刚完成的云端目录正在同步到本地；同步与校验结果
 必须进入备份清单。
 
@@ -131,9 +134,9 @@ Oracle routing 只是相同模型的诊断读出，名称写成
 
 1. 完成 19 个 `COMPLETE` 的本地备份、registry 导入和协议可比性审计；不匹配
    的格转 `TODO` 并写明原因，但不得声称从未运行。
-2. 等待并导入 13 个 `RUN`；失败记录保留，未完成格仍是 `TODO`。
+2. 等待并导入 15 个 `RUN`；失败记录保留，未完成格仍是 `TODO`。
 3. 补 Atari ARROW-50 S1–S4、CoinRun AWM-AutoRoute 五 seeds。
-4. 补四个缺失的容量对照 S2。
+4. 补剩余的 Shared S2 与 Wider Shared S2。
 5. 冻结四份单变量消融协议，通过测试与目标 GPU smoke 后运行 12 格。
 6. 统一生成诊断、表格和图，不手工抄最终数字。
 
