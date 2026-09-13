@@ -1,5 +1,6 @@
 import argparse
 import copy
+import functools
 import hashlib
 import json
 import math
@@ -289,6 +290,9 @@ def _evaluate_policy_tasks(
     routing_diagnostics: Optional[list[dict[str, Any]]] = None,
     oracle_routes: bool = False,
 ) -> tuple[list[float], list[float]]:
+    if getattr(config, "uses_capacity_control", False) and eligible_task_count is not None:
+        eval_funcs = eval_funcs[:eligible_task_count]
+        task_seeds = task_seeds[:eligible_task_count]
     if len(task_seeds) != len(eval_funcs):
         raise ValueError(
             "Evaluation task functions and fixed task seeds must have equal length"
@@ -1124,6 +1128,8 @@ def _write_json_atomically(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 def _world_model_parameter_accounting(wm: WorldModel) -> dict:
+    if hasattr(wm, "capacity_accounting"):
+        return wm.capacity_accounting()
     observation_head_name = "decoder"
     observation_head = wm.decoder
     observation_encoders_per_task = {
@@ -2990,6 +2996,8 @@ if __name__ == "__main__":
             "Evolving-Core component-wise autograd is not compatible with "
             "--compile-world-model"
         )
+    if config.uses_capacity_control and args.compile_world_model:
+        raise ValueError("Capacity controls use explicit routed losses, not compiled loss")
     if config.uses_task_experts and analysis_snapshot_dir is not None:
         raise ValueError(
             "Task-bank analysis snapshots are disabled until replay, all actor "
@@ -3009,10 +3017,10 @@ if __name__ == "__main__":
             raise ValueError(
                 "Evaluation snapshots require fixed validation and held-out final seeds"
             )
-    if config.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}:
+    if config.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow", "capacity_control_v1"}:
         if task_bank_snapshot_dir is None:
             raise ValueError(
-                "CNN-FullBank-ARROW requires --task-bank-snapshot-dir"
+                "Task-aware methods require --task-bank-snapshot-dir"
             )
         if args.project_git_commit is None:
             raise ValueError(
@@ -3167,7 +3175,14 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
         _print_cuda_memory("startup")
-    wm = WorldModel(
+    model_factory = WorldModel
+    if config.uses_capacity_control:
+        from clworldmodel.reference.capacity_controls import build_capacity_model
+        model_factory = functools.partial(
+            build_capacity_model, WorldModel, control=config.capacity_control,
+            num_tasks=len(config.esc.env_configs), residual_atoms=config.capacity_residual_atoms,
+        )
+    wm = model_factory(
         3,
         (32, 32),
         config.action_space,
@@ -3310,7 +3325,7 @@ if __name__ == "__main__":
             )
         else:
             actor_bank_artifact_kind = (
-                "moe_arrow_actor_critic_bank_inference_state"
+                "capacity_control_actor_critic_bank_inference_state"
             )
         actor_critic_bank = ActorCriticBank(
             artifact_kind=actor_bank_artifact_kind
@@ -3549,8 +3564,8 @@ if __name__ == "__main__":
                     )
                     if initialized:
                         print(
-                            f"Warm-started world-model expert {current_task_id} "
-                            f"from expert {warm_start_from}"
+                            f"Initialized world-model route {current_task_id}; "
+                            f"previous route={warm_start_from}, method={config.continual_method}"
                         )
                 actor_critic_bank.ensure(
                     current_task_id,
@@ -3560,7 +3575,7 @@ if __name__ == "__main__":
                 print(
                     f"Initialized independent actor-critic for task {current_task_id}"
                 )
-            if (config.uses_evolving_atomic_rssm):
+            if config.uses_evolving_atomic_rssm or config.uses_capacity_control:
                 wm.activate_task_expert(
                     current_task_id, mechanism_phase=mechanism_phase
                 )
@@ -3710,7 +3725,7 @@ if __name__ == "__main__":
                 periodic_task_seeds,
                 actor_critic_bank=actor_critic_bank,
                 distributed_context=distributed_context,
-                eligible_task_count=current_task_id + 1,
+                eligible_task_count=(current_task_id + 1 if current_task_id is not None else None),
                 routing_diagnostics=periodic_routing,
             )
             if config.uses_reconstruction_task_inference:
@@ -3720,7 +3735,7 @@ if __name__ == "__main__":
                      "evaluation_transitions_enter_replay": False, "tasks": periodic_routing},
                 )
             eval_raw_mean, eval_raw_std = _raw_return_statistics(
-                config.esc.env_configs, eval_results_mean, eval_results_std
+                config.esc.env_configs[:len(eval_results_mean)], eval_results_mean, eval_results_std
             )
             if distributed_context.is_primary:
                 writer.add_scalars(
@@ -3805,7 +3820,7 @@ if __name__ == "__main__":
             else config.pretrain_steps
         )
         world_model_task_schedule = None
-        if config.uses_task_experts:
+        if config.uses_task_experts and not config.uses_capacity_control:
             available_task_ids = replay.available_task_ids()
             world_model_allocation = allocate_task_updates(
                 world_model_updates_this_epoch,
@@ -3844,6 +3859,17 @@ if __name__ == "__main__":
                 mb_t_size = config.pretrain_mb_t_size
                 global_mb_n_size = config.pretrain_mb_n_size
             mb_n_size = distributed_context.local_sequences(global_mb_n_size)
+            if config.uses_capacity_control:
+                from clworldmodel.reference.capacity_controls import capacity_world_model_update
+                metrics, grad_norm = capacity_world_model_update(
+                    config, wm, replay, opt, current_task_id, task_update_rng,
+                )
+                if global_step % config.log_frequency == 0:
+                    writer.add_scalar("Metric/grad_norm", grad_norm, global_step)
+                    for name, value in metrics.items():
+                        writer.add_scalar(name, value, global_step)
+                global_step += 1
+                continue
             if config.uses_evolving_atomic_rssm:
                 if current_task_id is None or evolving_shared_optimizer is None:
                     raise RuntimeError("Evolving-Core requires an active task and optimizer")
@@ -4341,6 +4367,22 @@ if __name__ == "__main__":
             if task_bank_snapshot_dir is not None
             else None
         )
+        if config.uses_capacity_control and boundary_snapshot_metadata is not None:
+            seen = current_task_id + 1
+            means, stds = _evaluate_policy_tasks(
+                config, wm, aco, envs.eval_funcs()[:seen], validation_task_seeds[:seen],
+                actor_critic_bank=actor_critic_bank,
+            )
+            raw_means, raw_stds = _raw_return_statistics(config.esc.env_configs[:seen], means, stds)
+            _write_json_atomically(log_dir / f"boundary_evaluation_{seen:02d}.json", {
+                "completed_epochs": epoch + 1, "world_model_updates": global_step,
+                "actor_critic_updates": actor_critic_updates, "raw_return_means": raw_means,
+                "raw_return_stds": raw_stds, "task_seeds": list(validation_task_seeds[:seen]),
+                "cohort": "fixed_validation", "nominal_rollouts_per_task": 16,
+                "episode_count_mode": config.evaluation_episode_count_mode,
+                "evaluation_transitions_enter_replay": False,
+            })
+            _write_json_atomically(log_dir / "model_parameter_accounting.json", wm.capacity_accounting())
         if (
             distributed_context.is_primary
             and config.uses_evolving_atomic_rssm

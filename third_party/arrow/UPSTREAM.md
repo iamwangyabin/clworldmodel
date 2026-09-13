@@ -17,6 +17,16 @@ documented here, covered by focused parity tests, and followed by regenerating
 `MANIFEST.sha256`. Clean project-owned implementations still belong under
 `src/clworldmodel/`.
 
+## Baseline evaluation eligibility repair (2026-09-11)
+
+The retained Atari trainer's periodic evaluation caller unconditionally added
+one to `current_task_id`, which is correctly `None` for task-agnostic ARROW/DV3.
+Pass `None` in that case, retaining `task_id + 1` for task-bank methods. This
+repairs a pre-evaluation crash without exposing task labels, changing evaluator
+sampling, or changing any update/interaction budget. A deterministic AST-level
+caller regression checks the real keyword expression for both baseline and
+task-bank inputs; the target tiny DV3 run exercises the actual evaluator.
+
 ## First-task host control (2026-09-08)
 
 User-approved S1-on-4090-1 control adds a default-off
@@ -898,3 +908,15 @@ dry runs nor the new tensor fixture establish a reproduced result.
 
 Items 1 through 3 are corrected by the documented local compatibility and
 runtime profiles; item 4 remains a constraint of the upstream implementation.
+
+## 2026-09-11 prospective capacity-control integration
+
+Decision 0064 adds strictly named `capacity_control_v1` configuration and a
+factory adapter in the common Atari trainer for five new organization controls.
+No old FullBank/frozen runtime is restored. The branch adds explicit routed
+current/old Dreamer updates, seen-task-only evaluation and boundary raw-return
+records for this method. Baseline loss/sampling paths remain unchanged.
+`tests/test_capacity_controls.py` covers config, shared-loss equivalence,
+independent/frozen parameter ownership and two-task WM/AC state roundtrips;
+retained parity and target GPU smoke are launch gates, not reproduced results.
+See the named protocol for deliberate AWM compute/protection differences.
