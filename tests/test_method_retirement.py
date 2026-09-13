@@ -16,6 +16,13 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "third_party/arrow/Code/ARROW_and_DV3/Atari"))
 
+try:
+    import torch  # noqa: F401
+except ModuleNotFoundError:  # pragma: no cover - minimal hosts omit PyTorch.
+    torch = None
+
+requires_torch = unittest.skipUnless(torch is not None, "requires PyTorch")
+
 
 class MethodRetirementTests(unittest.TestCase):
     def test_launchers_reject_retired_choices(self):
@@ -32,6 +39,7 @@ class MethodRetirementTests(unittest.TestCase):
                     parser.parse_args(args)
                 self.assertEqual(error.exception.code, 2)
 
+    @requires_torch
     def test_fastkan_implementation_is_not_exported_or_importable(self):
         import clworldmodel.models as models
 
@@ -39,6 +47,7 @@ class MethodRetirementTests(unittest.TestCase):
         with self.assertRaises(ModuleNotFoundError):
             importlib.import_module("clworldmodel.models.fast_kan")
 
+    @requires_torch
     def test_config_and_actor_reject_retired_paths(self):
         from ac import ActorCritic
         from config import Config
@@ -58,8 +67,8 @@ class MethodRetirementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ActorCritic(14, 4, actor_network="fast_kan_ac_stable")
 
+    @requires_torch
     def test_mlp_initialization_and_outputs_match_pre_retirement(self):
-        import torch
         from ac import ActorCritic
 
         expected = json.loads((ROOT / "tests/fixtures/retained_mlp_behavior_parity.json").read_text())

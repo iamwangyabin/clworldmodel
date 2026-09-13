@@ -77,7 +77,24 @@ def read_run(path: Path) -> dict:
     if stored["normalization"]["random"] != RANDOM or stored["normalization"]["single_task"] != SINGLE:
         raise ValueError(f"{path.parent.name}: normalization anchors changed")
     if stored["fixed_table_A16_diagnostic"] != metrics:
-        raise ValueError(f"{path.parent.name}: stale derived metrics")
+        # Stored summaries were derived on the Linux launch host; recomputation
+        # on other platforms may differ in the last ulp from fp association.
+        # Tolerate float noise only — anchors above stay exact, and any real
+        # formula change moves metrics far beyond this band.
+        def _close(a: object, b: object) -> bool:
+            if isinstance(a, float) or isinstance(b, float):
+                try:
+                    return math.isclose(float(a), float(b), rel_tol=1e-12, abs_tol=1e-12)
+                except (TypeError, ValueError):
+                    return False
+            if isinstance(a, dict) and isinstance(b, dict):
+                return a.keys() == b.keys() and all(_close(a[k], b[k]) for k in a)
+            if isinstance(a, list) and isinstance(b, list):
+                return len(a) == len(b) and all(_close(x, y) for x, y in zip(a, b))
+            return a == b
+
+        if not _close(stored["fixed_table_A16_diagnostic"], metrics):
+            raise ValueError(f"{path.parent.name}: stale derived metrics")
     return {"record": record, "matrix": matrix, "episodes": episodes, "metrics": metrics}
 
 

@@ -7,8 +7,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import torch
+try:
+    import torch
+except ModuleNotFoundError:  # pragma: no cover - minimal hosts omit PyTorch.
+    torch = None
+
 import awm_seed_cross_eval as audit
+
+requires_torch = unittest.skipUnless(torch is not None, "requires PyTorch")
 
 
 class CrossSeedDiagnosticTests(unittest.TestCase):
@@ -47,6 +53,7 @@ class CrossSeedDiagnosticTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             audit.validate_snapshot(modified, 0)
 
+    @requires_torch
     def test_observation_wrapper_passes_through_original_tensors_and_arguments(self):
         tensors = (torch.zeros(8, 18), None, torch.ones(8, 1),
                    torch.ones(8, 1), torch.zeros(8, 1))
