@@ -215,8 +215,11 @@ def _policy(config: dict[str, Any], final_path: Path) -> str:
         policy = final.get("policy")
         if isinstance(policy, str):
             return policy
+    # Interpret archived results without restoring retired runtime options.
     if config.get("task_route_inference") == "first_frame_reconstruction":
         return "first_frame_reconstruction_episode_lock_argmax_latent_mode"
+    if config.get("task_route_inference") == "two_frame_probability_reconstruction":
+        return "two_frame_probability_reconstruction_arrow_legacy_evaluator"
     task_expert_methods = {
         "moe_arrow",
         "cnn_fullbank_arrow",

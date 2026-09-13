@@ -5,19 +5,23 @@ learning. Its current base is the paper's canonical ARROW-50 method: a
 DreamerV3-style agent with an equally split FIFO and long-term
 distribution-matching (LTDM) replay budget.
 
-## Current method scope — retirement in progress
+## Current method scope
 
-The retained project-owned methods are **AWM (Accumulative World Modeling)**,
-formerly D, and its **AWM-AutoRoute** variant, formerly D-AutoRoute. ARROW-50,
-DreamerV3/FIFO, native R2-Dreamer and Dream Rehearsal reference integrations
-remain separate.
+The sole formal project-owned paper method is **AWM-AutoRoute — Accumulative
+World Modeling with Automatic Routing**, formerly D-AutoRoute. ARROW-50,
+DreamerV3/FIFO, native R2-Dreamer and Dream Rehearsal remain baselines or
+reference integrations, not project methods. The AWM/D oracle path remains an
+internal training, parity and diagnostic reference; it is not a second paper
+method. See [Decision 0065](docs/decisions/0065-awm-autoroute-only-paper-method.md).
 
-AWM aims to accumulate learned prediction and control functionality in a
-continually trainable world model: acquire with full private capacity, protect
-previously learned functions, then compact the acquired structure under a
-raw-return gate. The formal name replaces D, not its algorithm or protocol.
-Existing launcher paths, config keys, protocol IDs and historical records stay
-unchanged; see [Decision 0060](docs/decisions/0060-name-awm-accumulative-world-modeling.md).
+The authoritative paper experiment backlog and progress counter is
+[the AWM-AutoRoute paper plan](docs/experiments/AWM_AUTOROUTE_PAPER_PLAN.md).
+
+AWM-AutoRoute accumulates learned prediction and control functionality in a
+continually trainable world model, then selects the retained route without a
+task ID at inference. Existing launcher paths, config keys, protocol IDs and
+historical records stay unchanged; Decisions 0060 and 0065 record the naming
+and final paper scope separately.
 
 The early representation/KAN, KARROW, MoE/full-bank, frozen-first-task
 adaptation and other Evolving-Core implementations have been retired by user
@@ -624,7 +628,7 @@ private-head reference. Q/F/P and private behavior still grow per task. This
 configuration has no performance result yet; see
 `docs/protocols/evolving_core_dense_qfp_shared_distilled_heads_v1_atari.md`.
 
-**AWM (Accumulative World Modeling, formerly D)** keeps that same acquisition
+**Historical/internal AWM oracle path (formerly D).** This path keeps that same acquisition
 topology, then evaluates four physical structured-pruning candidates after
 each task. Every candidate receives the same 250-update LTDM recovery budget;
 the smallest width within a five-percent **raw-return** drop on a dedicated
@@ -699,22 +703,29 @@ exact-episode evaluation, without redefining legacy D. No performance or
 recognition-accuracy result is claimed; see
 [`D-AutoKAN v1`](docs/protocols/evolving_core_fastkan_autoroute_v1_atari.md).
 
-**AWM-AutoRoute** has its own entry point and retains AWM's **independent MLP
+**AWM-AutoRoute**, the sole formal paper method, has its own entry point and retains AWM's **independent MLP
 Actor-Critics**, without FastKAN, shared behavior, or AC compression:
 
 ```bash
 python scripts/run_evolving_atomic_rssm_d_autoroute.py --seed 0 --dry-run
 ```
 
-Each worker's first-frame reconstruction selects both its world-model path
-and its corresponding private Actor, locked until reset. Training/Replay still
-use true task labels; inference does not. The maintained v2 restores AWM/ARROW's
-implicit NextStep collection, legacy trajectory-budget evaluator, oracle
-consolidation checks and current-task oracle Q/F/P gate with 480 nominal
-selector rollouts. AC parameters remain AWM's `10,295,910`; no learned router
-parameters are added. The earlier SameStep/exact v1 runs remain historical and
-are not comparable to AWM as an isolated routing ablation. See
-[`AWM-AutoRoute v2`](docs/protocols/evolving_core_d_autoroute_v2_atari.md).
+**AWM-AutoRoute** has one maintained implementation. It selects a route from the first
+observation, accumulates a second observation's reconstruction MSE using each
+candidate's own history and the executed action, then holds the result until
+reset. Only the routing decoder receives posterior probabilities; recurrence
+and the private Actor retain hard categorical states. No later candidate
+probes or learned router parameters are added. Training/Replay still use true
+task labels; inference does not. It retains AWM's implicit NextStep collector,
+legacy evaluation budget, oracle consolidation/compression gates and 480 nominal
+selector rollouts. Restarting a scoring window does not reset the selected
+policy again: an unchanged route preserves AWM's state and previous action.
+Only an actual expert switch substitutes that candidate's own history.
+AC parameters remain AWM's `10,295,910`. Old first-frame routing is no longer
+selectable; its results remain historical. Protocol **v4** corrects v3's
+episode-start policy overwrite. Historical v3 configs/checkpoints are not
+silently resumed as v4. No return improvement is claimed. See
+[`AWM-AutoRoute`](docs/protocols/awm_autoroute_v4_atari.md).
 
 The currently authorized campaign keeps the main order fixed. A separate
 seed-0 Task-0 duration pilot uses the unchanged 90-epoch full run as a control

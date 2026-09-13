@@ -20,6 +20,61 @@ if TYPE_CHECKING:
     from clworldmodel.routing import RoutedActorBank
 
 
+def _two_frame_route_inputs(wm, router, obs, z, h, previous_action, reset, route_reset):
+    """Score deterministic candidate histories; restore own history on a switch.
+
+    Decoder alone receives posterior probabilities. The selected policy keeps
+    its ordinary hard/stochastic state and previous action when its route is
+    unchanged, including across episode starts. Only an actual route switch
+    uses the selected candidate's own prior, never another expert's history.
+    """
+    old_routes = router.routes.clone() if router.routes is not None else None
+    priors = {}
+
+    def reconstruct(route_id, frames, rows, first):
+        if route_id not in router.candidate_states:
+            router.candidate_states[route_id] = wm.rssm.initial_state(len(obs))
+        cached_z, cached_h = router.candidate_states[route_id]
+        probe_z, probe_h = cached_z[rows].clone(), cached_h[rows].clone()
+        if bool(first.any()):
+            initial_z, initial_h = wm.rssm.initial_state(int(first.sum()))
+            probe_z[first], probe_h[first] = initial_z.to(probe_z), initial_h.to(probe_h)
+        probe_action = previous_action[rows].clone()
+        probe_action[first] = 0
+        probe_action[first, 0] = 1  # episode-local dummy, not an ignored autoreset action
+        priors[route_id] = (rows, first, probe_z, probe_h, probe_action)
+        q, next_z, next_h = wm.rssm(
+            probe_z, probe_action, probe_h, frames, first.float().unsqueeze(-1),
+            task_id=route_id, stochastic=False,
+        )
+        # Preserve RSSM output dtypes across time (initial_state can be FP32
+        # while the recurrent output is BF16); do not silently upcast histories.
+        cached_z, cached_h = cached_z.to(next_z), cached_h.to(next_h)
+        cached_z[rows], cached_h[rows] = next_z, next_h
+        router.candidate_states[route_id] = cached_z, cached_h
+        return wm.decoder_for(route_id)(zh_to_ac_state(q.exp(), next_h))
+
+    routes = router.route(obs, route_reset.bool().reshape(-1), reconstruct,
+                          inactive=reset.bool().reshape(-1))
+    if not priors:
+        return routes, z, h, previous_action
+    policy_z, policy_h, policy_action = z.clone(), h.clone(), previous_action.clone()
+    for route_id, (rows, first, prior_z, prior_h, prior_action) in priors.items():
+        # A fresh scoring window must not introduce a second policy reset on
+        # top of ARROW's NextStep/RSSM bookkeeping. Initial policy state belongs
+        # to the collector; candidate histories are substituted only on a switch.
+        changed = (torch.zeros_like(first) if old_routes is None else
+                   (old_routes[rows] >= 0) & (old_routes[rows] != routes[rows]))
+        use = changed & (routes[rows] == route_id)
+        selected = rows[use]
+        policy_z[selected] = prior_z[use].to(policy_z)
+        policy_h[selected] = prior_h[use].to(policy_h)
+        policy_action[selected] = prior_action[use]
+    if bool((router.counts == 2).all()):
+        router.candidate_states.clear()
+    return routes, policy_z, policy_h, policy_action
+
+
 @torch.no_grad()
 def _routed_policy_step(
     wm,
@@ -36,31 +91,24 @@ def _routed_policy_step(
 ):
     """Route each worker's RSSM and, when private, Actor by the same inferred ID.
 
-    Candidate probes always start from zero state and a dummy no-op action. They
-    use posterior mode and cannot advance the executed trajectory's state/RNG.
+    Probes accumulate two observations with independent deterministic candidate
+    histories, without consuming sampling RNG. Only the selected policy is sampled.
     No environment/task label is accepted by this boundary.
     """
-    from clworldmodel.routing import EpisodeReconstructionRouter, RoutedActorBank
+    from clworldmodel.routing import (
+        TwoFrameReconstructionRouter, RoutedActorBank,
+    )
 
-    if not isinstance(router, EpisodeReconstructionRouter):
+    if not isinstance(router, TwoFrameReconstructionRouter):
         raise TypeError("Expected an episode reconstruction router")
     if isinstance(ac, RoutedActorBank) and ac.route_ids != router.eligible_route_ids:
         raise ValueError("Private actor and world-model eligibility registries must match")
 
-    def reconstruct(route_id, frames):
-        probe_z, probe_h = wm.rssm.initial_state(len(frames))
-        probe_action = torch.zeros(len(frames), previous_action.shape[-1], device=z.device)
-        probe_action[:, 0] = 1
-        _, probe_z, probe_h = wm.rssm(
-            probe_z, probe_action, probe_h, frames,
-            torch.ones(len(frames), 1, device=z.device),
-            task_id=route_id, stochastic=False,
-        )
-        return wm.decoder_for(route_id)(zh_to_ac_state(probe_z, probe_h))
-
     with _autocast_context(z.device, getattr(wm, "compute_dtype", "float32")):
         route_reset = reset if route_reset is None else route_reset
-        route_ids = router.route(obs, route_reset.bool().reshape(-1), reconstruct)
+        route_ids, z, h, previous_action = _two_frame_route_inputs(
+            wm, router, obs, z, h, previous_action, reset, route_reset,
+        )
         next_z, next_h = None, None
         for route_id in route_ids.unique(sorted=True).tolist():
             rows = torch.where(route_ids == route_id)[0]
@@ -71,8 +119,12 @@ def _routed_policy_step(
             if next_z is None:
                 next_z = route_z.new_empty((len(obs), *route_z.shape[1:]))
                 next_h = route_h.new_empty((len(obs), *route_h.shape[1:]))
-            next_z[rows] = route_z
-            next_h[rows] = route_h
+            # Compact and dense experts can return different autocast dtypes.
+            # Preserve both outputs, independently of which route is visited first.
+            next_z = next_z.to(torch.promote_types(next_z.dtype, route_z.dtype))
+            next_h = next_h.to(torch.promote_types(next_h.dtype, route_h.dtype))
+            next_z[rows] = route_z.to(next_z)
+            next_h[rows] = route_h.to(next_h)
         features = zh_to_ac_state(next_z, next_h)
         logits = (ac(features, route_ids) if isinstance(ac, RoutedActorBank)
                   else ac.actor(features)).float()
@@ -259,6 +311,7 @@ def evaluate(
     deterministic_policy: bool = False,
     eligible_route_ids: Optional[tuple[int, ...]] = None,
     diagnostics: Optional[dict[str, Any]] = None,
+    task_route_inference: str = "two_frame_probability_reconstruction",
 ) -> tuple[float, float]:
     if eligible_route_ids is not None:
         if task_id is not None or not deterministic_policy:
@@ -277,6 +330,7 @@ def evaluate(
         deterministic_policy=deterministic_policy,
         eligible_route_ids=eligible_route_ids,
         routing_diagnostics=diagnostics,
+        task_route_inference=task_route_inference,
     )
     terms = torch.where(conts == 0)[0]
     starts = torch.where(resets == 1)[0]
@@ -315,6 +369,7 @@ def generate_trajectories(
     deterministic_policy: bool = False,
     eligible_route_ids: Optional[tuple[int, ...]] = None,
     routing_diagnostics: Optional[dict[str, Any]] = None,
+    task_route_inference: str = "two_frame_probability_reconstruction",
 ) -> tuple[ActionT, Optional[ImageT], RewardT, ContT, ResetT]:
     # Returns [ X ... ] packed as [ N*T ... ] (sort of)
     # To change to [ T N ... ], do reshape and swapaxes
@@ -323,11 +378,13 @@ def generate_trajectories(
 
     router = None
     if eligible_route_ids is not None:
-        from clworldmodel.routing import EpisodeReconstructionRouter
+        from clworldmodel.routing import TwoFrameReconstructionRouter
 
         if task_id is not None:
             raise ValueError("Auto-routed collection forbids oracle task IDs")
-        router = EpisodeReconstructionRouter(eligible_route_ids)
+        if task_route_inference != "two_frame_probability_reconstruction":
+            raise ValueError("AWM-AutoRoute supports only two-frame probability reconstruction")
+        router = TwoFrameReconstructionRouter(eligible_route_ids)
     if ac is not None and task_id is not None:
         ac.set_task_route(task_id)
 
@@ -400,7 +457,7 @@ def generate_trajectories(
                         act_t[:, 0] = 1
                     z, h, act = _routed_policy_step(
                         wm, ac, router,
-                        torch.from_numpy(obs).float().permute(0, 3, 1, 2).to(z.device) / 255,
+                        torch.from_numpy(obs / 255).float().permute(0, 3, 1, 2).to(z.device),
                         z, h, act_t,
                         torch.from_numpy(reset).float().unsqueeze(-1).to(z.device),
                         stochastic=not deterministic_policy,
@@ -472,6 +529,7 @@ def generate_trajectories(
         env.close()
     if routing_diagnostics is not None and router is not None:
         routing_diagnostics.update({
+            "mode": task_route_inference,
             "random_policy": wm is None or ac is None,
             "eligible_route_ids": list(eligible_route_ids),
             "routing_events": router.events,

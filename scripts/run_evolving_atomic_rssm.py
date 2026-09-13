@@ -92,7 +92,7 @@ D_AUTOROUTE_METHOD = (
 )
 D_AUTOROUTE_PROTOCOL = (
     "Evolving-Core-DenseAcquire-AdaptiveQFP-SharedHeads-PrivateMLPAC-"
-    "FirstFrameRouter-ARROWParity-v2-OriginalSix-Atari-"
+    "TwoFrameProbabilityRouter-ARROWParity-v4-OriginalSix-Atari-"
     "TaskAwareTraining-TaskIDFreeInference-Pilot"
 )
 AUTOROUTE_METHODS = (D_AUTOROUTE_METHOD,)
@@ -390,10 +390,12 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "private_mlp selects AWM (Accumulative World Modeling, formerly D); "
             "private_mlp_autoroute selects AWM-AutoRoute, preserving AWM's private "
-            "MLPs and adding first-frame reconstruction routing."
+            "MLPs and adding two-frame probability reconstruction routing."
         ),
     )
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--resume-from", type=Path)
+    parser.add_argument("--stop-after-first-task", action="store_true")
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
@@ -481,7 +483,8 @@ def _resolved_config(
     if behavior_profile in AUTOROUTE_BEHAVIORS:
         if behavior_profile == PRIVATE_MLP_AUTOROUTE_BEHAVIOR:
             config["continual_method"] = D_AUTOROUTE_METHOD
-        config["task_route_inference"] = "first_frame_reconstruction"
+        config["task_route_inference"] = "two_frame_probability_reconstruction"
+        config["task_route_inference_version"] = 4
     for replay_config in config["replay_buffers"]:
         replay_config["rb_device"] = "cpu"
     return config
@@ -895,8 +898,33 @@ def _budget_manifest(config: dict) -> dict:
     }
 
 
+def _first_task_control_budget(config: dict) -> dict:
+    budget = _budget_manifest(config)
+    for name in (
+        "raw_environment_frames", "online_world_model_updates",
+        "boundary_consolidation_world_model_updates", "adaptive_compression_world_model_updates",
+        "adaptive_compression_sequences", "adaptive_compression_validation_rollouts",
+        "total_world_model_optimizer_steps", "actor_critic_updates",
+        "total_actor_critic_optimizer_steps", "consolidation_sequences",
+    ):
+        budget[name] //= budget["task_count"]
+    budget.update(task_count=1, task_duration_epochs=[90],
+                  online_current_sequences=90 * config["steps_per_batch"] * config["mb_n_size"],
+                  online_memory_sequences=0,
+                  actor_critic_updates_by_task_route={"0": 90 * config["ac_train_steps"]},
+                  boundary_validation_rollouts=16,
+                  boundary_validation_cohort="existing_task0_periodic_validation",
+                  final_heldout_evaluation_rollouts=0)
+    budget["peak_boundary_replay_asset_bytes"] = budget["retained_boundary_replay_asset_bytes"]
+    budget["minimum_live_plus_peak_replay_observation_bytes"] = 2 * budget["replay"]["observation_bytes"]
+    return budget
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.stop_after_first_task and (args.resume_from is not None
+            or args.behavior_profile != PRIVATE_MLP_AUTOROUTE_BEHAVIOR):
+        raise ValueError("First-task host control requires fresh AWM-AutoRoute training")
     if args.cpu_threads < 1:
         raise ValueError("--cpu-threads must be positive")
     project_git = (
@@ -975,6 +1003,14 @@ def main(argv: list[str] | None = None) -> int:
         task_snapshot_dir=task_snapshot_dir,
         project_commit=str(project_git["commit"]),
     )
+    if args.stop_after_first_task:
+        command.remove("--evaluate-final")
+        command.append("--stop-after-first-task")
+    resume_lineage = None
+    if args.resume_from is not None:
+        from d_autoroute_resume import inspect_resume
+        resume_lineage = inspect_resume(args.resume_from, config, protocol)
+        command.extend(("--resume-evolving-checkpoint", resume_lineage["source_checkpoint"]))
     env = os.environ.copy()
     thread_env = {key: str(args.cpu_threads) for key in THREAD_ENV_KEYS}
     env.update(thread_env)
@@ -987,8 +1023,7 @@ def main(argv: list[str] | None = None) -> int:
     launch = {
         "schema_version": 1,
         "method": (
-            "AWM-AutoRoute (Accumulative World Modeling with "
-            "First-Frame Reconstruction Routing)"
+            "AWM-AutoRoute"
             if args.behavior_profile == PRIVATE_MLP_AUTOROUTE_BEHAVIOR
             else
             ("AWM (Accumulative World Modeling)"
@@ -1018,11 +1053,29 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "inference_routing": {
             "mode": config.get("task_route_inference", "oracle"),
+            "protocol_version": config.get("task_route_inference_version", 0),
+            "same_route_policy_state": "unchanged from AWM, including across episode resets",
+            "switch_policy_state": ("selected candidate's own prior history"
+                                    if args.behavior_profile in AUTOROUTE_BEHAVIORS else None),
             "eligible_routes": "acquired slots plus currently acquiring slot; never future slots",
             "episode_lock": args.behavior_profile in AUTOROUTE_BEHAVIORS,
+            "maximum_scored_observations_per_episode": (
+                2 if args.behavior_profile in AUTOROUTE_BEHAVIORS else 0
+            ),
+            "decoder_latent_for_routing": (
+                "posterior_probabilities" if args.behavior_profile in AUTOROUTE_BEHAVIORS else None
+            ),
+            "score_aggregation": (
+                "arithmetic_mean_pixel_mse" if args.behavior_profile in AUTOROUTE_BEHAVIORS else None
+            ),
             "learned_router_parameters": 0,
             "evaluation_episode_count_mode": config.get("evaluation_episode_count_mode", "legacy"),
-            "extra_inference_compute": "one RSSM posterior plus decoder per eligible route at episode start",
+            "extra_inference_compute": (
+                "one deterministic RSSM posterior plus decoder per eligible route on each "
+                "of the first two actionable observations; selected policy RSSM still runs; "
+                "no candidate probes afterward"
+                if args.behavior_profile in AUTOROUTE_BEHAVIORS else "none"
+            ),
         },
         "from_scratch": True,
         "behavior_profile": args.behavior_profile,
@@ -1112,11 +1165,7 @@ def main(argv: list[str] | None = None) -> int:
                     "adaptive_compression_max_return_drop"
                 ],
                 "selection": "smallest passing candidate after evaluating all candidates",
-                "validation_scope": (
-                    "every seen task under automatic routing"
-                    if args.behavior_profile in AUTOROUTE_BEHAVIORS
-                    else "completed task with oracle routing"
-                ),
+                "validation_scope": "completed task with oracle routing",
                 "fallback": "retain full Dense Q/F/P when no candidate passes",
                 "candidate_replay": "completed-task LTDM only",
                 "selection_cohort": "dedicated fixed pruning validation",
@@ -1147,7 +1196,19 @@ def main(argv: list[str] | None = None) -> int:
         },
         "checkpoint_retention": config["evolving_checkpoint_retention"],
         "command": command,
+        "resume_lineage": resume_lineage,
     }
+    if args.stop_after_first_task:
+        launch["parent_protocol"] = protocol
+        launch["protocol"] = protocol + "-FirstTask90-HostControl-v1"
+        launch["configured_full_curriculum_budgets"] = launch["budgets"]
+        launch["budgets"] = _first_task_control_budget(config)
+        launch["stop_after_completed_epochs"] = 90
+        launch["metric_reporting"] = {
+            "schema": "arrow-paper-v1", "automatic_after_training": False,
+            "reason": "First-task host control is not a completed continual benchmark",
+            "raw_checkpoint_matrix_preserved": True,
+        }
     print(json.dumps(launch, indent=2))
     rendered_env = [f"{key}={value}" for key, value in thread_env.items()]
     rendered_env.append(f"PYTHONPATH={env['PYTHONPATH']}")
@@ -1173,12 +1234,39 @@ def main(argv: list[str] | None = None) -> int:
     )
     _write_json(output_dir / "launch.json", launch)
 
+    resume_log_options = {}
+    if resume_lineage is not None:
+        from d_autoroute_resume import stage_resume_prefix
+        resume_log_options["prefix_log_path"] = stage_resume_prefix(output_dir, resume_lineage)
     return_code = _run_and_tee(
         command,
         cwd=ARROW_ROOT,
         env=env,
         log_path=output_dir / "train.log",
+        **resume_log_options,
     )
+    if args.stop_after_first_task:
+        required = ["first_task_control_complete.json", "first_task_control_evaluation.json",
+                    "task_boundary_snapshots/boundary_01_task_00_completed_0090.pt",
+                    "task_boundary_snapshots/boundary_01_task_00_completed_0090.pt.sha256",
+                    "evolving_core_checkpoints/task_00_post_consolidation.pt",
+                    "evolving_core_checkpoints/task_00_post_consolidation.pt.sha256",
+                    "adaptive_qfp_compression/task_00_boundary.json"]
+        missing = [name for name in required if not (output_dir / name).is_file()]
+        stop = (json.loads((output_dir / required[0]).read_text())
+                if (output_dir / required[0]).is_file() else {})
+        complete = (return_code == 0 and not missing and stop.get("completed_epochs") == 90
+                    and stop.get("world_model_updates") == 92_000
+                    and stop.get("actor_critic_updates") == 72_000)
+        _write_json(output_dir / "run_status.json", {
+            "complete": complete, "full_curriculum_complete": False,
+            "intentional_first_task_control": True, "completed_epochs": stop.get("completed_epochs"),
+            "return_code": return_code, "missing_required_outputs": missing,
+            "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+        })
+        if not complete:
+            raise RuntimeError(f"First-task control did not complete its fixed boundary: {stop}, {missing}, exit={return_code}")
+        return 0
     required = [
         "save_wm.pt",
         "save_ac.pt",

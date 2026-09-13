@@ -222,6 +222,7 @@ def main() -> int:
         args.method_profile,
     )
     world_model = _world_model(config, device)
+    train._world_model_parameter_accounting(world_model)
     world_model.activate_task_expert(0)
     boundary_teacher = copy.deepcopy(world_model).eval()
     boundary_teacher.requires_grad_(False)
@@ -284,10 +285,10 @@ def main() -> int:
     )
     routing_smoke = None
     if config.uses_reconstruction_task_inference:
-        from clworldmodel.routing import EpisodeReconstructionRouter
+        from clworldmodel.routing import TwoFrameReconstructionRouter
         from generate_trajectory import _routed_policy_step
 
-        router = EpisodeReconstructionRouter((0, 1))
+        router = TwoFrameReconstructionRouter((0, 1))
         with train._preserve_training_rng_state():
             routing_aco = shared_aco
             routing_bank = None
@@ -306,14 +307,49 @@ def main() -> int:
             previous = torch.nn.functional.one_hot(
                 torch.zeros(2, dtype=torch.long, device=device), config.action_space
             )
-            _, _, actions = _routed_policy_step(
-                world_model, routing_policy, router,
-                torch.zeros(2, 3, 64, 64, device=device), z, h, previous,
-                torch.ones(2, 1, device=device), stochastic=False,
-            )
-        if actions.shape != (2,) or len(router.events) != 2:
-            raise RuntimeError("First-frame autoroute smoke did not cover both workers")
-        routing_smoke = {"events": router.events, "accuracy_claimed": False}
+            for t in range(3):
+                z, h, actions = _routed_policy_step(
+                    world_model, routing_policy, router,
+                    torch.zeros(2, 3, 64, 64, device=device), z, h, previous,
+                    torch.full((2, 1), float(t == 0), device=device), stochastic=False,
+                )
+                previous = torch.nn.functional.one_hot(actions, config.action_space)
+        if actions.shape != (2,) or len(router.events) != 4 or router.counts.tolist() != [2, 2]:
+            raise RuntimeError("Two-frame autoroute smoke did not cover both workers")
+        # Production-width BF16 regression: restarting a scoring window on the
+        # same route must preserve AWM's state, action and sampling RNG exactly.
+        from ac import zh_to_ac_state
+        from generate_trajectory import _autocast_context
+        from clworldmodel.routing import RoutedActorBank
+        same_policy = RoutedActorBank({0: routing_policy.actors["0"]})
+        same_router = TwoFrameReconstructionRouter((0,))
+        frames = torch.full((2, 3, config.img_size, config.img_size), .2, device=device)
+        previous = torch.nn.functional.one_hot(torch.tensor([3, 4], device=device), config.action_space)
+        with torch.no_grad(), torch.random.fork_rng(devices=[device.index]):
+            z, h = world_model.rssm.initial_state(2)
+            z, h, _ = _routed_policy_step(world_model, same_policy, same_router, frames,
+                                          z, h, previous, torch.zeros(2, 1, device=device),
+                                          stochastic=False)
+            for stochastic in (False, True):
+                rng = torch.cuda.get_rng_state(device)
+                with _autocast_context(device, config.compute_dtype):
+                    _, oracle_z, oracle_h = world_model.rssm(
+                        z, previous, h, frames, torch.zeros(2, 1, device=device),
+                        task_id=0, stochastic=stochastic,
+                    )
+                    logits = same_policy.actors["0"](zh_to_ac_state(oracle_z, oracle_h)).float()
+                oracle_action = (torch.distributions.Categorical(logits=logits).sample()
+                                 if stochastic else logits.argmax(-1))
+                oracle_rng = torch.cuda.get_rng_state(device)
+                torch.cuda.set_rng_state(rng, device)
+                actual = _routed_policy_step(world_model, same_policy, same_router, frames,
+                                              z, h, previous, torch.zeros(2, 1, device=device),
+                                              stochastic=stochastic,
+                                              route_reset=torch.ones(2, device=device))
+                torch.testing.assert_close(actual, (oracle_z, oracle_h, oracle_action), rtol=0, atol=0)
+                torch.testing.assert_close(torch.cuda.get_rng_state(device), oracle_rng, rtol=0, atol=0)
+        routing_smoke = {"events": router.events, "accuracy_claimed": False,
+                         "same_route_reset_state_action_rng_parity": True}
     old_private = tuple(world_model.private_parameters(0))
 
     metrics, diagnostics, gradient_norm = train._evolving_world_model_update(
@@ -361,6 +397,20 @@ def main() -> int:
         raise RuntimeError("A completed task-private parameter received a gradient")
 
     behavior_metrics = None
+    from ac import build_actor_critic_opt, train_ac_from_wm
+
+    behavior_aco = build_actor_critic_opt(
+        world_model, lr=config.ac_lr,
+        **train._actor_critic_constructor_kwargs(config),
+    )
+    behavior_kwargs = train._actor_critic_kwargs(config, protect_residual_updates=False)
+    behavior_kwargs["dream_steps"] = 2
+    returned_aco, _, behavior_metrics = train_ac_from_wm(
+        world_model, replay, 1, n_sync=2, aco=behavior_aco,
+        lr=config.ac_lr, task_id=1, **behavior_kwargs,
+    )
+    if returned_aco is not behavior_aco or _optimizer_step(behavior_aco.opt) != 1:
+        raise RuntimeError("Private MLP actor-critic smoke did not perform one update")
 
     adaptive_compression_smoke = None
     if config.uses_adaptive_qfp_compression:
@@ -476,11 +526,9 @@ def main() -> int:
             "route": _optimizer_step(route_optimizer),
         },
         "old_private_gradients_are_none": True,
-        "shared_behavior_route_schedule": (
-            [0, 1] if behavior_metrics is not None else None
-        ),
-        "shared_behavior_metrics": behavior_metrics,
-        "first_frame_autoroute_smoke": routing_smoke,
+        "world_model_parameter_accounting": train._world_model_parameter_accounting(world_model),
+        "private_actor_critic_smoke": {"task_id": 1, "optimizer_steps": 1, "metrics": behavior_metrics},
+        "two_frame_autoroute_smoke": routing_smoke,
         "adaptive_compression_smoke": adaptive_compression_smoke,
         "adaptive_behavior_compression_smoke": (
             adaptive_behavior_compression_smoke

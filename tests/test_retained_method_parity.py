@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import sys
 import unittest
 from pathlib import Path
@@ -94,7 +95,15 @@ class RetainedMethodParityTests(unittest.TestCase):
             self.skipTest("requires PyTorch")
         sys.path.insert(0, str(ROOT / "src"))
         sys.path.insert(0, str(ROOT / "third_party/arrow/Code/ARROW_and_DV3/Atari"))
-        expected = json.loads(FIXTURE.read_text())["contracts"]
+        # This stochastic CPU trace is not bitwise portable across ARM/macOS
+        # and x86/Linux. Both fixtures come from the same hashed old source;
+        # retain the original tolerances rather than fitting them to new code.
+        fixture = (
+            FIXTURE.with_name("retained_method_parity_linux_x86_64.json")
+            if sys.platform.startswith("linux") and platform.machine() == "x86_64"
+            else FIXTURE
+        )
+        expected = json.loads(fixture.read_text())["contracts"]
         with torch.random.fork_rng(devices=[]):
             actual = tensor_contracts()
         for name in ("baseline", "d_family"):

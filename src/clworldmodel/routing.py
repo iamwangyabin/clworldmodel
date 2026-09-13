@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Parameter-free, episode-locked reconstruction routing.
+"""Parameter-free reconstruction routing with bounded episode-local probes.
 
 The caller supplies acquired route IDs, never an environment label. The shared
 world-model adapter owns reconstruction; this module has no vendored dependency.
@@ -58,13 +58,17 @@ class RoutedActorBank(torch.nn.Module):
         return logits
 
 
-class EpisodeReconstructionRouter:
-    """Select one route per worker using only its first observation.
+class TwoFrameReconstructionRouter:
+    """Accumulate FP32 pixel MSE in FP64 over at most two observations/worker.
 
-    Observations and reconstructions: float [B, C, H, W] in the same pixel
-    coordinate system. Reset: bool [B]. Ties select the lowest eligible ID.
-    Scores are float32 pixel MSE; no reward, policy, or true task ID is accepted.
-    Instances are local to a collection/evaluation call, not learned modules.
+    Observations/reconstructions are float [B,C,H,W] in the same pixel scale;
+    reset/inactive are bool [B]. Ties choose the lowest eligible route ID.
+    No reward, policy, or true task label is accepted by the scoring boundary.
+    The adapter callback receives (route ID, frames, worker indices, first mask).
+    It owns deterministic RSSM histories in ``candidate_states``; only workers
+    still awaiting their second observation need those buffers. ``inactive``
+    excludes terminal observations preceding NextStep's ignored reset action.
+    Later calls return the held route without invoking the callback.
     """
 
     def __init__(self, eligible_route_ids: Sequence[int]) -> None:
@@ -75,52 +79,72 @@ class EpisodeReconstructionRouter:
         self.eligible_route_ids = ids
         self.routes: torch.Tensor | None = None
         self.events: list[dict[str, Any]] = []
+        self.counts: torch.Tensor | None = None
+        self.score_sums: torch.Tensor | None = None
+        self.episodes: torch.Tensor | None = None
+        self.candidate_states: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
 
     @torch.no_grad()
     def route(
         self,
         observations: torch.Tensor,
         reset: torch.Tensor,
-        reconstruct: Callable[[int, torch.Tensor], torch.Tensor],
+        reconstruct: Callable[[int, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor],
+        *,
+        inactive: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if (observations.ndim != 4 or not observations.is_floating_point()
                 or observations.shape[0] < 1):
             raise ValueError("Routing observations must be non-empty float [B,C,H,W]")
-        if reset.shape != observations.shape[:1] or reset.dtype != torch.bool:
-            raise ValueError("Routing resets must be bool [B]")
-        if reset.device != observations.device:
-            raise ValueError("Routing resets and observations must share a device")
+        if (reset.shape != observations.shape[:1] or reset.dtype != torch.bool
+                or reset.device != observations.device):
+            raise ValueError("Routing resets must be bool [B] on the observation device")
+        if inactive is None:
+            inactive = torch.zeros_like(reset)
+        if (inactive.shape != reset.shape or inactive.dtype != torch.bool
+                or inactive.device != reset.device):
+            raise ValueError("Inactive workers must be bool [B] on the observation device")
         if self.routes is None:
             self.routes = torch.full_like(reset, -1, dtype=torch.long)
+            self.counts = torch.zeros_like(self.routes)
+            self.episodes = torch.full_like(self.routes, -1)
+            self.score_sums = torch.zeros(len(reset), len(self.eligible_route_ids),
+                                          device=reset.device, dtype=torch.float64)
         if self.routes.shape != reset.shape or self.routes.device != reset.device:
             raise ValueError("Create a new router when worker count or device changes")
-        indices = torch.where(reset | (self.routes < 0))[0]
-        if not indices.numel():
+        starts = reset | (self.routes < 0)
+        self.counts[starts] = 0
+        self.score_sums[starts] = 0
+        self.episodes[starts] += 1
+        rows = torch.where((self.counts < 2) & (~inactive | starts))[0]
+        if not rows.numel():
             return self.routes.clone()
-        frames = observations[indices].float()
+        frames, first = observations[rows].float(), self.counts[rows] == 0
         scores = []
         for route_id in self.eligible_route_ids:
-            decoded = reconstruct(route_id, frames)
+            decoded = reconstruct(route_id, frames, rows, first)
             if decoded.shape != frames.shape or decoded.device != frames.device:
                 raise ValueError("Route reconstruction must match observation shape/device")
             scores.append((decoded.float() - frames).square().flatten(1).mean(1))
-        scores = torch.stack(scores, dim=-1)  # [reset_workers, eligible_routes]
+        scores = torch.stack(scores, -1)
         if not bool(torch.isfinite(scores).all()):
             raise FloatingPointError("Non-finite reconstruction routing score")
-        winners = scores.argmin(-1)
-        ids = torch.tensor(self.eligible_route_ids, device=frames.device)
-        selected = ids[winners]
-        self.routes[indices] = selected
-        sorted_scores = scores.sort(-1).values
-        margins = (sorted_scores[:, 1] - sorted_scores[:, 0]
-                   if scores.shape[1] > 1 else torch.zeros_like(sorted_scores[:, 0]))
-        for worker, route_id, row, margin in zip(
-            indices.tolist(), selected.tolist(), scores.cpu().tolist(), margins.tolist()
-        ):
+        self.score_sums[rows] += scores.double()
+        self.counts[rows] += 1
+        means = self.score_sums[rows] / self.counts[rows, None]
+        ids = torch.tensor(self.eligible_route_ids, device=reset.device)
+        self.routes[rows] = ids[means.argmin(-1)]
+        sorted_means = means.sort(-1).values
+        margins = (sorted_means[:, 1] - sorted_means[:, 0]
+                   if len(ids) > 1 else torch.zeros_like(sorted_means[:, 0]))
+        for i, worker in enumerate(rows.tolist()):
             self.events.append({
-                "worker_index": worker, "selected_route_id": route_id,
+                "worker_index": worker, "episode_index": int(self.episodes[worker]),
+                "observation_count": int(self.counts[worker]),
+                "selected_route_id": int(self.routes[worker]),
                 "eligible_route_ids": list(self.eligible_route_ids),
-                "reconstruction_mse": row, "margin": margin,
+                "reconstruction_mse": scores[i].tolist(),
+                "cumulative_mean_mse": means[i].tolist(), "margin": float(margins[i]),
             })
         return self.routes.clone()
 
@@ -131,17 +155,34 @@ def routing_audit(
     """Attach labels *after* inference, solely for persisted diagnostics."""
     if not 0 <= true_task_id < task_count:
         raise ValueError("Audit task ID is outside the configured task set")
+    # V3 primary accuracy uses the last available decision per episode, not a
+    # mixture of first/second decisions misreported as episode starts.
+    decisions = events
+    extra = {}
+    if events and "observation_count" in events[0]:
+        last = {(e["worker_index"], e["episode_index"]): e for e in events}
+        decisions = list(last.values())
+        extra = {"routing_decisions": len(events), "accuracy_unit": "last_available_route_per_episode"}
+        for n in (1, 2):
+            subset = [e for e in events if e["observation_count"] == n]
+            extra[f"observation_{n}"] = {
+                "count": len(subset),
+                "accuracy": (sum(e["selected_route_id"] == true_task_id for e in subset) / len(subset)
+                             if subset else None),
+            }
     confusion = [[0] * task_count for _ in range(task_count)]
     for event in events:
         selected = event["selected_route_id"]
         if not 0 <= selected < task_count:
             raise ValueError("Audit route is outside the configured task set")
-        confusion[true_task_id][selected] += 1
+    for event in decisions:
+        confusion[true_task_id][event["selected_route_id"]] += 1
     return {
         "true_task_id_for_audit_only": true_task_id,
-        "episode_starts": len(events),
-        "accuracy": (confusion[true_task_id][true_task_id] / len(events)
-                     if events else None),
+        "episode_starts": len(decisions),
+        "accuracy": (confusion[true_task_id][true_task_id] / len(decisions)
+                     if decisions else None),
         "confusion_matrix": confusion,
         "events": list(events),
+        **extra,
     }

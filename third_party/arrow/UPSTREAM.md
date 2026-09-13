@@ -17,7 +17,45 @@ documented here, covered by focused parity tests, and followed by regenerating
 `MANIFEST.sha256`. Clean project-owned implementations still belong under
 `src/clworldmodel/`.
 
+## First-task host control (2026-09-08)
+
+User-approved S1-on-4090-1 control adds a default-off
+`--stop-after-first-task` option to the Atari trainer. The 540-epoch config,
+initialization, all sampling/loss/update code and full-run behavior remain
+unchanged. Only after the first complete boundary and its checkpoints does the
+named control perform one isolated task-0 periodic-cohort evaluation and exit,
+without task-1 training or final-heldout evaluation. Launcher manifests report
+the 90-epoch prefix budget separately. Focused tests cover unchanged config
+construction, fixed counters and a stopping predicate that consumes no RNG;
+retained state/action/RNG parity and target CUDA smoke remain required.
+See `docs/protocols/awm_v4_s1_host_control.md` for scope and inference limits.
+
 ## Current retirement update (2026-09-07)
+
+Launch preflight correction (2026-09-08): Atari's actual CLI still injected the
+retired `actor_kan_trainable_grid` field and replaced the resolved MLP setting
+with `None` when `--actor-network` was omitted. Remove the obsolete field and
+apply the actor override only when explicitly supplied. This repairs startup,
+not the retained training protocol. `test_d_autoroute` executes the real CLI
+through config validation and stops before CUDA initialization, covering both
+omitted and explicit MLP arguments. The launch manifest also now consistently
+labels adaptive compression selection as completed-task oracle validation.
+
+The first two-seed startup attempts then exposed stale parameter-report
+consumers: the retained bank always includes Task 0, but accounting still read
+the removed `include_task0` flag and called retired prediction adapters. Index
+the retained per-task bank directly and report zero private prediction-adapter
+parameters. Dense/compact module-count tests and the CUDA smoke now cover this
+startup report. No parameters, update rule, replay semantics or budgets change;
+the failed attempts stopped before environment interaction or optimizer updates.
+
+The next startup attempt reached world-model updates but exposed an obsolete
+`ActorCritic.consolidation_penalty()` call in the shared AC trainer. Retained
+MLPs have no KAN consolidation; replace the two obsolete calls (ordinary and
+DDP loss paths) with the same zero penalty MLPs historically returned, keeping
+the legacy metric column zero. A real private-MLP optimizer-step regression and
+the CUDA smoke now exercise imagination plus AC optimization, not inference
+alone. Preserve failed pilot2 suffix work; no resumable first boundary existed.
 
 Decision 0058 retires FastKAN StableTargets and F/D-AutoKAN at the user's
 request. Atari's typed config and CLI reject those selectors; the FastKAN
@@ -761,6 +799,73 @@ complete by this change. See Decision 0058 for the validation scope.
     claimed to match ARROW. Focused tests cover old-default isolation, the
     bootstrap choice, exact ARROW base budgets, memory-only arm difference, and
     the two-task target-GPU smoke contract.
+66. Keep the AWM-AutoRoute name/key/entry point and advance its default to the
+    separately recorded two-frame probability-reconstruction v3 protocol.
+    Atari config admits the explicit old v2 mode and new v3 mode; the launcher
+    chooses v3 and passes it through collection/evaluation/snapshot metadata.
+    The project-owned router accumulates FP32 pixel MSE in FP64 over two
+    actionable observations. The vendored adapter advances independent hard,
+    deterministic candidate histories with executed actions; only decoder
+    scoring receives posterior probabilities. The selected policy still runs
+    its ordinary RSSM and private Actor, with its own candidate history restored
+    on a second-frame switch. Episode starts use a fresh state and dummy action;
+    ignored NextStep reset actions/terminal observations are not second probes.
+    Thus v3 is not claimed single-route action-identical to v2 across resets.
+    After two observations there are no candidate RSSM/decoder calls. The
+    collector's stored transitions, evaluator, oracle training gates, Replay
+    labels, update/parameter budgets, upstream pin and MIT notices are unchanged.
+    Fixed-tensor tests cover scores against independently replayed real RSSMs,
+    hard Actor input, switching, staggered resets, bounded calls, frozen weights,
+    RNG, checkpoint round trips and cross-version resume rejection. The v2
+    collector test's pre-existing off-by-one assertion now checks the initial
+    stored dummy plus all four effective/ignored env.step actions (five entries),
+    without changing the old collector. See Decision 0061 and the v3 protocol.
+
+67. On 2026-09-08, retire the historical first-frame runtime branch at the
+    user's request. AWM-AutoRoute now names only the two-frame probability
+    router. Config and collector reject the old route mode; collection and
+    evaluation default to the sole maintained router. Remove the zero-state
+    modal-decoder adapter branch and project-owned first-frame router class.
+    The two-frame scoring/state/reset behavior, internal v3 protocol ID,
+    training budgets, baseline AWM behavior and checkpoint layout are unchanged.
+    Tests migrate shared policy/collector contracts to cumulative decisions and
+    assert that old configs/entry points fail before environment creation.
+    Historical protocols, results and read-only report interpretation remain;
+    they require recorded source revisions, not compatibility execution.
+    See Decision 0062. Upstream pin and MIT notices remain unchanged.
+
+68. On 2026-09-08, repair AWM-AutoRoute's first compact/dense task boundary:
+    native RSSM outputs can differ in dtype under BF16 autocast. Assemble the
+    routed policy batch using dtype promotion, preserving each expert's values
+    rather than choosing the first route's dtype or forcing all networks to a
+    different precision. Homogeneous batches, router scores, task eligibility,
+    reset semantics and training budgets are unchanged. A regression exercises
+    both route/dtype orders and recurrent steps. Restore the retained method's
+    post-boundary continuation plumbing using the historical project-owned
+    recovery helpers, now rejecting retired first-frame configs. Validate full
+    counters, retired private-optimizer ownership and acquired actor IDs before
+    restoring; deserialize checkpoint tensors on CPU and let model/optimizer/
+    replay loaders place owned state. The opt-in launcher preserves the failed
+    suffix and records inherited result provenance in a new attempt. No retired
+    algorithm is reinstated. Tests cover lineage and checkpoint round trips;
+    the target recovery smoke compares all model, optimizer, replay and RNG
+    state and exercises mixed compact/dense BF16 inference without a simulator.
+    See the two-seed 2026-09-08 experiment record for the failure and validation.
+
+69. On 2026-09-08, correct AWM-AutoRoute policy-state handling at the user's
+    request (Decision 0063 / protocol v4). A new routing window clears only
+    candidate histories/scores. On an unchanged expert ID, preserve AWM's policy
+    state and previous action rather than copying the candidate's zero state
+    into the policy. Only actual expert switches restore candidate-owned prior
+    history. Match the oracle path's uint8/255 observation conversion exactly.
+    Original AWM/ARROW reset masks, NextStep mode, stored actions, reward/continue
+    shifts, return extraction, losses, AC and budgets are untouched. Add a
+    strict resolved inference-version field (AutoRoute 4, other methods 0),
+    persist it in checkpoints, reject cross-version continuation, and normalize
+    only the default-off field for historical oracle AWM checkpoints. Real-RSSM
+    state/action/RNG regressions fail before the fix and pass afterward; retain
+    switch and mixed-dtype tests plus production-width target-CUDA parity smoke.
+    Historical v3 artifacts remain separate; new runs restart from scratch.
 
 ## Method retirement in progress — 2026-09-06
 

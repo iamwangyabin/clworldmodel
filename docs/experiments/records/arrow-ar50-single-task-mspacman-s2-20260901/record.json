@@ -1,0 +1,268 @@
+{
+ "schema_version": 1,
+ "record_id": "arrow-ar50-single-task-mspacman-s2-20260901",
+ "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed2_task0_mspacman",
+ "method": "ARROW-50 single-task normalization reference",
+ "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+ "evidence_level": "pilot",
+ "classification": "single-task-normalization-reference",
+ "status": "complete",
+ "recorded_at_utc": "2026-09-13T07:27:04Z",
+ "project_git": {
+  "commit": "368f44084af15e82c671c8c972943628e1dea1ea",
+  "clean": true,
+  "upstream": "origin/codex/arrow-cpu-replay-campaign",
+  "ahead": 0,
+  "behind": 0,
+  "repository": "https://github.com/iamwangyabin/clworldmodel.git"
+ },
+ "seed": {
+  "id": 2,
+  "value": 31337
+ },
+ "task_awareness": "task_agnostic",
+ "task_order": [
+  "ALE/MsPacman-v5"
+ ],
+ "completion": {
+  "total_task_count": 1,
+  "completed_task_count": 1,
+  "completed_epochs": 90,
+  "final_evaluation_performed": true,
+  "final_evaluation_epoch": 90,
+  "training_end_logged": true,
+  "source_started_at": "2026-09-01T13:47:34.038245+00:00",
+  "source_finished_at": "2026-09-01T19:29:14.956959+00:00"
+ },
+ "evaluation": {
+  "metric": "raw_environment_return",
+  "policy": "vendored ARROW periodic validation for non-expert runs: seeded evaluation environment streams (advancing cohort, training RNG state preserved and restored around evaluation); stochastic policy sampling; raw returns unscaled by per-task reward transformation",
+  "evaluation_transitions_enter_replay": false,
+  "standard_deviation_ddof": 0,
+  "configured_rollouts_per_task": 16,
+  "episode_count_note": "Episode counts are termination-dependent and are not persisted in the Atari training logs; only rollout budget (16) and return statistics are recorded.",
+  "checkpoints": [
+   {
+    "checkpoint_id": "epoch-000",
+    "completed_epochs": 0,
+    "completed_task_count": 0,
+    "stage": "initial",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/MsPacman-v5",
+      "raw_return_mean": 297.5,
+      "raw_return_std": 208.19161846721877
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-010",
+    "completed_epochs": 10,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/MsPacman-v5",
+      "raw_return_mean": 481.25,
+      "raw_return_std": 231.13510659352463
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-020",
+    "completed_epochs": 20,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/MsPacman-v5",
+      "raw_return_mean": 757.5,
+      "raw_return_std": 478.1278594685735
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-030",
+    "completed_epochs": 30,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/MsPacman-v5",
+      "raw_return_mean": 1210.5882352941176,
+      "raw_return_std": 847.9419416046006
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-040",
+    "completed_epochs": 40,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/MsPacman-v5",
+      "raw_return_mean": 979.375,
+      "raw_return_std": 262.45163244872373
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-050",
+    "completed_epochs": 50,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/MsPacman-v5",
+      "raw_return_mean": 935.0,
+      "raw_return_std": 227.37634001804145
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-060",
+    "completed_epochs": 60,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/MsPacman-v5",
+      "raw_return_mean": 1066.875,
+      "raw_return_std": 344.3421036919534
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-070",
+    "completed_epochs": 70,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/MsPacman-v5",
+      "raw_return_mean": 1593.125,
+      "raw_return_std": 305.09668037361536
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-080",
+    "completed_epochs": 80,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/MsPacman-v5",
+      "raw_return_mean": 1530.0,
+      "raw_return_std": 421.11459248047913
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-090",
+    "completed_epochs": 90,
+    "completed_task_count": 1,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/MsPacman-v5",
+      "raw_return_mean": 1676.25,
+      "raw_return_std": 472.90161503213324
+     }
+    ]
+   }
+  ]
+ },
+ "headline": {
+  "summary": "ALE/MsPacman-v5 single-task anchor, seed 31337: final raw return 1676.25 \u00b1 472.90161503213324 at epoch 90 (initial epoch-0 return 297.5; 90-epoch budget matching the per-task window of the continual protocol)."
+ },
+ "comparability": {
+  "claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+  "limitations": [
+   "Single task per run; no cross-task retention or transfer information.",
+   "Execution profile is vendored-optimized-cpu-float32-replay (Decision 0045), a declared deviation from the published CUDA-replay environment; not bitwise identical to upstream execution.",
+   "Pilot classification: one seed per task here supports anchor estimation, not an official multi-seed reproduction of ARROW single-task performance.",
+   "Periodic validation uses stochastic policy sampling (vendored non-expert default), unlike deterministic evaluation used by task-expert protocols.",
+   "Random-policy lower anchor is tracked separately and is not part of these records."
+  ]
+ },
+ "derived_metrics": {
+  "anchor_role": "single_task_upper_anchor",
+  "normalization_pairing": "requires_random_policy_lower_anchor_per_task",
+  "curve_alignment": "10 evaluation points at epochs 0,10,...,90 align with the 90-epoch per-task window of continual runs for forward-transfer curve comparison."
+ },
+ "source_artifacts": [
+  {
+   "role": "run-artifact",
+   "name": "seed2_task0_mspacman/train.log",
+   "sha256": "9ce8abae8143b70b62583b41555028e2a5700cd3c34d734084318c47fcd00d76"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed2_task0_mspacman/run_status.json",
+   "sha256": "e3f2698d5d968821e91edc4d1e72021267780c500f80d8e50bfd1f4ce5d16306"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed2_task0_mspacman/resolved_training_config.json",
+   "sha256": "cb5cf15b00810e7799737ed6203b64db965359d919784bf3008cf48deea9c3fb"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed2_task0_mspacman/evaluation_seed_manifest.json",
+   "sha256": "c5ce9a2bcabcaaa0b73b9f63bcb7ba39233a43c2bee2f3befb1ec582d42084b4"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed2_task0_mspacman/launch.json",
+   "sha256": "3a514899d7ef96b1fb003a0c34cf8b8a21b79a9368cb61ab4d6d43477956069b"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed2_task0_mspacman/config.json",
+   "sha256": "218c20d4c6e99bdb5d19aa9899af9e5d00fddeff255c6e18f516ad0db1d37703"
+  },
+  {
+   "role": "campaign-manifest",
+   "name": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/campaign_manifest.json",
+   "sha256": "1e9b3f968eb5346232cb24f7fe6caa021729d90b58415cfe65a2d23541c38429"
+  }
+ ],
+ "notes": [
+  "Run launched 2026-09-01 on VirtAI S2.gpu.xlarge (4x 24 GiB) as part of the ARROW CPU float32 replay campaign; launcher role recorded as single-task-normalization-reproduction.",
+  "Values transcribed verbatim from train.log 'Eval raw means/stds' blocks; raw returns are unscaled environment returns (reward transformation 0.05 for MsPacman etc. applies only to optimization).",
+  "Replay: FIFO + LTDM, 512 trajectories of length 512 each, float32, CPU-resident; whole-minibatch FIFO/LTDM selection 0.5/0.5 unchanged.",
+  "Initial epoch-0 checkpoint approximates an untrained-policy reference but is not a substitute for the dedicated random-policy anchor runs."
+ ]
+}

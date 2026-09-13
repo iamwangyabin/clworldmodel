@@ -10,6 +10,8 @@ import copy
 import importlib
 import io
 import json
+import runpy
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -38,7 +40,33 @@ def new_config():
 
 
 class DAutorouteLauncherTests(unittest.TestCase):
-    def test_awm_names_preserve_existing_protocol_and_method_identifiers(self):
+    def test_host_control_preserves_full_config_and_only_caps_execution(self):
+        launcher = importlib.import_module("run_evolving_atomic_rssm")
+        entry = importlib.import_module("run_evolving_atomic_rssm_d_autoroute")
+        with mock.patch.object(launcher, "_resolved_config", wraps=launcher._resolved_config) as resolved:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                entry.main(["--seed", "1", "--cpu-threads", "8", "--stop-after-first-task", "--dry-run"])
+        manifest, _ = json.JSONDecoder().raw_decode(output.getvalue())
+        self.assertEqual(manifest["seed"], 1337)
+        self.assertTrue(manifest["protocol"].endswith("-FirstTask90-HostControl-v1"))
+        self.assertEqual(manifest["parent_protocol"], entry.PROTOCOL)
+        self.assertEqual(manifest["configured_full_curriculum_budgets"]["total_world_model_optimizer_steps"], 552000)
+        self.assertIn("--stop-after-first-task", manifest["command"])
+        self.assertNotIn("--evaluate-final", manifest["command"])
+        self.assertEqual(resolved.call_args.kwargs["task_order"], "arrow-original-six")
+        budget = manifest["budgets"]
+        self.assertEqual(budget["total_world_model_optimizer_steps"], 92000)
+        self.assertEqual(budget["actor_critic_updates"], 72000)
+        self.assertEqual(budget["raw_environment_frames"], 5898240)
+        self.assertEqual(budget["adaptive_compression_validation_rollouts"], 80)
+        self.assertEqual(budget["online_memory_sequences"], 0)
+        self.assertEqual(budget["boundary_validation_rollouts"], 16)
+        self.assertEqual(budget["replay"], launcher._budget_manifest(new_config())["replay"])
+        with self.assertRaisesRegex(ValueError, "fresh"):
+            entry.main(["--stop-after-first-task", "--resume-from", "/unused"])
+
+    def test_awm_names_preserve_method_identifiers_and_version_routing_protocol(self):
         launcher = importlib.import_module("run_evolving_atomic_rssm")
         for profile, name, method, protocol in (
             (
@@ -48,7 +76,7 @@ class DAutorouteLauncherTests(unittest.TestCase):
             ),
             (
                 BEHAVIOR,
-                "AWM-AutoRoute (Accumulative World Modeling with First-Frame Reconstruction Routing)",
+                "AWM-AutoRoute",
                 METHOD, launcher.D_AUTOROUTE_PROTOCOL,
             ),
         ):
@@ -61,6 +89,10 @@ class DAutorouteLauncherTests(unittest.TestCase):
                 manifest, _ = json.JSONDecoder().raw_decode(output.getvalue())
                 self.assertEqual(manifest["method"], name)
                 self.assertEqual(manifest["protocol"], protocol)
+                self.assertEqual(
+                    manifest["adaptive_compression_protocol"]["validation_scope"],
+                    "completed task with oracle routing",
+                )
                 config = launcher._resolved_config(source_config(), behavior_profile=profile)
                 self.assertEqual(config["continual_method"], method)
 
@@ -72,7 +104,7 @@ class DAutorouteLauncherTests(unittest.TestCase):
         )
         changed = {k for k in data.keys() | old.keys() if data.get(k) != old.get(k)}
         self.assertEqual(changed, {
-            "continual_method", "task_route_inference",
+            "continual_method", "task_route_inference", "task_route_inference_version",
         })
         self.assertEqual(data["continual_method"], METHOD)
         self.assertTrue(data["task_private_actor_critic"])
@@ -104,7 +136,10 @@ class DAutorouteLauncherTests(unittest.TestCase):
         self.assertEqual(launch["behavior_profile"], BEHAVIOR)
         self.assertFalse(launch["task_identity_exposed_during_action_selection"])
         self.assertTrue(launch["task_identity_exposed_during_training"])
-        self.assertEqual(launch["inference_routing"]["mode"], "first_frame_reconstruction")
+        self.assertEqual(launch["inference_routing"]["mode"], "two_frame_probability_reconstruction")
+        self.assertEqual(launch["inference_routing"]["maximum_scored_observations_per_episode"], 2)
+        self.assertIn("-v4-", launch["protocol"])
+        self.assertEqual(launch["inference_routing"]["protocol_version"], 4)
         self.assertEqual(launch["parameter_budget"]["behavior_parameters"], 10_295_910)
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             entry._parser().parse_args(["--behavior-profile", "shared_fastkan_autoroute"])
@@ -137,6 +172,79 @@ class DAutorouteLauncherTests(unittest.TestCase):
 
 @unittest.skipUnless(vendor_available, "requires pinned Atari imports, no ROMs")
 class DAutorouteIntegrationTests(unittest.TestCase):
+    def test_host_control_boundary_predicate_does_not_touch_rng_or_stop_early(self):
+        boundary = {"boundary_index": 1, "task_index": 0}
+        rng = torch.random.get_rng_state().clone()
+        for epoch in range(90):
+            self.assertFalse(train._first_task_control_boundary(False, boundary, epoch, 0, 0))
+            self.assertFalse(train._first_task_control_boundary(True, None, epoch, 0, 0))
+        self.assertTrue(train._first_task_control_boundary(True, boundary, 90, 92000, 72000))
+        with self.assertRaises(RuntimeError):
+            train._first_task_control_boundary(True, boundary, 90, 90000, 72000)
+        torch.testing.assert_close(rng, torch.random.get_rng_state(), rtol=0, atol=0)
+
+    def test_private_mlp_actor_updates_without_retired_consolidation_interface(self):
+        from ac import ActorCriticTrainingStep, build_actor_critic_opt, train_ac_from_wm
+        from replay import FifoReplay
+        from retained_method_support import retained_world_model
+
+        wm = retained_world_model()
+        wm.activate_task_expert(0)
+        data = FifoReplay(4, 4, wm.a_dim, "cpu", store_task_ids=True,
+                          observation_dtype="uint8")
+        actions = torch.nn.functional.one_hot(torch.zeros(4, 4, dtype=torch.long), wm.a_dim).float()
+        data.add(actions, torch.zeros(4, 4, 3, 64, 64), torch.zeros(4, 4, 1),
+                 torch.ones(4, 4, 1), torch.zeros(4, 4, 1), task_id=0)
+        aco = build_actor_critic_opt(wm, lr=1e-4)
+        returned, _, metrics = train_ac_from_wm(
+            wm, data, 1, n_sync=2, dream_steps=2, aco=aco, task_id=0,
+        )
+        self.assertIs(returned, aco)
+        self.assertEqual(metrics["kan_consolidation_loss"], 0.)
+        self.assertEqual({int(s["step"].item()) for s in aco.opt.state.values()}, {1})
+        step = ActorCriticTrainingStep(aco.ac, entropy_scale=.0003,
+                                      replay_critic_loss_scale=0., slow_critic_regularizer=0.)
+        values = step(torch.zeros(2, 2, wm.zh_transform.out_features), actions[:2, :2],
+                      torch.zeros(2, 2, 1), torch.tensor(1.), None, None, None, None, None)
+        self.assertTrue(all(bool(torch.isfinite(v).all()) for v in values))
+        self.assertEqual(values[-1].item(), 0.)
+
+    def test_parameter_accounting_covers_dense_and_compact_retained_models(self):
+        from retained_method_support import retained_world_model
+
+        wm = retained_world_model()
+        for compact in (False, True):
+            if compact:
+                train._structured_adaptive_qfp_candidate(
+                    wm=wm, dense_teacher=copy.deepcopy(wm), task_id=1, fraction=.5,
+                )
+            report = train._world_model_parameter_accounting(wm)
+            json.dumps(report)
+            self.assertEqual(report["world_model"]["parameters"],
+                             sum(p.numel() for p in wm.parameters()))
+            self.assertEqual(report["prediction_adapter_parameters_per_task"],
+                             {str(k): 0 for k in range(3)})
+            self.assertEqual(
+                sum(report["rssm_task_mechanism_parameters_per_later_task"].values()),
+                sum(p.numel() for bank in wm.rssm.mechanism_banks().values()
+                    for p in bank.parameters()),
+            )
+
+    def test_real_trainer_cli_preserves_config_before_cuda_initialization(self):
+        from clworldmodel.distributed import DistributedContext
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(json.dumps(new_config()))
+            for extra in ([], ["--actor-network", "mlp"]):
+                with self.subTest(extra=extra), mock.patch.object(
+                    sys, "argv", [train.__file__, "--config", str(path), *extra]
+                ), mock.patch.object(
+                    DistributedContext, "initialize",
+                    side_effect=RuntimeError("stop before CUDA initialization"),
+                ), self.assertRaisesRegex(RuntimeError, "stop before CUDA initialization"):
+                    runpy.run_path(train.__file__, run_name="__main__")
+
     def actors(self):
         from clworldmodel.routing import RoutedActorBank
         actors = {}
@@ -160,6 +268,16 @@ class DAutorouteIntegrationTests(unittest.TestCase):
         self.assertTrue(config.uses_shared_prediction_heads)
         self.assertFalse(config.uses_shared_actor)
         self.assertFalse(config.uses_replay_rehearsed_shared_behavior)
+        # There is one maintained router; historical configs must fail closed.
+        with self.assertRaises(ValueError):
+            Config.from_dict({**data, "task_route_inference": "first_frame_reconstruction"})
+        historical = dict(data)
+        historical.pop("task_route_inference_version")
+        with self.assertRaisesRegex(ValueError, "inference version"):
+            Config.from_dict(historical)
+        for version in (3, 4.0, True):
+            with self.assertRaisesRegex(ValueError, "inference version"):
+                Config.from_dict({**data, "task_route_inference_version": version})
         self.assertNotIn("adaptive_behavior_residuals", config.to_dict())
         for key, value in {
             "task_private_actor_critic": False, "actor_network": "fast_kan_ac_stable",
@@ -171,6 +289,8 @@ class DAutorouteIntegrationTests(unittest.TestCase):
                 Config.from_dict({**data, key: value})
         with self.assertRaises(TypeError):
             Config.from_dict({**data, "unknown_router_option": True})
+        with self.assertRaises(ValueError):
+            Config.from_dict({**data, "task_route_inference": "continuous_reconstruction"})
 
     def test_gpu_smoke_profile_resolves_without_running_updates(self):
         smoke = importlib.import_module("smoke_evolving_atomic_rssm")
@@ -179,18 +299,18 @@ class DAutorouteIntegrationTests(unittest.TestCase):
         self.assertTrue(config.task_private_actor_critic)
 
     def test_per_worker_inferred_id_selects_private_actor_not_current_actor(self):
-        from clworldmodel.routing import EpisodeReconstructionRouter
+        from clworldmodel.routing import TwoFrameReconstructionRouter
         wm, _ = fixed_models()
         view, actors = self.actors()
         before = {id(p) for actor in actors.values() for p in actor.parameters()}
         self.assertEqual({id(p) for p in view.parameters()}, before)
-        router = EpisodeReconstructionRouter((0, 1))
+        router = TwoFrameReconstructionRouter((0, 1))
         z, h = wm.rssm.initial_state(2)
         x = torch.tensor([0., 1.])[:, None, None, None].expand(2, 3, 2, 2)
         previous = torch.nn.functional.one_hot(torch.tensor([5, 6]), 18)
         for frames, reset, expected in (
             (x, torch.ones(2, 1), [7, 11]),
-            (1 - x, torch.zeros(2, 1), [7, 11]),
+            (1 - x, torch.zeros(2, 1), [7, 7]),
             (1 - x, torch.tensor([[0.], [1.]]), [7, 7]),
         ):
             z, h, action = trajectory._routed_policy_step(
@@ -198,7 +318,7 @@ class DAutorouteIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(action.tolist(), expected)
         with self.assertRaisesRegex(ValueError, "eligib"):
-            trajectory._routed_policy_step(wm, view, EpisodeReconstructionRouter((0,)),
+            trajectory._routed_policy_step(wm, view, TwoFrameReconstructionRouter((0,)),
                                           x, z, h, previous, torch.ones(2, 1), stochastic=False)
 
     def test_private_actor_view_validates_shapes_eligibility_and_finiteness(self):
@@ -222,6 +342,7 @@ class DAutorouteIntegrationTests(unittest.TestCase):
         bank.get.side_effect = lambda task: SimpleNamespace(ac=SimpleNamespace(actor=actors[task]))
         diagnostics = []
         def evaluate(*args, **kwargs):
+            self.assertEqual(kwargs["task_route_inference"], "two_frame_probability_reconstruction")
             self.assertNotIn("task_id", kwargs)
             self.assertIsInstance(kwargs["ac"], RoutedActorBank)
             self.assertEqual(kwargs["ac"].route_ids, (0, 1))
@@ -296,11 +417,11 @@ class DAutorouteIntegrationTests(unittest.TestCase):
                 routing_diagnostics=diagnostic,
             )
         self.assertNotIn("autoreset_mode", constructor.call_args.kwargs)
-        self.assertEqual([c.args[0].tolist() for c in fixture.step.call_args_list], [[7, 11], [7, 11], [7, 11], [11, 11]])
-        self.assertEqual([e["selected_route_id"] for e in diagnostic["routing_events"]], [0, 1, 1])
+        self.assertEqual([c.args[0].tolist() for c in fixture.step.call_args_list], [[7, 11], [7, 7], [7, 7], [11, 7]])
+        self.assertEqual([e["selected_route_id"] for e in diagnostic["routing_events"]], [0, 1, 0, 0, 1])
         fixture.close.assert_called_once()
 
-    def test_single_route_collection_matches_d_trajectory_contract(self):
+    def test_constant_policy_collection_preserves_d_storage_contract(self):
         from clworldmodel.routing import RoutedActorBank
 
         wm, _ = fixed_models()
@@ -393,7 +514,7 @@ class DAutorouteIntegrationTests(unittest.TestCase):
     def test_compact_checkpoint_restores_private_bank_eligibility_and_rng(self):
         from ac import build_actor_critic_opt
         from clworldmodel.continual import ActorCriticBank
-        from clworldmodel.routing import EpisodeReconstructionRouter
+        from clworldmodel.routing import TwoFrameReconstructionRouter
         from retained_method_support import retained_world_model
         config = Config.from_dict(new_config())
         wm = retained_world_model("adaptive_dense_width", shared_prediction_heads=True)
@@ -420,12 +541,15 @@ class DAutorouteIntegrationTests(unittest.TestCase):
         )
         def inference():
             z, h = wm.rssm.initial_state(2)
-            return trajectory._routed_policy_step(
-                wm, train._autorouted_behavior(config, None, bank, 2), EpisodeReconstructionRouter((0, 1)),
-                torch.zeros(2, 3, 64, 64), z, h,
-                torch.nn.functional.one_hot(torch.zeros(2, dtype=torch.long), wm.a_dim),
-                torch.ones(2, 1), stochastic=False,
-            )
+            router = TwoFrameReconstructionRouter((0, 1))
+            for t in range(3):
+                z, h, action = trajectory._routed_policy_step(
+                    wm, train._autorouted_behavior(config, None, bank, 2), router,
+                    torch.full((2, 3, 64, 64), .1 * t), z, h,
+                    torch.nn.functional.one_hot(torch.full((2,), t), wm.a_dim),
+                    torch.full((2, 1), float(t == 0)), stochastic=False,
+                )
+            return z, h, action, router.events
         expected_inference = inference()
         with TemporaryDirectory() as directory:
             path = Path(directory) / "boundary.pt"
@@ -436,6 +560,8 @@ class DAutorouteIntegrationTests(unittest.TestCase):
             payload = torch.load(path, weights_only=False)
             self.assertEqual(payload["schema_version"], 1)
             self.assertEqual(payload["inference_routing"]["eligible_route_ids"], [0, 1])
+            self.assertEqual(payload["inference_routing"]["mode"], "two_frame_probability_reconstruction")
+            self.assertEqual(payload["inference_routing"]["protocol_version"], 4)
             draws = [g.integers(0, 100000) for g in generators]
             wm.load_state_dict(dense.state_dict(), strict=True)
             with torch.no_grad():
@@ -449,6 +575,16 @@ class DAutorouteIntegrationTests(unittest.TestCase):
             self.assertEqual([g.integers(0, 100000) for g in generators], draws)
             self.assertEqual(schedule._step, 180)
             replay.load_state_dict.assert_called_once_with({"fixture": "no transitions"})
+            old_payload = copy.deepcopy(payload)
+            old_payload["config"].pop("task_route_inference_version")
+            with mock.patch.object(train.torch, "load", return_value=old_payload):
+                with self.assertRaisesRegex(ValueError, "Resolved config changed"):
+                    train._restore_evolving_resumable_checkpoint(path, **common, actor_critic_factory=factory)
+            old_payload = copy.deepcopy(payload)
+            old_payload["config"]["task_route_inference"] = "first_frame_reconstruction"
+            with mock.patch.object(train.torch, "load", return_value=old_payload):
+                with self.assertRaisesRegex(ValueError, "Resolved config changed"):
+                    train._restore_evolving_resumable_checkpoint(path, **common, actor_critic_factory=factory)
             payload["inference_routing"]["eligible_route_ids"] = [0, 1, 2]
             with mock.patch.object(train.torch, "load", return_value=payload):
                 with self.assertRaisesRegex(ValueError, "eligibility"):

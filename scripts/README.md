@@ -164,8 +164,11 @@ python scripts/run_moe_arrow_atari.py --method dino-convbank ...
 
 - `run_evolving_atomic_rssm_d_autoroute.py`: independent AWM-AutoRoute entry point;
   fixes AWM's private MLP Actor-Critics and adaptive Q/F/P, adding label-free
-  first-frame inference while retaining AWM's oracle return gates. It delegates
-  to the shared launcher/trainer rather than copying them. Start with `--dry-run`.
+  two-frame cumulative probability-reconstruction inference while retaining
+  AWM's oracle return gates. The second observation may revise the initial
+  choice; later observations do not probe candidates. It delegates
+  to the shared launcher/trainer rather than copying them. There is no historical
+  first-frame routing option. Start with `--dry-run`.
 - `artifact_io.py`: dependency-free checksums and atomic artifact writers used
   by audits and post-hoc probes.
 - `git_provenance.py`: clean-commit and upstream-sync checks used by training

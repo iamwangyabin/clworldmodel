@@ -1,4 +1,4 @@
-"""New D-derived protocol: task-aware training, task-ID-free inference.
+"""AWM-AutoRoute: task-aware training, task-ID-free inference.
 
 These tests use fixed tensors or mocked orchestration, not Atari interaction.
 """
@@ -30,7 +30,7 @@ except ModuleNotFoundError:
 
 if torch is not None:
     sys.path.insert(0, str(ROOT / "src"))
-    from clworldmodel.routing import EpisodeReconstructionRouter
+    from clworldmodel.routing import TwoFrameReconstructionRouter
 
 vendor_available = False
 if torch is not None:
@@ -43,50 +43,6 @@ if torch is not None:
         vendor_available = True
     except ModuleNotFoundError:
         pass
-
-
-@unittest.skipIf(torch is None, "requires PyTorch")
-class ReconstructionRouterTests(unittest.TestCase):
-    def test_per_worker_first_frame_lock_and_reset(self):
-        router = EpisodeReconstructionRouter((0, 1))
-        calls = []
-
-        def reconstruction(task_id, x):
-            calls.append(task_id)
-            return torch.full_like(x, task_id)
-
-        x = torch.tensor([0., 1.]).reshape(2, 1, 1, 1)
-        before = torch.random.get_rng_state().clone()
-        ids = router.route(x, torch.tensor([True, True]), reconstruction)
-        self.assertEqual(ids.tolist(), [0, 1])
-        self.assertEqual(calls, [0, 1])
-        ids = router.route(1 - x, torch.tensor([False, False]), reconstruction)
-        self.assertEqual(ids.tolist(), [0, 1])
-        self.assertEqual(calls, [0, 1])
-        ids = router.route(1 - x, torch.tensor([False, True]), reconstruction)
-        self.assertEqual(ids.tolist(), [0, 0])
-        self.assertEqual([event["worker_index"] for event in router.events], [0, 1, 1])
-        torch.testing.assert_close(torch.random.get_rng_state(), before)
-
-    def test_tie_breaking_and_single_route_are_finite(self):
-        for candidates in [(0,), (0, 2)]:
-            router = EpisodeReconstructionRouter(candidates)
-            x = torch.zeros(1, 1, 1, 1)
-            self.assertEqual(router.route(x, torch.ones(1, dtype=torch.bool),
-                                          lambda _, obs: obs).tolist(), [0])
-            self.assertEqual(router.events[0]["margin"], 0.)
-
-    def test_invalid_candidates_shapes_and_nonfinite_scores_fail_closed(self):
-        for candidates in [(), (1, 0), (0, 0), (-1,), (True,)]:
-            with self.assertRaises(ValueError):
-                EpisodeReconstructionRouter(candidates)
-        router = EpisodeReconstructionRouter((0, 1))
-        x = torch.zeros(1, 1, 1, 1)
-        with self.assertRaises(ValueError):
-            router.route(x, torch.zeros(2, dtype=torch.bool), lambda _, obs: obs)
-        with self.assertRaises(FloatingPointError):
-            router.route(x, torch.ones(1, dtype=torch.bool),
-                         lambda _, obs: obs * float("nan"))
 
 
 def fixed_models():
@@ -146,30 +102,37 @@ class ReconstructionRouterIntegrationTests(unittest.TestCase):
                 routing_diagnostics=diagnostic,
             )
         self.assertNotIn("autoreset_mode", constructor.call_args.kwargs)
-        self.assertEqual([call.args[0].tolist() for call in fixture.step.call_args_list], [[0, 1], [0, 1], [0, 1], [1, 1]])
-        self.assertEqual([e["selected_route_id"] for e in diagnostic["routing_events"]], [0, 1, 1])
+        # Opposite second frames tie the cumulative scores: lowest ID wins.
+        self.assertEqual([call.args[0].tolist() for call in fixture.step.call_args_list], [[0, 1], [0, 0], [0, 0], [1, 0]])
+        self.assertEqual([e["selected_route_id"] for e in diagnostic["routing_events"]], [0, 1, 0, 0, 1])
         self.assertEqual(resets[:4, 0].tolist(), [1., 0., 1., 0.])
-        self.assertEqual(actions[:4].argmax(-1).tolist(), [0, 0, 0, 1])
+        # Stored worker trajectory includes the initial dummy before all four
+        # env.step actions. The reset episode's effective action is at index 4.
+        self.assertEqual(actions[:5].argmax(-1).tolist(), [0, 0, 0, 0, 1])
         fixture.close.assert_called_once()
 
 
-    def test_grouped_posterior_uses_inferred_routes_and_preserves_d_actions(self):
+    def test_probe_dummy_does_not_replace_policy_previous_action(self):
         wm, ac = fixed_models()
-        router = EpisodeReconstructionRouter((0, 1))
+        router = TwoFrameReconstructionRouter((0, 1))
         z, h = wm.rssm.initial_state(2)
         x = torch.tensor([0., 1.])[:, None, None, None].expand(2, 3, 2, 2)
         previous = torch.nn.functional.one_hot(torch.tensor([7, 8]), 18)
         rng = torch.random.get_rng_state().clone()
-        z, h, action = trajectory._routed_policy_step(
-            wm, ac, router, x, z, h, previous, torch.ones(2, 1), stochastic=False,
-        )
+        with mock.patch.object(wm.rssm, "forward", wraps=wm.rssm.forward) as calls:
+            z, h, action = trajectory._routed_policy_step(
+                wm, ac, router, x, z, h, previous, torch.ones(2, 1), stochastic=False,
+            )
+            for probe in calls.call_args_list[:2]:
+                self.assertEqual(probe.args[1].argmax(-1).tolist(), [0, 0])
         self.assertEqual(action.tolist(), [0, 1])
         self.assertEqual(wm.rssm.last_action.argmax(-1).tolist(), [8])
         z, h, action = trajectory._routed_policy_step(
-            wm, ac, router, 1 - x, z, h, previous, torch.zeros(2, 1), stochastic=False,
+            wm, ac, router, x, z, h, previous, torch.zeros(2, 1), stochastic=False,
         )
         self.assertEqual(action.tolist(), [0, 1])
-        self.assertEqual(len(router.events), 2)
+        self.assertEqual(wm.rssm.last_action.argmax(-1).tolist(), [8])
+        self.assertEqual(len(router.events), 4)
         z, h, action = trajectory._routed_policy_step(
             wm, ac, router, 1 - x, z, h, previous, torch.tensor([[0.], [1.]]), stochastic=False,
         )
@@ -240,7 +203,7 @@ class ReconstructionRouterIntegrationTests(unittest.TestCase):
         outputs = []
         for model in (wm, restored):
             z, h = model.rssm.initial_state(2)
-            router = EpisodeReconstructionRouter((0, 1))
+            router = TwoFrameReconstructionRouter((0, 1))
             result = trajectory._routed_policy_step(
                 model, ac, router, torch.zeros(2, 3, 64, 64), z, h,
                 torch.nn.functional.one_hot(torch.zeros(2, dtype=torch.long), 4),

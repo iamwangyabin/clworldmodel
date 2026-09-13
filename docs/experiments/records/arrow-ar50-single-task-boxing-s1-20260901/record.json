@@ -1,0 +1,268 @@
+{
+ "schema_version": 1,
+ "record_id": "arrow-ar50-single-task-boxing-s1-20260901",
+ "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed1_task1_boxing",
+ "method": "ARROW-50 single-task normalization reference",
+ "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+ "evidence_level": "pilot",
+ "classification": "single-task-normalization-reference",
+ "status": "complete",
+ "recorded_at_utc": "2026-09-13T07:27:04Z",
+ "project_git": {
+  "commit": "368f44084af15e82c671c8c972943628e1dea1ea",
+  "clean": true,
+  "upstream": "origin/codex/arrow-cpu-replay-campaign",
+  "ahead": 0,
+  "behind": 0,
+  "repository": "https://github.com/iamwangyabin/clworldmodel.git"
+ },
+ "seed": {
+  "id": 1,
+  "value": 1337
+ },
+ "task_awareness": "task_agnostic",
+ "task_order": [
+  "ALE/Boxing-v5"
+ ],
+ "completion": {
+  "total_task_count": 1,
+  "completed_task_count": 1,
+  "completed_epochs": 90,
+  "final_evaluation_performed": true,
+  "final_evaluation_epoch": 90,
+  "training_end_logged": true,
+  "source_started_at": "2026-09-01T13:47:33.783753+00:00",
+  "source_finished_at": "2026-09-01T18:58:35.034519+00:00"
+ },
+ "evaluation": {
+  "metric": "raw_environment_return",
+  "policy": "vendored ARROW periodic validation for non-expert runs: seeded evaluation environment streams (advancing cohort, training RNG state preserved and restored around evaluation); stochastic policy sampling; raw returns unscaled by per-task reward transformation",
+  "evaluation_transitions_enter_replay": false,
+  "standard_deviation_ddof": 0,
+  "configured_rollouts_per_task": 16,
+  "episode_count_note": "Episode counts are termination-dependent and are not persisted in the Atari training logs; only rollout budget (16) and return statistics are recorded.",
+  "checkpoints": [
+   {
+    "checkpoint_id": "epoch-000",
+    "completed_epochs": 0,
+    "completed_task_count": 0,
+    "stage": "initial",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Boxing-v5",
+      "raw_return_mean": -0.125,
+      "raw_return_std": 6.41165930161608
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-010",
+    "completed_epochs": 10,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Boxing-v5",
+      "raw_return_mean": 17.5,
+      "raw_return_std": 7.73789377027108
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-020",
+    "completed_epochs": 20,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Boxing-v5",
+      "raw_return_mean": 30.375,
+      "raw_return_std": 11.564357958831955
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-030",
+    "completed_epochs": 30,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Boxing-v5",
+      "raw_return_mean": 51.0,
+      "raw_return_std": 10.04987562112089
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-040",
+    "completed_epochs": 40,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Boxing-v5",
+      "raw_return_mean": 73.5625,
+      "raw_return_std": 11.905716851580168
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-050",
+    "completed_epochs": 50,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Boxing-v5",
+      "raw_return_mean": 79.8125,
+      "raw_return_std": 8.087171554381667
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-060",
+    "completed_epochs": 60,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Boxing-v5",
+      "raw_return_mean": 88.125,
+      "raw_return_std": 6.603739470936145
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-070",
+    "completed_epochs": 70,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Boxing-v5",
+      "raw_return_mean": 86.0,
+      "raw_return_std": 6.623820649745885
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-080",
+    "completed_epochs": 80,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Boxing-v5",
+      "raw_return_mean": 88.375,
+      "raw_return_std": 2.9764702249476644
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-090",
+    "completed_epochs": 90,
+    "completed_task_count": 1,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Boxing-v5",
+      "raw_return_mean": 91.0,
+      "raw_return_std": 3.774917217635375
+     }
+    ]
+   }
+  ]
+ },
+ "headline": {
+  "summary": "ALE/Boxing-v5 single-task anchor, seed 1337: final raw return 91.0 \u00b1 3.774917217635375 at epoch 90 (initial epoch-0 return -0.125; 90-epoch budget matching the per-task window of the continual protocol)."
+ },
+ "comparability": {
+  "claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+  "limitations": [
+   "Single task per run; no cross-task retention or transfer information.",
+   "Execution profile is vendored-optimized-cpu-float32-replay (Decision 0045), a declared deviation from the published CUDA-replay environment; not bitwise identical to upstream execution.",
+   "Pilot classification: one seed per task here supports anchor estimation, not an official multi-seed reproduction of ARROW single-task performance.",
+   "Periodic validation uses stochastic policy sampling (vendored non-expert default), unlike deterministic evaluation used by task-expert protocols.",
+   "Random-policy lower anchor is tracked separately and is not part of these records."
+  ]
+ },
+ "derived_metrics": {
+  "anchor_role": "single_task_upper_anchor",
+  "normalization_pairing": "requires_random_policy_lower_anchor_per_task",
+  "curve_alignment": "10 evaluation points at epochs 0,10,...,90 align with the 90-epoch per-task window of continual runs for forward-transfer curve comparison."
+ },
+ "source_artifacts": [
+  {
+   "role": "run-artifact",
+   "name": "seed1_task1_boxing/train.log",
+   "sha256": "d042109fe8c094392ab6e4e9941bbf255a027d4ace7abc6ac6387dc2a99b155f"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed1_task1_boxing/run_status.json",
+   "sha256": "12a42b29eae8c0509ead1d2599396110bb38448819972bcd0d980e484a2b4874"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed1_task1_boxing/resolved_training_config.json",
+   "sha256": "8bf20bf9f23983a1fe8ad90815bc11d81f6e7244a25458cd7fcf02b99456df53"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed1_task1_boxing/evaluation_seed_manifest.json",
+   "sha256": "c5ce9a2bcabcaaa0b73b9f63bcb7ba39233a43c2bee2f3befb1ec582d42084b4"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed1_task1_boxing/launch.json",
+   "sha256": "b9ad1d8b2d160f85dc18d8afe7baceb8f199ef575d832dd81a4b07575cd11400"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed1_task1_boxing/config.json",
+   "sha256": "c36725691ee7b9e6b14cbbab43940833fa2c559d636dee66ad22d9a15d4fc39a"
+  },
+  {
+   "role": "campaign-manifest",
+   "name": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/campaign_manifest.json",
+   "sha256": "1e9b3f968eb5346232cb24f7fe6caa021729d90b58415cfe65a2d23541c38429"
+  }
+ ],
+ "notes": [
+  "Run launched 2026-09-01 on VirtAI S2.gpu.xlarge (4x 24 GiB) as part of the ARROW CPU float32 replay campaign; launcher role recorded as single-task-normalization-reproduction.",
+  "Values transcribed verbatim from train.log 'Eval raw means/stds' blocks; raw returns are unscaled environment returns (reward transformation 0.05 for MsPacman etc. applies only to optimization).",
+  "Replay: FIFO + LTDM, 512 trajectories of length 512 each, float32, CPU-resident; whole-minibatch FIFO/LTDM selection 0.5/0.5 unchanged.",
+  "Initial epoch-0 checkpoint approximates an untrained-policy reference but is not a substitute for the dedicated random-policy anchor runs."
+ ]
+}

@@ -1,0 +1,268 @@
+{
+ "schema_version": 1,
+ "record_id": "arrow-ar50-single-task-crazyclimber-s2-20260901",
+ "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed2_task2_crazyclimber",
+ "method": "ARROW-50 single-task normalization reference",
+ "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+ "evidence_level": "pilot",
+ "classification": "single-task-normalization-reference",
+ "status": "complete",
+ "recorded_at_utc": "2026-09-13T07:27:04Z",
+ "project_git": {
+  "commit": "368f44084af15e82c671c8c972943628e1dea1ea",
+  "clean": true,
+  "upstream": "origin/codex/arrow-cpu-replay-campaign",
+  "ahead": 0,
+  "behind": 0,
+  "repository": "https://github.com/iamwangyabin/clworldmodel.git"
+ },
+ "seed": {
+  "id": 2,
+  "value": 31337
+ },
+ "task_awareness": "task_agnostic",
+ "task_order": [
+  "ALE/CrazyClimber-v5"
+ ],
+ "completion": {
+  "total_task_count": 1,
+  "completed_task_count": 1,
+  "completed_epochs": 90,
+  "final_evaluation_performed": true,
+  "final_evaluation_epoch": 90,
+  "training_end_logged": true,
+  "source_started_at": "2026-09-01T18:52:38.751792+00:00",
+  "source_finished_at": "2026-09-02T00:01:24.603229+00:00"
+ },
+ "evaluation": {
+  "metric": "raw_environment_return",
+  "policy": "vendored ARROW periodic validation for non-expert runs: seeded evaluation environment streams (advancing cohort, training RNG state preserved and restored around evaluation); stochastic policy sampling; raw returns unscaled by per-task reward transformation",
+  "evaluation_transitions_enter_replay": false,
+  "standard_deviation_ddof": 0,
+  "configured_rollouts_per_task": 16,
+  "episode_count_note": "Episode counts are termination-dependent and are not persisted in the Atari training logs; only rollout budget (16) and return statistics are recorded.",
+  "checkpoints": [
+   {
+    "checkpoint_id": "epoch-000",
+    "completed_epochs": 0,
+    "completed_task_count": 0,
+    "stage": "initial",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/CrazyClimber-v5",
+      "raw_return_mean": 6445.4545541243115,
+      "raw_return_std": 1820.2713608916263
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-010",
+    "completed_epochs": 10,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/CrazyClimber-v5",
+      "raw_return_mean": 11637.500166893005,
+      "raw_return_std": 1686.6665419060826
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-020",
+    "completed_epochs": 20,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/CrazyClimber-v5",
+      "raw_return_mean": 34990.00129699707,
+      "raw_return_std": 5618.0868910921
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-030",
+    "completed_epochs": 30,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/CrazyClimber-v5",
+      "raw_return_mean": 67112.4997138977,
+      "raw_return_std": 26954.84176710138
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-040",
+    "completed_epochs": 40,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/CrazyClimber-v5",
+      "raw_return_mean": 92214.28680419922,
+      "raw_return_std": 23827.920153487845
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-050",
+    "completed_epochs": 50,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/CrazyClimber-v5",
+      "raw_return_mean": 75900.00067816839,
+      "raw_return_std": 35507.99577097924
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-060",
+    "completed_epochs": 60,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/CrazyClimber-v5",
+      "raw_return_mean": 94657.14590890067,
+      "raw_return_std": 23556.124811516038
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-070",
+    "completed_epochs": 70,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/CrazyClimber-v5",
+      "raw_return_mean": 95433.33435058594,
+      "raw_return_std": 7470.3088755377275
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-080",
+    "completed_epochs": 80,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/CrazyClimber-v5",
+      "raw_return_mean": 106100.00228881836,
+      "raw_return_std": 9964.271064431872
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-090",
+    "completed_epochs": 90,
+    "completed_task_count": 1,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/CrazyClimber-v5",
+      "raw_return_mean": 103875.00286102295,
+      "raw_return_std": 10700.904522303315
+     }
+    ]
+   }
+  ]
+ },
+ "headline": {
+  "summary": "ALE/CrazyClimber-v5 single-task anchor, seed 31337: final raw return 103875.00286102295 \u00b1 10700.904522303315 at epoch 90 (initial epoch-0 return 6445.4545541243115; 90-epoch budget matching the per-task window of the continual protocol)."
+ },
+ "comparability": {
+  "claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+  "limitations": [
+   "Single task per run; no cross-task retention or transfer information.",
+   "Execution profile is vendored-optimized-cpu-float32-replay (Decision 0045), a declared deviation from the published CUDA-replay environment; not bitwise identical to upstream execution.",
+   "Pilot classification: one seed per task here supports anchor estimation, not an official multi-seed reproduction of ARROW single-task performance.",
+   "Periodic validation uses stochastic policy sampling (vendored non-expert default), unlike deterministic evaluation used by task-expert protocols.",
+   "Random-policy lower anchor is tracked separately and is not part of these records."
+  ]
+ },
+ "derived_metrics": {
+  "anchor_role": "single_task_upper_anchor",
+  "normalization_pairing": "requires_random_policy_lower_anchor_per_task",
+  "curve_alignment": "10 evaluation points at epochs 0,10,...,90 align with the 90-epoch per-task window of continual runs for forward-transfer curve comparison."
+ },
+ "source_artifacts": [
+  {
+   "role": "run-artifact",
+   "name": "seed2_task2_crazyclimber/train.log",
+   "sha256": "be0bcf46c9a6765a0019b8c90b7f85ac59feec92e42054660bb2c929a52903bf"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed2_task2_crazyclimber/run_status.json",
+   "sha256": "2d9bc5be6885dedd4b2a5d8d8c392245c7e63e59cc073001c16e88a1507c9ab1"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed2_task2_crazyclimber/resolved_training_config.json",
+   "sha256": "5a3a5a4145a13b818b3183f9d80568d0bb6832bfbb2fc6e8176353b54723f581"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed2_task2_crazyclimber/evaluation_seed_manifest.json",
+   "sha256": "c5ce9a2bcabcaaa0b73b9f63bcb7ba39233a43c2bee2f3befb1ec582d42084b4"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed2_task2_crazyclimber/launch.json",
+   "sha256": "6f350e0bb395bc2cd3e41ac4fe9be769633085a05d4e253feabacb090354212e"
+  },
+  {
+   "role": "run-artifact",
+   "name": "seed2_task2_crazyclimber/config.json",
+   "sha256": "6c44ddc8b2c44599b2d77b990f96ca93d42ad682f1eb54fcd88e7c51744d18f7"
+  },
+  {
+   "role": "campaign-manifest",
+   "name": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/campaign_manifest.json",
+   "sha256": "1e9b3f968eb5346232cb24f7fe6caa021729d90b58415cfe65a2d23541c38429"
+  }
+ ],
+ "notes": [
+  "Run launched 2026-09-01 on VirtAI S2.gpu.xlarge (4x 24 GiB) as part of the ARROW CPU float32 replay campaign; launcher role recorded as single-task-normalization-reproduction.",
+  "Values transcribed verbatim from train.log 'Eval raw means/stds' blocks; raw returns are unscaled environment returns (reward transformation 0.05 for MsPacman etc. applies only to optimization).",
+  "Replay: FIFO + LTDM, 512 trajectories of length 512 each, float32, CPU-resident; whole-minibatch FIFO/LTDM selection 0.5/0.5 unchanged.",
+  "Initial epoch-0 checkpoint approximates an untrained-policy reference but is not a substitute for the dedicated random-policy anchor runs."
+ ]
+}
