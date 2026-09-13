@@ -35,7 +35,7 @@
 
 | Benchmark | 方法 | Seed 1 | Seed 2 | Seed 3 | Seed 4 | Seed 5 | 小计 |
 |---|---|---|---|---|---|---|---:|
-| Atari | DreamerV3/FIFO | COMPLETE | COMPLETE | COMPLETE | COMPLETE | RUN | 5 |
+| Atari | DreamerV3/FIFO | COMPLETE | COMPLETE | COMPLETE | COMPLETE | COMPLETE | 5 |
 | Atari | ARROW-50 | COMPLETE | TODO | TODO | TODO | TODO | 5 |
 | Atari | **AWM-AutoRoute** | RUN | RUN | RUN | RUN | RUN | 5 |
 | CoinRun | DreamerV3/FIFO | COMPLETE | COMPLETE | COMPLETE | COMPLETE | COMPLETE | 5 |
@@ -62,7 +62,7 @@ task-ID-free 的 AWM-AutoRoute 冒充完全同协议排名。
 | Shared WM + private AC | RUN | RUN | TODO | 3 |
 | Wider shared + private AC | RUN | RUN | TODO | 3 |
 | FullBank + private AC | COMPLETE | RUN | RUN | 3 |
-| Frozen core + residuals | RUN | RUN | TODO | 3 |
+| Frozen core + residuals | COMPLETE | RUN | TODO | 3 |
 | Independent residuals | COMPLETE | RUN | TODO | 3 |
 
 这里采用已批准的 `CapacityOrganization-v1-Atari` 协议。旧的 Task-0、三任务
@@ -117,21 +117,21 @@ Oracle routing 只是相同模型的诊断读出，名称写成
 
 | 状态 | 数量 | 比例 |
 |---|---:|---:|
-| COMPLETE | 17 | 29.8% |
-| RUN | 15 | 26.3% |
+| COMPLETE | 19 | 33.3% |
+| RUN | 13 | 22.8% |
 | TODO | 25 | 43.9% |
 | **总计** | **57** | **100%** |
 
-训练完成度为 `COMPLETE / 57 = 29.8%`，已有/在途覆盖率为
+训练完成度为 `COMPLETE / 57 = 33.3%`，已有/在途覆盖率为
 `(COMPLETE + RUN) / 57 = 56.1%`。`COMPLETE` 是确实跑完，不代表已经通过
-最终论文可比性审计。五个刚完成的云端目录正在同步到本地；同步与校验结果
+最终论文可比性审计。七个刚完成的云端目录正在同步到本地；同步与校验结果
 必须进入备份清单。
 
 ## 5. 执行顺序
 
-1. 完成 17 个 `COMPLETE` 的本地备份、registry 导入和协议可比性审计；不匹配
+1. 完成 19 个 `COMPLETE` 的本地备份、registry 导入和协议可比性审计；不匹配
    的格转 `TODO` 并写明原因，但不得声称从未运行。
-2. 等待并导入 15 个 `RUN`；失败记录保留，未完成格仍是 `TODO`。
+2. 等待并导入 13 个 `RUN`；失败记录保留，未完成格仍是 `TODO`。
 3. 补 Atari ARROW-50 S1–S4、CoinRun AWM-AutoRoute 五 seeds。
 4. 补四个缺失的容量对照 S2。
 5. 冻结四份单变量消融协议，通过测试与目标 GPU smoke 后运行 12 格。
@@ -152,7 +152,7 @@ Oracle routing 只是相同模型的诊断读出，名称写成
 5. 只有本地备份验证通过后，才允许释放或删除云端实例/目录。
 
 大文件保存在被 Git 忽略的
-`runs/cloud_result_backups/<date>/`；Git 只保存可审计的小型结果记录。当前五个
+`runs/cloud_result_backups/<date>/`；Git 只保存可审计的小型结果记录。当前七个
 云端完整结果的日志、配置、指标和 manifest 已拉到本地，大型 `.pt` 文件正在
 分块同步并作远端/本地 SHA-256 比对。运行中任务的四机元数据快照也已保存。
 
