@@ -16,8 +16,8 @@
 
 状态：
 
-- `DONE`：完整、已导入 registry、且通过协议与可比性审计；
-- `VERIFY`：已有完整历史证据，但尚未按本计划确认可直接用于论文；
+- `COMPLETE`：完整训练已经跑完；结果仍需完成本地备份、registry 导入和
+  协议/可比性审计，才可写入论文最终表；
 - `RUN`：正在运行，或结果仍在远端等待导入与审计；
 - `TODO`：尚未启动；
 - `HIST`：历史/退休/失败/停止证据，不计入分母完成量。
@@ -35,11 +35,11 @@
 
 | Benchmark | 方法 | Seed 1 | Seed 2 | Seed 3 | Seed 4 | Seed 5 | 小计 |
 |---|---|---|---|---|---|---|---:|
-| Atari | DreamerV3/FIFO | VERIFY | RUN | RUN | RUN | RUN | 5 |
-| Atari | ARROW-50 | VERIFY | TODO | TODO | TODO | TODO | 5 |
+| Atari | DreamerV3/FIFO | COMPLETE | COMPLETE | COMPLETE | COMPLETE | RUN | 5 |
+| Atari | ARROW-50 | COMPLETE | TODO | TODO | TODO | TODO | 5 |
 | Atari | **AWM-AutoRoute** | RUN | RUN | RUN | RUN | RUN | 5 |
-| CoinRun | DreamerV3/FIFO | VERIFY | VERIFY | VERIFY | VERIFY | VERIFY | 5 |
-| CoinRun | ARROW-50 | VERIFY | VERIFY | VERIFY | VERIFY | VERIFY | 5 |
+| CoinRun | DreamerV3/FIFO | COMPLETE | COMPLETE | COMPLETE | COMPLETE | COMPLETE | 5 |
+| CoinRun | ARROW-50 | COMPLETE | COMPLETE | COMPLETE | COMPLETE | COMPLETE | 5 |
 | CoinRun | **AWM-AutoRoute** | TODO | TODO | TODO | TODO | TODO | 5 |
 
 DreamerV3/FIFO、ARROW-50 和结构对照只是基线/对照。论文提出的方法只有
@@ -61,9 +61,9 @@ task-ID-free 的 AWM-AutoRoute 冒充完全同协议排名。
 |---|---|---|---|---:|
 | Shared WM + private AC | RUN | RUN | TODO | 3 |
 | Wider shared + private AC | RUN | RUN | TODO | 3 |
-| FullBank + private AC | RUN | RUN | RUN | 3 |
+| FullBank + private AC | COMPLETE | RUN | RUN | 3 |
 | Frozen core + residuals | RUN | RUN | TODO | 3 |
-| Independent residuals | RUN | RUN | TODO | 3 |
+| Independent residuals | COMPLETE | RUN | TODO | 3 |
 
 这里采用已批准的 `CapacityOrganization-v1-Atari` 协议。旧的 Task-0、三任务
 FullBank 以及其他退休结构不填这些格。
@@ -117,20 +117,21 @@ Oracle routing 只是相同模型的诊断读出，名称写成
 
 | 状态 | 数量 | 比例 |
 |---|---:|---:|
-| DONE | 0 | 0.0% |
-| VERIFY | 12 | 21.1% |
-| RUN | 20 | 35.1% |
+| COMPLETE | 17 | 29.8% |
+| RUN | 15 | 26.3% |
 | TODO | 25 | 43.9% |
 | **总计** | **57** | **100%** |
 
-严格论文完成度只按 `DONE/57` 计算。当前已有/在途覆盖率为
-`(VERIFY + RUN) / 57 = 56.1%`；这不是完成声明。当前运行结束并审计后，优先
-把 `RUN` 转为 `DONE`，再按 P0 主结果、容量对照、机制消融的顺序填补 `TODO`。
+训练完成度为 `COMPLETE / 57 = 29.8%`，已有/在途覆盖率为
+`(COMPLETE + RUN) / 57 = 56.1%`。`COMPLETE` 是确实跑完，不代表已经通过
+最终论文可比性审计。五个刚完成的云端目录正在同步到本地；同步与校验结果
+必须进入备份清单。
 
 ## 5. 执行顺序
 
-1. 审计 12 个 `VERIFY`，能复用则转 `DONE`，不匹配则转 `TODO` 并写明原因。
-2. 等待并导入 20 个 `RUN`；失败记录保留，未完成格仍是 `TODO`。
+1. 完成 17 个 `COMPLETE` 的本地备份、registry 导入和协议可比性审计；不匹配
+   的格转 `TODO` 并写明原因，但不得声称从未运行。
+2. 等待并导入 15 个 `RUN`；失败记录保留，未完成格仍是 `TODO`。
 3. 补 Atari ARROW-50 S1–S4、CoinRun AWM-AutoRoute 五 seeds。
 4. 补四个缺失的容量对照 S2。
 5. 冻结四份单变量消融协议，通过测试与目标 GPU smoke 后运行 12 格。
@@ -139,7 +140,23 @@ Oracle routing 只是相同模型的诊断读出，名称写成
 任何新增 benchmark、额外 seed、外部基线或细粒度超参数消融都先作为本计划的
 显式修订，不得用空卡临时创造实验。
 
-## 6. 明确不在当前分母中的内容
+## 6. 云端结果备份规则
+
+云端实例不是结果的唯一保存位置。每个运行遵守以下顺序：
+
+1. 运行中定期拉取配置、manifest、日志和已有原始指标；
+2. `run_status.json` 确认成功后，立即拉取完整结果目录，包括所有最终模型和
+   task-boundary/analysis snapshots；
+3. 本地逐文件核对大小和 SHA-256，写入备份 manifest；
+4. 将小型结果摘要导入 `docs/experiments/records/` 并重建 registry；
+5. 只有本地备份验证通过后，才允许释放或删除云端实例/目录。
+
+大文件保存在被 Git 忽略的
+`runs/cloud_result_backups/<date>/`；Git 只保存可审计的小型结果记录。当前五个
+云端完整结果的日志、配置、指标和 manifest 已拉到本地，大型 `.pt` 文件正在
+分块同步并作远端/本地 SHA-256 比对。运行中任务的四机元数据快照也已保存。
+
+## 7. 明确不在当前分母中的内容
 
 - AWM/D 作为独立论文方法；
 - D-AutoRoute v1/v2、AWM-AutoRoute v3 和一帧路由结果；
