@@ -159,3 +159,22 @@ commit `ca3bc4c7d0556d25c2f50a77270f73a19edb7652`, seed 1337, bundle SHA-256
 `5ded259df282f72aec72b45a2d2db17741aec73a90ee87e3faae2fd73f15cae5`,
 and passed the same sixteen focused tests plus target BF16 probe. The process
 reached epoch0 data collection; this is not a completion claim.
+
+## Additional four-card allocation — 2026-09-13
+
+The user provided a new four-logical-GPU VirtAI instance and requested using
+additional cards to accelerate the paper experiment queue. Before observing
+any new result, fix the allocation as Frozen S1, Shared S1, Wider S1, and
+FullBank S2 on logical GPUs0–3 respectively. This completes the three remaining
+S1 starts in the fixed queue, then begins S2 using the same fixed control order;
+it does not select a method or seed based on performance.
+
+The fresh instance reports four idle 24,258 MiB `S2.gpu.xlarge` logical GPUs,
+a 256 GiB memory cgroup limit, the pinned PyTorch2.3/CUDA11.8 runtime and a
+successful BF16 matrix operation on every device. Use8 CPU threads per run.
+All four controls retain the same protocol, budgets, Atari order, evaluation,
+capacity accounting and inference-only snapshot limitations. Run the focused
+test set and a separate two-task production-width smoke on each assigned GPU
+from the clean pushed launch commit before full training. Refuse existing
+output paths; do not interrupt other hosts, silently retry failures, or launch
+retired methods/AWM as filler.
