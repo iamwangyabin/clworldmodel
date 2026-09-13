@@ -178,3 +178,16 @@ test set and a separate two-task production-width smoke on each assigned GPU
 from the clean pushed launch commit before full training. Refuse existing
 output paths; do not interrupt other hosts, silently retry failures, or launch
 retired methods/AWM as filler.
+
+All four assigned target smokes and sixteen focused tests passed at launch
+commit `1f8626f186c58981c5a1289efb85c2fd8269a622`. Frozen S1, Shared S1 and
+Wider S1 started at approximately `2026-09-13T03:04Z` on GPUs0–2 and each
+completed at least one full training epoch. FullBank S2's first background PID
+exited before Python created an output directory or performed environment/model
+work; preserve the empty launcher log and explicit zero-work failure record.
+After rechecking the already-passed GPU3 FullBank smoke and BF16 probe, the one
+replacement attempt `capacity_fullbank_s2_attempt2` started at
+`2026-09-13T03:06:25Z` and completed its first full epoch. All four processes
+were alive with GPU memory and compute activity at the acceptance check. Bundle
+SHA-256: `b45ec8935c098a60b8a743365f629d4530a7c51e592a916edd3b65ba4ceeb2e4`.
+This is startup evidence, not a completion claim.
