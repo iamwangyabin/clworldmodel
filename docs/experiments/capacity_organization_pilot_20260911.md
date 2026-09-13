@@ -150,3 +150,12 @@ target-GPU BF16 matrix probe passed immediately before launch. The target used
 bundle SHA-256 `be2228505bf6a4fbc83db6601cd2328acdda31a2174782d5a862b7702100f733`.
 The manifest resolves seed index1 to 1337 and the full 540-epoch budget. The
 process reached epoch0 initialization; this is not a completion claim.
+
+Independent S0 completed successfully at `2026-09-12T16:42:42Z`, releasing
+host4 logical GPU1. A live check on 2026-09-13 found that card idle, so the
+next fixed queue entry, Independent S1, started there at
+`2026-09-13T02:27:57Z` with launcher PID 35351. It uses clean synchronized
+commit `ca3bc4c7d0556d25c2f50a77270f73a19edb7652`, seed 1337, bundle SHA-256
+`5ded259df282f72aec72b45a2d2db17741aec73a90ee87e3faae2fd73f15cae5`,
+and passed the same sixteen focused tests plus target BF16 probe. The process
+reached epoch0 data collection; this is not a completion claim.
