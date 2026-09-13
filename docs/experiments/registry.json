@@ -2,7 +2,7 @@
   "schema_version": 1,
   "artifact_kind": "curated_experiment_registry",
   "generated_from": "docs/experiments/records/*/record.json",
-  "record_count": 36,
+  "record_count": 54,
   "storage_policy": {
     "included": [
       "structured provenance",
@@ -96,6 +96,780 @@
           "path": "docs/experiments/records/arrow-ar50-original-s0/record.json",
           "sha256": "2e0c4a6f418bd365d343ab5c3a9d315e517a0923e6a66224b3d5b23c771e7242",
           "bytes": 12281
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-boxing-s0-20260901",
+      "run_id": "arrow_single_task_s0_cpu_fp32_368f440_virtai4x24g/task1_boxing_s0",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Boxing-v5 single-task anchor, seed 123456789: final raw return 90.5 ± 5.979130371550699 at epoch 90 (initial epoch-0 return -0.5; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 90.5,
+            "raw_return_std": 5.979130371550699
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-boxing-s0-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-boxing-s0-20260901/record.json",
+          "sha256": "0d969e955647168bb583db47e6da473168df00a4b31117dcb7b9fdd7b395e4bf",
+          "bytes": 9276
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-boxing-s1-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed1_task1_boxing",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 1,
+        "value": 1337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Boxing-v5 single-task anchor, seed 1337: final raw return 91.0 ± 3.774917217635375 at epoch 90 (initial epoch-0 return -0.125; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 91.0,
+            "raw_return_std": 3.774917217635375
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-boxing-s1-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-boxing-s1-20260901/record.json",
+          "sha256": "70425d82252fbc7d6a268eccf53c00105a80df2aeb485b67973f8b28270f64be",
+          "bytes": 9290
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-boxing-s2-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed2_task1_boxing",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 2,
+        "value": 31337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Boxing-v5 single-task anchor, seed 31337: final raw return 88.5625 ± 4.676654119132609 at epoch 90 (initial epoch-0 return 1.6875; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 88.5625,
+            "raw_return_std": 4.676654119132609
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-boxing-s2-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-boxing-s2-20260901/record.json",
+          "sha256": "c7c39798fccb33fd3abe29f79d6d7b54fbe3d3fb14c582239e95f2ba1a8bfb1e",
+          "bytes": 9300
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-crazyclimber-s0-20260901",
+      "run_id": "arrow_single_task_s0_cpu_fp32_368f440_virtai4x24g/task2_crazyclimber_s0",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/CrazyClimber-v5 single-task anchor, seed 123456789: final raw return 120520.00732421875 ± 10760.190407583417 at epoch 90 (initial epoch-0 return 7875.000178813934; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 120520.00732421875,
+            "raw_return_std": 10760.190407583417
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-crazyclimber-s0-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-crazyclimber-s0-20260901/record.json",
+          "sha256": "f996d2a17d69fbc115c01b24b0e82790d067eb82922cce26deadd963af05e332",
+          "bytes": 9544
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-crazyclimber-s1-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed1_task2_crazyclimber",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 1,
+        "value": 1337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/CrazyClimber-v5 single-task anchor, seed 1337: final raw return 108519.99969482422 ± 12496.94302365689 at epoch 90 (initial epoch-0 return 7988.889217376709; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 108519.99969482422,
+            "raw_return_std": 12496.94302365689
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-crazyclimber-s1-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-crazyclimber-s1-20260901/record.json",
+          "sha256": "301da653d5eac1ef3c382255307cc86cf9a9d1018d947bda813f0dc73db3a719",
+          "bytes": 9553
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-crazyclimber-s2-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed2_task2_crazyclimber",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 2,
+        "value": 31337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/CrazyClimber-v5 single-task anchor, seed 31337: final raw return 103875.00286102295 ± 10700.904522303315 at epoch 90 (initial epoch-0 return 6445.4545541243115; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 103875.00286102295,
+            "raw_return_std": 10700.904522303315
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-crazyclimber-s2-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-crazyclimber-s2-20260901/record.json",
+          "sha256": "96f15d208a3271679d8d7cbf1cd4b77dbfb25b4cd1849b50df8fdf2efb18a6df",
+          "bytes": 9561
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-enduro-s0-20260901",
+      "run_id": "arrow_single_task_s0_cpu_fp32_368f440_virtai4x24g/task5_enduro_s0",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Enduro-v5 single-task anchor, seed 123456789: final raw return 488.0 ± 0.0 at epoch 90 (initial epoch-0 return 0.0; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 488.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-enduro-s0-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-enduro-s0-20260901/record.json",
+          "sha256": "1109b73240411ea3dfefefec761029d3aaf9cf329a014c475d30167af74c760b",
+          "bytes": 9207
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-enduro-s1-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed1_task5_enduro",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 1,
+        "value": 1337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Enduro-v5 single-task anchor, seed 1337: final raw return 579.0 ± 14.591119108414457 at epoch 90 (initial epoch-0 return 0.0; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 579.0,
+            "raw_return_std": 14.591119108414457
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-enduro-s1-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-enduro-s1-20260901/record.json",
+          "sha256": "aac377bd1575eb1fada849c2296e17fcd2cdd70e6f2cd87b88880a3f478d6ff1",
+          "bytes": 9272
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-enduro-s2-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed2_task5_enduro",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 2,
+        "value": 31337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Enduro-v5 single-task anchor, seed 31337: final raw return 638.75 ± 14.421949590983974 at epoch 90 (initial epoch-0 return 0.0; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 638.75,
+            "raw_return_std": 14.421949590983974
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-enduro-s2-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-enduro-s2-20260901/record.json",
+          "sha256": "ebfef8b5db5123276bb10228647aae9a493beadd7c6e51a9992551b7a10d0b08",
+          "bytes": 9270
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-frostbite-s0-20260901",
+      "run_id": "arrow_single_task_s0_cpu_fp32_368f440_virtai4x24g/task3_frostbite_s0",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Frostbite-v5 single-task anchor, seed 123456789: final raw return 3307.5 ± 346.56348624746954 at epoch 90 (initial epoch-0 return 83.125; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 3307.5,
+            "raw_return_std": 346.56348624746954
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-frostbite-s0-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-frostbite-s0-20260901/record.json",
+          "sha256": "8b2cfb0565684ba81dc07d485cdc19720e402998809f7808e1ae87ba1d5e4141",
+          "bytes": 9345
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-frostbite-s1-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed1_task3_frostbite",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 1,
+        "value": 1337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Frostbite-v5 single-task anchor, seed 1337: final raw return 258.75 ± 4.841229182759271 at epoch 90 (initial epoch-0 return 99.375; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 258.75,
+            "raw_return_std": 4.841229182759271
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-frostbite-s1-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-frostbite-s1-20260901/record.json",
+          "sha256": "e2eda603bcbe3390f6450c34cb211b321f8fcae428fbf0835a23756910940da0",
+          "bytes": 9335
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-frostbite-s2-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed2_task3_frostbite",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 2,
+        "value": 31337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Frostbite-v5 single-task anchor, seed 31337: final raw return 268.125 ± 7.261843774138906 at epoch 90 (initial epoch-0 return 79.375; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 268.125,
+            "raw_return_std": 7.261843774138906
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-frostbite-s2-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-frostbite-s2-20260901/record.json",
+          "sha256": "0855e8e39c7b6d8bee0427f995e04a302f4d6fb85b866c034c03f3deb60be876",
+          "bytes": 9366
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-mspacman-s0-20260901",
+      "run_id": "arrow_single_task_s0_cpu_fp32_368f440_virtai4x24g/task0_mspacman_s0",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/MsPacman-v5 single-task anchor, seed 123456789: final raw return 1520.625 ± 338.7009881517915 at epoch 90 (initial epoch-0 return 229.375; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1520.625,
+            "raw_return_std": 338.7009881517915
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-mspacman-s0-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-mspacman-s0-20260901/record.json",
+          "sha256": "7ca1b4daa63daaad3abe9ddb04187ce2259c10c9509c4539160b16c4bb9c84d2",
+          "bytes": 9331
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-mspacman-s1-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed1_task0_mspacman",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 1,
+        "value": 1337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/MsPacman-v5 single-task anchor, seed 1337: final raw return 1319.375 ± 316.55309092630887 at epoch 90 (initial epoch-0 return 236.875; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1319.375,
+            "raw_return_std": 316.55309092630887
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-mspacman-s1-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-mspacman-s1-20260901/record.json",
+          "sha256": "784b2428b7ac371610aa081320768fc4a3682b9f11a1f5b6b5e715f86b944be6",
+          "bytes": 9356
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-mspacman-s2-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed2_task0_mspacman",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 2,
+        "value": 31337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/MsPacman-v5 single-task anchor, seed 31337: final raw return 1676.25 ± 472.90161503213324 at epoch 90 (initial epoch-0 return 297.5; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1676.25,
+            "raw_return_std": 472.90161503213324
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-mspacman-s2-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-mspacman-s2-20260901/record.json",
+          "sha256": "970ba6056a47864315ba2699ccfb8eefe4f8ee80fda1006959dcd8931c5dac0b",
+          "bytes": 9362
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-seaquest-s0-20260901",
+      "run_id": "arrow_single_task_s0_cpu_fp32_368f440_virtai4x24g/task4_seaquest_s0",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 0,
+        "value": 123456789
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Seaquest-v5 single-task anchor, seed 123456789: final raw return 266.25 ± 80.53531833922307 at epoch 90 (initial epoch-0 return 77.5; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 266.25,
+            "raw_return_std": 80.53531833922307
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-seaquest-s0-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-seaquest-s0-20260901/record.json",
+          "sha256": "a9ab2add837da0ca0767802113b1ab1298efa388377730cb0845a70d49944cef",
+          "bytes": 9309
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-seaquest-s1-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed1_task4_seaquest",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 1,
+        "value": 1337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Seaquest-v5 single-task anchor, seed 1337: final raw return 1022.5 ± 241.95815753968702 at epoch 90 (initial epoch-0 return 81.25; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 1022.5,
+            "raw_return_std": 241.95815753968702
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-seaquest-s1-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-seaquest-s1-20260901/record.json",
+          "sha256": "de7a0863083059d27a36743996a8ee001e9990dc7075d0e94fad22cced08a611",
+          "bytes": 9338
+        }
+      ]
+    },
+    {
+      "record_id": "arrow-ar50-single-task-seaquest-s2-20260901",
+      "run_id": "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g/seed2_task4_seaquest",
+      "method": "ARROW-50 single-task normalization reference",
+      "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+      "evidence_level": "pilot",
+      "classification": "single-task-normalization-reference",
+      "status": "complete",
+      "task_awareness": "task_agnostic",
+      "seed": {
+        "id": 2,
+        "value": 31337
+      },
+      "completion": {
+        "completed_task_count": 1,
+        "total_task_count": 1,
+        "completed_epochs": 90,
+        "final_evaluation_performed": true
+      },
+      "headline": "ALE/Seaquest-v5 single-task anchor, seed 31337: final raw return 503.75 ± 173.23665172243432 at epoch 90 (initial epoch-0 return 86.25; 90-epoch budget matching the per-task window of the continual protocol).",
+      "latest_checkpoint": {
+        "checkpoint_id": "epoch-090",
+        "stage": "scheduled_periodic_pre_update",
+        "completed_epochs": 90,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 503.75,
+            "raw_return_std": 173.23665172243432
+          }
+        ]
+      },
+      "comparability_claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+      "record_path": "docs/experiments/records/arrow-ar50-single-task-seaquest-s2-20260901/record.json",
+      "repository_files": [
+        {
+          "path": "docs/experiments/records/arrow-ar50-single-task-seaquest-s2-20260901/record.json",
+          "sha256": "33b95e9632ec05c550da76b622041866e41e31866106a67696d3a4d77852bbd2",
+          "bytes": 9332
         }
       ]
     },

@@ -1,0 +1,268 @@
+{
+ "schema_version": 1,
+ "record_id": "arrow-ar50-single-task-enduro-s0-20260901",
+ "run_id": "arrow_single_task_s0_cpu_fp32_368f440_virtai4x24g/task5_enduro_s0",
+ "method": "ARROW-50 single-task normalization reference",
+ "protocol": "Atari original-six single-task normalization run: one frozen task config (--single-task-index), 90 epochs, 16-rollout periodic pre-update validation every 10 epochs, CPU-resident float32 replay (vendored-optimized-cpu-float32-replay, Decision 0045)",
+ "evidence_level": "pilot",
+ "classification": "single-task-normalization-reference",
+ "status": "complete",
+ "recorded_at_utc": "2026-09-13T07:27:04Z",
+ "project_git": {
+  "commit": "368f44084af15e82c671c8c972943628e1dea1ea",
+  "clean": true,
+  "upstream": "origin/codex/arrow-cpu-replay-campaign",
+  "ahead": 0,
+  "behind": 0,
+  "repository": "https://github.com/iamwangyabin/clworldmodel.git"
+ },
+ "seed": {
+  "id": 0,
+  "value": 123456789
+ },
+ "task_awareness": "task_agnostic",
+ "task_order": [
+  "ALE/Enduro-v5"
+ ],
+ "completion": {
+  "total_task_count": 1,
+  "completed_task_count": 1,
+  "completed_epochs": 90,
+  "final_evaluation_performed": true,
+  "final_evaluation_epoch": 90,
+  "training_end_logged": true,
+  "source_started_at": "2026-09-01T08:12:43.428638+00:00",
+  "source_finished_at": "2026-09-01T13:01:25.547818+00:00"
+ },
+ "evaluation": {
+  "metric": "raw_environment_return",
+  "policy": "vendored ARROW periodic validation for non-expert runs: seeded evaluation environment streams (advancing cohort, training RNG state preserved and restored around evaluation); stochastic policy sampling; raw returns unscaled by per-task reward transformation",
+  "evaluation_transitions_enter_replay": false,
+  "standard_deviation_ddof": 0,
+  "configured_rollouts_per_task": 16,
+  "episode_count_note": "Episode counts are termination-dependent and are not persisted in the Atari training logs; only rollout budget (16) and return statistics are recorded.",
+  "checkpoints": [
+   {
+    "checkpoint_id": "epoch-000",
+    "completed_epochs": 0,
+    "completed_task_count": 0,
+    "stage": "initial",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Enduro-v5",
+      "raw_return_mean": 0.0,
+      "raw_return_std": 0.0
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-010",
+    "completed_epochs": 10,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Enduro-v5",
+      "raw_return_mean": 56.125,
+      "raw_return_std": 16.586421404269217
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-020",
+    "completed_epochs": 20,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Enduro-v5",
+      "raw_return_mean": 4.5,
+      "raw_return_std": 7.176350047203662
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-030",
+    "completed_epochs": 30,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Enduro-v5",
+      "raw_return_mean": 113.125,
+      "raw_return_std": 20.108689042302085
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-040",
+    "completed_epochs": 40,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Enduro-v5",
+      "raw_return_mean": 432.5,
+      "raw_return_std": 59.167136148372094
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-050",
+    "completed_epochs": 50,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Enduro-v5",
+      "raw_return_mean": 383.0,
+      "raw_return_std": 29.04307146291521
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-060",
+    "completed_epochs": 60,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Enduro-v5",
+      "raw_return_mean": 464.5,
+      "raw_return_std": 23.32916629457641
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-070",
+    "completed_epochs": 70,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Enduro-v5",
+      "raw_return_mean": 404.0,
+      "raw_return_std": 7.788880963698615
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-080",
+    "completed_epochs": 80,
+    "completed_task_count": 0,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Enduro-v5",
+      "raw_return_mean": 390.0,
+      "raw_return_std": 19.0
+     }
+    ]
+   },
+   {
+    "checkpoint_id": "epoch-090",
+    "completed_epochs": 90,
+    "completed_task_count": 1,
+    "stage": "scheduled_periodic_pre_update",
+    "cohort": "periodic_evaluation",
+    "rollouts_per_task": 16,
+    "tasks": [
+     {
+      "task_index": 0,
+      "task_name": "ALE/Enduro-v5",
+      "raw_return_mean": 488.0,
+      "raw_return_std": 0.0
+     }
+    ]
+   }
+  ]
+ },
+ "headline": {
+  "summary": "ALE/Enduro-v5 single-task anchor, seed 123456789: final raw return 488.0 \u00b1 0.0 at epoch 90 (initial epoch-0 return 0.0; 90-epoch budget matching the per-task window of the continual protocol)."
+ },
+ "comparability": {
+  "claim": "Upper-anchor reference for normalized continual metrics on the Atari original-six protocol: same vendored ARROW-50 agent, same per-task 90-epoch budget, same 16-rollout validation cadence hardware profile as the continual baseline runs, trained without interference from other tasks.",
+  "limitations": [
+   "Single task per run; no cross-task retention or transfer information.",
+   "Execution profile is vendored-optimized-cpu-float32-replay (Decision 0045), a declared deviation from the published CUDA-replay environment; not bitwise identical to upstream execution.",
+   "Pilot classification: one seed per task here supports anchor estimation, not an official multi-seed reproduction of ARROW single-task performance.",
+   "Periodic validation uses stochastic policy sampling (vendored non-expert default), unlike deterministic evaluation used by task-expert protocols.",
+   "Random-policy lower anchor is tracked separately and is not part of these records."
+  ]
+ },
+ "derived_metrics": {
+  "anchor_role": "single_task_upper_anchor",
+  "normalization_pairing": "requires_random_policy_lower_anchor_per_task",
+  "curve_alignment": "10 evaluation points at epochs 0,10,...,90 align with the 90-epoch per-task window of continual runs for forward-transfer curve comparison."
+ },
+ "source_artifacts": [
+  {
+   "role": "run-artifact",
+   "name": "task5_enduro_s0/train.log",
+   "sha256": "9d541ee04adf5503e47b31f2d58ba6af19c37998a815c0b8f5efa05599d92e91"
+  },
+  {
+   "role": "run-artifact",
+   "name": "task5_enduro_s0/run_status.json",
+   "sha256": "7425473feec1056af1ee16ab5d086efd84a53138a657f997d2dd6d1b13fed1b9"
+  },
+  {
+   "role": "run-artifact",
+   "name": "task5_enduro_s0/resolved_training_config.json",
+   "sha256": "440269f802c053c60349683de0490f1fd376d732c7e215ffa21fbb5c86496f39"
+  },
+  {
+   "role": "run-artifact",
+   "name": "task5_enduro_s0/evaluation_seed_manifest.json",
+   "sha256": "c5ce9a2bcabcaaa0b73b9f63bcb7ba39233a43c2bee2f3befb1ec582d42084b4"
+  },
+  {
+   "role": "run-artifact",
+   "name": "task5_enduro_s0/launch.json",
+   "sha256": "334085144538a0857343fb721ee27712246a908c768e5fc3fc79441e99f806ca"
+  },
+  {
+   "role": "run-artifact",
+   "name": "task5_enduro_s0/config.json",
+   "sha256": "590ad2a3e20ca85ebe4553e9f195a23a4f6422732025ab74eabd0d8af4f09973"
+  },
+  {
+   "role": "campaign-manifest",
+   "name": "arrow_single_task_s0_cpu_fp32_368f440_virtai4x24g/campaign_manifest.json",
+   "sha256": "fb433eac015cba7d1bcdc215275b769c2917162f63973d7e0dba2f7ff76db9a3"
+  }
+ ],
+ "notes": [
+  "Run launched 2026-09-01 on VirtAI S2.gpu.xlarge (4x 24 GiB) as part of the ARROW CPU float32 replay campaign; launcher role recorded as single-task-normalization-reproduction.",
+  "Values transcribed verbatim from train.log 'Eval raw means/stds' blocks; raw returns are unscaled environment returns (reward transformation 0.05 for MsPacman etc. applies only to optimization).",
+  "Replay: FIFO + LTDM, 512 trajectories of length 512 each, float32, CPU-resident; whole-minibatch FIFO/LTDM selection 0.5/0.5 unchanged.",
+  "Initial epoch-0 checkpoint approximates an untrained-policy reference but is not a substitute for the dedicated random-policy anchor runs."
+ ]
+}
