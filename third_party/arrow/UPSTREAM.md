@@ -17,6 +17,16 @@ documented here, covered by focused parity tests, and followed by regenerating
 `MANIFEST.sha256`. Clean project-owned implementations still belong under
 `src/clworldmodel/`.
 
+## Baseline evaluation eligibility repair (2026-09-11)
+
+The retained Atari trainer's periodic evaluation caller unconditionally added
+one to `current_task_id`, which is correctly `None` for task-agnostic ARROW/DV3.
+Pass `None` in that case, retaining `task_id + 1` for task-bank methods. This
+repairs a pre-evaluation crash without exposing task labels, changing evaluator
+sampling, or changing any update/interaction budget. A deterministic AST-level
+caller regression checks the real keyword expression for both baseline and
+task-bank inputs; the target tiny DV3 run exercises the actual evaluator.
+
 ## First-task host control (2026-09-08)
 
 User-approved S1-on-4090-1 control adds a default-off
@@ -784,7 +794,22 @@ complete by this change. See Decision 0058 for the validation scope.
     preserves the executable behavior and records the issue rather than fixing
     it in only one method. See Decision 0059 and the D-AutoRoute v2 protocol.
 
-65. Keep the AWM-AutoRoute name/key/entry point and advance its default to the
+65. Add the separately named `Dream-Rehearsal-ArrowMatched-v1-Atari` profile.
+    It reuses the same DreamerV3 trainer, 541-epoch collection schedule, base
+    world-model/Actor-Critic update counts, and periodic evaluation path as the
+    ARROW/DV3 controls. Its full and bounded arms differ only in a finite
+    all-history capacity of 17,312 trajectories versus ARROW's 1,024-trajectory
+    capacity. Both ordinary training and rehearsal sample one shared retained
+    history. The profile corrects the historical smoke layout to the inspected
+    artifact's normal 16-by-64 start-state batch and optionally bootstraps
+    grading from its last imagined pre-transition feature. The old bounded-v1
+    default retains its recorded post-horizon behavior. Config/runtime and
+    launcher artifacts record the bootstrap choice and report Dream
+    Rehearsal's additional actor-only compute separately; total compute is not
+    claimed to match ARROW. Focused tests cover old-default isolation, the
+    bootstrap choice, exact ARROW base budgets, memory-only arm difference, and
+    the two-task target-GPU smoke contract.
+66. Keep the AWM-AutoRoute name/key/entry point and advance its default to the
     separately recorded two-frame probability-reconstruction v3 protocol.
     Atari config admits the explicit old v2 mode and new v3 mode; the launcher
     chooses v3 and passes it through collection/evaluation/snapshot metadata.
@@ -806,7 +831,7 @@ complete by this change. See Decision 0058 for the validation scope.
     stored dummy plus all four effective/ignored env.step actions (five entries),
     without changing the old collector. See Decision 0061 and the v3 protocol.
 
-66. On 2026-09-08, retire the historical first-frame runtime branch at the
+67. On 2026-09-08, retire the historical first-frame runtime branch at the
     user's request. AWM-AutoRoute now names only the two-frame probability
     router. Config and collector reject the old route mode; collection and
     evaluation default to the sole maintained router. Remove the zero-state
@@ -819,7 +844,7 @@ complete by this change. See Decision 0058 for the validation scope.
     they require recorded source revisions, not compatibility execution.
     See Decision 0062. Upstream pin and MIT notices remain unchanged.
 
-67. On 2026-09-08, repair AWM-AutoRoute's first compact/dense task boundary:
+68. On 2026-09-08, repair AWM-AutoRoute's first compact/dense task boundary:
     native RSSM outputs can differ in dtype under BF16 autocast. Assemble the
     routed policy batch using dtype promotion, preserving each expert's values
     rather than choosing the first route's dtype or forcing all networks to a
@@ -837,7 +862,7 @@ complete by this change. See Decision 0058 for the validation scope.
     state and exercises mixed compact/dense BF16 inference without a simulator.
     See the two-seed 2026-09-08 experiment record for the failure and validation.
 
-68. On 2026-09-08, correct AWM-AutoRoute policy-state handling at the user's
+69. On 2026-09-08, correct AWM-AutoRoute policy-state handling at the user's
     request (Decision 0063 / protocol v4). A new routing window clears only
     candidate histories/scores. On an unchanged expert ID, preserve AWM's policy
     state and previous action rather than copying the candidate's zero state
@@ -883,3 +908,15 @@ dry runs nor the new tensor fixture establish a reproduced result.
 
 Items 1 through 3 are corrected by the documented local compatibility and
 runtime profiles; item 4 remains a constraint of the upstream implementation.
+
+## 2026-09-11 prospective capacity-control integration
+
+Decision 0064 adds strictly named `capacity_control_v1` configuration and a
+factory adapter in the common Atari trainer for five new organization controls.
+No old FullBank/frozen runtime is restored. The branch adds explicit routed
+current/old Dreamer updates, seen-task-only evaluation and boundary raw-return
+records for this method. Baseline loss/sampling paths remain unchanged.
+`tests/test_capacity_controls.py` covers config, shared-loss equivalence,
+independent/frozen parameter ownership and two-task WM/AC state roundtrips;
+retained parity and target GPU smoke are launch gates, not reproduced results.
+See the named protocol for deliberate AWM compute/protection differences.

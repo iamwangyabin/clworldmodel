@@ -955,3 +955,11 @@ launch provenance, target-GPU smoke and explicit Atari adaptations. CPU
 fixtures pass; no corrected Atari or paper reproduction result is claimed.
 The [fidelity audit](docs/experiments/dream_rehearsal_fidelity_audit_20260905.md)
 records why the earlier never-clear scores are not official-method results.
+
+### Capacity-organization pilot controls
+
+The five user-authorized task-aware controls have a separate prospective
+[protocol](docs/protocols/capacity_organization_v1_atari.md) and
+`python scripts/run_capacity_control_atari.py --control shared --seed 0
+--output-dir /persistent/run --dry-run` launcher. They are not reproduced
+results or compute-matched single-switch AWM ablations.

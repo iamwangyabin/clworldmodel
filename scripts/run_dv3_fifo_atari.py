@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from git_provenance import git_state, require_synced_training_git_state
-from launcher_support import run_and_tee as _run_and_tee, write_json as _write_json
+from launcher_support import (
+    run_and_tee as _run_and_tee,
+    runtime_info as _runtime_info,
+    write_json as _write_json,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 ARROW_ROOT = ROOT / "third_party" / "arrow"
@@ -67,6 +71,10 @@ def _parser() -> argparse.ArgumentParser:
         help="Limit CPU thread pools and record the setting in the launch manifest",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--replay-device", choices=("cuda", "cpu"), default="cuda",
+        help="Explicit storage-only profile; retain full-capacity float32 FIFO",
+    )
     return parser
 
 
@@ -160,7 +168,20 @@ def main() -> int:
     )
     snapshot_dir = output_dir / "analysis_snapshots"
 
+    effective_config = json.loads(json.dumps(config))
+    if args.replay_device == "cpu":
+        effective_config["replay_buffers"][0]["rb_device"] = "cpu"
+        effective_config["replay_observation_dtype"] = "float32"
+    launch_config_path = (
+        output_dir / "resolved_training_config.json"
+        if args.replay_device == "cpu" else config_path
+    )
+
     env = os.environ.copy()
+    project_pythonpath = str(ROOT / "src")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (project_pythonpath, env.get("PYTHONPATH", "")) if part
+    )
     thread_env = {}
     if args.cpu_threads is not None:
         thread_env = {key: str(args.cpu_threads) for key in THREAD_ENV_KEYS}
@@ -170,7 +191,7 @@ def main() -> int:
         str(python),
         "Code/ARROW_and_DV3/Atari/train.py",
         "--config",
-        str(config_path),
+        str(launch_config_path),
         "--log-dir",
         str(output_dir),
         "--analysis-snapshot-dir",
@@ -184,8 +205,16 @@ def main() -> int:
     boundary_epochs = list(range(swap_sched - 1, config["epochs"], swap_sched))
     launch = {
         "method": "DreamerV3/FIFO",
+        "classification": "pilot",
+        "protocol": (
+            f"DV3-FIFO-{args.curriculum}-Atari-CPUFloat32Replay-v1"
+            if args.replay_device == "cpu" else f"DV3-FIFO-{args.curriculum}-Atari-v1"
+        ),
         "role": "matched-control",
-        "runtime": "vendored-optimized",
+        "runtime": (
+            "vendored-optimized-cpu-float32-replay"
+            if args.replay_device == "cpu" else "vendored-optimized"
+        ),
         "started_at_utc": None,
         "profile_stages": args.profile_stages,
         "optimizations": [
@@ -199,6 +228,29 @@ def main() -> int:
         "upstream_commit": UPSTREAM_COMMIT,
         "source": str(ARROW_ROOT),
         "config": str(config_path),
+        "resolved_training_config": effective_config,
+        "project_pythonpath_prepend": project_pythonpath,
+        "replay_execution_profile": {
+            "device": args.replay_device,
+            "observation_dtype": "float32",
+            "storage_only_deviation": args.replay_device != "cuda",
+            "bitwise_equivalence_claimed": False,
+        },
+        "replay_storage_budget": {
+            "observation_bytes": config["sac_dv3_data_n_max"] * config["data_t"]
+            * 3 * config["img_size"] ** 2 * 4,
+            "allocated_tensor_bytes": config["sac_dv3_data_n_max"] * config["data_t"]
+            * (3 * config["img_size"] ** 2 + config["action_space"] + 3) * 4,
+            "excludes": ["Python metadata", "temporary sampled tensors", "allocator overhead"],
+        },
+        "budgets": {
+            "epochs": config["epochs"],
+            "world_model_updates": config["epochs"] * config["steps_per_batch"],
+            "actor_critic_updates": config["epochs"] * config["ac_train_steps"],
+            "regular_epoch_agent_decisions": config["n_sync"] * config["gen_seq_len"],
+            "regular_epoch_raw_frames": config["n_sync"] * config["gen_seq_len"] * config["env_repeat"],
+            "epoch_540_wraparound_preserved": config["epochs"] == 541,
+        },
         "output_dir": str(output_dir),
         "analysis_snapshot_dir": str(snapshot_dir),
         "analysis_snapshot_semantics": {
@@ -227,9 +279,13 @@ def main() -> int:
     if output_dir.exists():
         raise FileExistsError(f"Refusing to overwrite existing run directory: {output_dir}")
     cuda = _cuda_info(python, env)
+    runtime_environment = _runtime_info(python, env)
     output_dir.mkdir(parents=True)
+    if args.replay_device == "cpu":
+        _write_json(launch_config_path, effective_config)
     launch["started_at_utc"] = datetime.now(timezone.utc).isoformat()
     launch["cuda"] = cuda
+    launch["runtime_environment"] = runtime_environment
     _write_json(output_dir / "launch.json", launch)
 
     return_code = _run_and_tee(

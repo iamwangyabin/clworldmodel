@@ -16,7 +16,7 @@ T = TypeVar("T", bound="Serialisable")
 ArrowReplayCapacityRatio = Literal["50-50", "25-75", "75-25"]
 ObservationObjective = Literal["reconstruction"]
 ObservationEncoder = Literal["cnn"]
-ContinualMethod = Literal[("none", "bounded_dream_rehearsal", "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow")]
+ContinualMethod = Literal[("none", "bounded_dream_rehearsal", "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow", "capacity_control_v1")]
 SharedCoreMode = Literal["trainable", "evolving_replay_protected"]
 ActorNetwork = Literal[("mlp",)]
 ActorCriticOptimizer = Literal["adam", "laprop"]
@@ -151,6 +151,8 @@ class RbConfig(Serialisable):
 @dataclass
 class Config(Serialisable):
     esc: EnvScheduleConfig
+    capacity_control: Literal["none", "shared", "wide", "fullbank", "frozen", "independent"] = "none"
+    capacity_residual_atoms: int = 4
     algorithm: Literal["dv3", "arrow", "sac"] = "dv3"
 
     # Present in every published Atari config, including ARROW and DV3.
@@ -294,6 +296,7 @@ class Config(Serialisable):
     dream_rehearsal_realized_threshold: float = 0.3
     dream_rehearsal_realized_bonus: float = 10.0
     dream_rehearsal_grad_clip: float = 100.0
+    dream_rehearsal_bootstrap_last_imagined_feature: bool = False
     shared_core_mode: SharedCoreMode = "trainable"
 
     action_space: int = 18
@@ -309,6 +312,20 @@ class Config(Serialisable):
         return cls(**data)
 
     def __post_init__(self) -> None:
+        is_capacity = self.continual_method == "capacity_control_v1"
+        if self.capacity_control not in {"none", "shared", "wide", "fullbank", "frozen", "independent"}:
+            raise ValueError("Unknown capacity-control organization")
+        if is_capacity != (self.capacity_control != "none"):
+            raise ValueError("Capacity organization requires capacity_control_v1")
+        if self.capacity_residual_atoms != 4:
+            raise ValueError("Capacity control v1 fixes four residual atoms")
+        if is_capacity:
+            if (self.algorithm != "arrow" or not self.task_private_actor_critic
+                    or self.evaluation_seed_protocol != "fixed_validation_heldout_final"
+                    or self.compute_dtype != "bfloat16" or self.replay_observation_dtype != "uint8"
+                    or self.current_batch_n + self.memory_batch_n != self.mb_n_size
+                    or self.data_parallel_world_size != 1):
+                raise ValueError("Capacity controls require private AC, fixed evaluation, BF16, uint8 ARROW and fixed batch allocation")
         if self.evolving_task0_profile != "fixed_v1":
             raise ValueError("Only the retained D-family fixed_v1 profile is supported")
         if self.epochs < 1:
@@ -355,7 +372,7 @@ class Config(Serialisable):
                         "task_durations must contain positive integers"
                     )
                 sequential_task_durations = tuple(task_durations)
-        if self.continual_method not in {"none", "bounded_dream_rehearsal", "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}:
+        if self.continual_method not in {"none", "bounded_dream_rehearsal", "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow", "capacity_control_v1"}:
             raise ValueError(f"Unknown continual method: {self.continual_method!r}")
         is_bounded_dream_rehearsal = (
             self.continual_method == "bounded_dream_rehearsal"
@@ -747,6 +764,7 @@ class Config(Serialisable):
                 name: (getattr(self, name), expected)
                 for name, expected in evolving_defaults.items()
                 if getattr(self, name) != expected
+                and not (is_capacity and name == "task_private_actor_critic")
             }
             if evolving_nondefault:
                 raise ValueError(
@@ -758,7 +776,7 @@ class Config(Serialisable):
         is_dino_patchbank = False
         is_dino_convbank = False
         is_dino_pixelbank = (False)
-        uses_task_experts = (uses_mechanism_bank)
+        uses_task_experts = uses_mechanism_bank or is_capacity
         is_independent_expert = False
         if self.data_parallel_world_size not in {1, 2, 4}:
             raise ValueError("data_parallel_world_size must be one of 1, 2, or 4")
@@ -807,7 +825,7 @@ class Config(Serialisable):
                     "The CNN task-bank protocol requires uint8 observation replay"
                 )
         elif (
-            not is_bounded_dream_rehearsal
+            not is_bounded_dream_rehearsal and not is_capacity
             and self.replay_observation_dtype != "float32"
         ):
             raise ValueError(
@@ -843,6 +861,7 @@ class Config(Serialisable):
             "dream_rehearsal_realized_threshold": 0.3,
             "dream_rehearsal_realized_bonus": 10.0,
             "dream_rehearsal_grad_clip": 100.0,
+            "dream_rehearsal_bootstrap_last_imagined_feature": False,
         }
         if is_bounded_dream_rehearsal:
             from clworldmodel.continual.dream_rehearsal import (
@@ -907,6 +926,10 @@ class Config(Serialisable):
             if self.dream_rehearsal_grad_clip < 0:
                 raise ValueError(
                     "Dream-rehearsal gradient clipping must be non-negative"
+                )
+            if type(self.dream_rehearsal_bootstrap_last_imagined_feature) is not bool:
+                raise ValueError(
+                    "Dream-rehearsal bootstrap selection must be a boolean"
                 )
         else:
             nondefault_dream_rehearsal = {
@@ -1212,7 +1235,11 @@ class Config(Serialisable):
 
     @property
     def uses_task_experts(self) -> bool:
-        return self.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}
+        return self.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow", "capacity_control_v1"}
+
+    @property
+    def uses_capacity_control(self) -> bool:
+        return self.continual_method == "capacity_control_v1"
 
     @property
     def uses_bounded_dream_rehearsal(self) -> bool:
@@ -1227,6 +1254,8 @@ class Config(Serialisable):
 
     @property
     def task_update_fraction(self) -> float:
+        if self.uses_capacity_control:
+            return 1.0  # Private actors only; WM uses explicit 12-current/4-old updates.
         if self.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}:
             return 1.0
         raise ValueError("Task update fractions require a task-aware expert method")

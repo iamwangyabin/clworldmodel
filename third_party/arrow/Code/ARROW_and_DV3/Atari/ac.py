@@ -607,6 +607,20 @@ def dream_rollout(
     return states, actions, rewards, lam_returns, replay_value_batch
 
 
+def _dream_rehearsal_bootstrap_state(
+    imagined_states: AcStateT,
+    post_horizon_z: LatentT,
+    post_horizon_h: HiddenT,
+    *,
+    use_last_imagined_feature: bool,
+) -> AcStateT:
+    return (
+        imagined_states[-1]
+        if use_last_imagined_feature
+        else zh_to_ac_state(post_horizon_z, post_horizon_h)
+    )
+
+
 @torch.no_grad()
 def _graded_dream_rehearsal_batch(
     wm: WorldModel,
@@ -621,6 +635,7 @@ def _graded_dream_rehearsal_batch(
     top_fraction: float,
     realized_threshold: float,
     realized_bonus: float,
+    bootstrap_last_imagined_feature: bool = False,
     temperature: float = 1.0,
 ) -> tuple[AcStateT, ActionT, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Generate and grade one paper-style dream self-imitation batch.
@@ -693,7 +708,13 @@ def _graded_dream_rehearsal_batch(
         actions_tensor = torch.stack(actions).detach()
         rewards_tensor = torch.stack(rewards).float()
         continues_tensor = torch.stack(continues).float()
-        bootstrap_values = ac.value(zh_to_ac_state(z, h)).float()
+        bootstrap_state = _dream_rehearsal_bootstrap_state(
+            states_tensor,
+            z,
+            h,
+            use_last_imagined_feature=bootstrap_last_imagined_feature,
+        )
+        bootstrap_values = ac.value(bootstrap_state).float()
 
     scores, realized, _ = realized_first_scores(
         rewards_tensor,
@@ -722,6 +743,7 @@ def train_bounded_dream_rehearsal(
     realized_threshold: float,
     realized_bonus: float,
     grad_clip: float = 100.0,
+    bootstrap_last_imagined_feature: bool = False,
 ) -> dict[str, float]:
     """Run actor-only graded dream rehearsal from one bounded task library."""
 
@@ -758,6 +780,9 @@ def train_bounded_dream_rehearsal(
                 top_fraction=top_fraction,
                 realized_threshold=realized_threshold,
                 realized_bonus=realized_bonus,
+                bootstrap_last_imagined_feature=(
+                    bootstrap_last_imagined_feature
+                ),
             )
         )
         with _autocast_context(states.device, compute_dtype):
