@@ -1,5 +1,9 @@
 # AWM-AutoRoute Atari two-seed pilot (2026-09-08)
 
+> Historical campaign/provenance record, not the active paper backlog. Use
+> [`AWM_AUTOROUTE_PAPER_PLAN.md`](AWM_AUTOROUTE_PAPER_PLAN.md) for current scope
+> and progress.
+
 > Current execution uses **v4** after the user-requested state-isolation fix.
 > The v3 account below is historical; see the final section for the fresh restarts.
 
@@ -173,3 +177,79 @@ only these current v4 attempts for authorized recovery, while the old ten runs
 remain read-only. Prior v3 attempts must not be automatically resumed into v4.
 Passing the regression and restarting is not evidence of recovered 4000+
 returns; new raw evaluations will be assessed at matched training checkpoints.
+
+## User-requested S1 stop and S2 replacement (2026-09-08/09)
+
+After reviewing the partial validation results, the user requested stopping
+S1 and starting another seed. S1 (`seed=1337`, `atari_s1.v4.pilot1`) was
+intentionally stopped at 188 completed epochs with epoch 188 incomplete.
+It is not a new crash, a completed seed, or an experiment that never ran.
+Its logs, validation results, model checkpoints and consumed-work provenance
+remain part of this pilot campaign; automatic resumption is prohibited.
+
+The replacement is the next configured seed index 2 (`seed=31337`) on
+4090-2, from scratch, with no inherited weights, Replay, RNG or counters.
+S0 remains untouched. The source commit remains
+`12d317eaf98eaebeb462894894b6fc83bb5e7041`, independently pushed/fetched and
+tracked through `codex/awm-autoroute-seed2-20260908`. Method, six-task order,
+540-epoch budget, evaluation protocol and eight CPU threads are unchanged.
+The existing target-host CUDA smoke applies to these unchanged source bytes.
+Deployment and acceptance records identify whether startup actually succeeded.
+
+This replacement was requested after observing performance. Consequently,
+S0/S2 must not be presented as the original predeclared two-seed cohort or
+an unbiased completed-seed estimate. Reports must disclose the stopped S1
+and additional work rather than omit an unfavorable partial outcome.
+
+The user explicitly approved lossless archival of the stopped S1 Replay
+to satisfy the unchanged 48 GiB storage preflight. Archive content is checked
+against each original file's SHA256, and a separately checksum-verified local
+copy is required before removing redundant uncompressed arrays. Model
+checkpoint files and metrics are not removed. Historical checkpoint reuse
+requires restoring the archived Replay to its recorded paths first; archive
+manifests and restore markers document this requirement. No other experiment's
+data may be removed for this replacement.
+
+S2 actually launched at 2026-09-09 00:05:21 Asia/Shanghai. Initial acceptance
+verified its live trainer and GPU process, fresh Replay/counters, zero Git
+divergence and an exact resolved-config comparison: only `seed` changed from
+1337 to 31337. It entered epoch 0; this is startup evidence, not a performance
+result or a completed training run. S1's four Replay arrays total 12 GiB;
+the verified archive is 1,576,236,615 bytes, with an identical local backup.
+
+## User-requested additional S3 on 3090 (2026-09-09)
+
+The user requested one additional Atari seed on the idle 3090. Select the
+next configured seed index 3 (`seed=42`) before observing this run's results;
+do not replace or restart S0/S2, or resume the user-stopped S1. This is an
+addition to the existing pilot history, not a new unbiased predeclared cohort.
+The original six-task order, 540 epochs, optimizer/evaluation budgets, method
+configuration and eight CPU threads remain unchanged. Use the same source
+commit `12d317eaf98eaebeb462894894b6fc83bb5e7041`, tracked through the pushed
+`codex/awm-autoroute-seed3-20260909` branch, and a new output directory.
+
+The 3090's existing environments have different dependency versions. Deploy
+an independent copy of the currently used AWM runtime at the same absolute
+prefix, without changing another project's environment. Compare the complete
+package/version list and Python version against the source runtime, then run
+the retained-method tests and production-shaped CUDA smoke on the 3090 from
+the clean synchronized source. Record the host's CPU, RAM, GPU and driver;
+matching packages does not imply identical numerical trajectories across
+hardware. The unchanged 48 GiB storage preflight must pass. Available disk
+space was already sufficient at this request; no experiment data was deleted.
+
+Deployment, target smoke and actual startup outcomes belong in the S3
+manifest and acceptance evidence. Do not report a planned or copying
+environment as a running experiment, or a smoke result as a performance claim.
+
+S3 actually launched at 2026-09-09 11:32:15 Asia/Shanghai. Its 75 retained
+tests and production-shaped CUDA smoke passed on the 3090; the full runtime
+package/version list and Python version matched the existing AWM runtime.
+Both prelaunch and postlaunch config comparisons found only the seed change
+from S2's 31337 to 42. Acceptance verified a real epoch-0 trainer and GPU
+process with fresh Replay, and the original S0/S2 processes remained alive.
+Direct GitHub access on the target timed out before tests or training, so
+source delivery used the existing controller-fetched, SHA256-verified Git
+bundle workflow. The target fetched that verified bundle, retained its GitHub
+upstream identity, and passed clean/zero-divergence checks before smoke and
+training. No failed setup attempt is counted as a trained seed.

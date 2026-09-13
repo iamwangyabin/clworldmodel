@@ -96,20 +96,23 @@ The repository itself is Apache-2.0 licensed. New project code uses that
 license. MIT-derived material must retain the MIT notice; do not relabel copied
 upstream code as solely Apache-2.0.
 
-## Retained research-method scope (2026-09-07)
+## Retained research-method scope (updated 2026-09-13)
 
 The user has retired the early ARROW-R2Rep, ReLU-KAN, non-StableTargets
 FastKAN, KARROW, MoE/full-world-model-bank, frozen-first-task LoRA/MB/REC,
-and older Evolving-Core method implementations. Retain the project-owned
-AWM and AWM-AutoRoute paths (formerly D and D-AutoRoute). StableTargets and
+and older Evolving-Core method implementations. The sole formal project-owned
+paper method is **AWM-AutoRoute** (formerly D-AutoRoute). Retain the AWM oracle
+path only as an internal training/parity/reference path required by
+AWM-AutoRoute; do not present AWM as a second paper method. StableTargets and
 F/D-AutoKAN are also retired by the user decision of 2026-09-07. ARROW/DV3 baselines
 and the independent R2-Dreamer and Dream Rehearsal reference integrations
 are outside this retirement.
 
-The formal method name is **AWM — Accumulative World Modeling**, adopted on
-2026-09-07. Use AWM and AWM-AutoRoute in current method descriptions. Preserve
-existing method keys, protocol IDs, launcher paths and historical evidence for
-compatibility and provenance; this is a naming-only change (Decision 0060).
+**AWM-AutoRoute — Accumulative World Modeling with Automatic Routing** is the
+only current formal method name. Existing AWM/D method keys, protocol IDs,
+launcher paths and historical evidence remain for compatibility, provenance,
+oracle-route evaluation and implementation reuse, not as a separate claimed
+method. See Decisions 0060 and 0065.
 
 As of 2026-09-08, maintain exactly one **AWM-AutoRoute** implementation: the
 two-frame probability-reconstruction router recorded under protocol v4.

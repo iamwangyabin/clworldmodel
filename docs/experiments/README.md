@@ -6,6 +6,8 @@ machine, an ignored `runs/` directory, a long protocol document, or a chat.
 
 Start with:
 
+- [AWM_AUTOROUTE_PAPER_PLAN.md](AWM_AUTOROUTE_PAPER_PLAN.md): the sole active
+  paper experiment backlog, status matrix and progress denominator;
 - [RESULTS.md](RESULTS.md): generated human-readable run index;
 - [registry.json](registry.json): generated machine-readable index;
 - [`records/<record-id>/record.json`](records/): self-contained record for one
@@ -16,10 +18,12 @@ Start with:
 `RESULTS.md` and `registry.json` are generated. The per-run `record.json` files
 are the reviewed source of truth in this directory.
 
-The current formal name **AWM (Accumulative World Modeling)** replaces D;
-D-AutoRoute is now **AWM-AutoRoute** (Decision 0060). Historical names, record
-IDs, protocol versions and raw results below remain as recorded. Renaming does
-not turn the earlier AutoRoute v1 evidence into a v2 result.
+The sole formal project-owned paper method is **AWM-AutoRoute** (Decision 0065).
+AWM/D is retained only as its oracle/internal reference. Historical names,
+record IDs, protocol versions and raw results below remain provenance, but do
+not enter the active paper progress count unless the paper plan explicitly
+marks the corresponding run cell accepted. Renaming never upgrades old-router
+evidence to the maintained v4 protocol.
 
 StableTargets and F/D-AutoKAN execution code was retired on 2026-09-07
 (Decision 0058). Result records below remain unchanged historical evidence.
