@@ -90,8 +90,19 @@ class EnvConfig(Serialisable):
     name: str
     kwargs: dict[str, Any] = field(default_factory=dict)
     rew_scale: float = 1
+    adapter: Literal["atari", "procgen_coinrun"] = "atari"
+
+    def __post_init__(self) -> None:
+        if self.adapter not in {"atari", "procgen_coinrun"}:
+            raise ValueError(f"Unknown environment adapter: {self.adapter!r}")
+        if self.adapter == "procgen_coinrun" and (self.kwargs or self.rew_scale != 1):
+            raise ValueError("CoinRun fixes raw rewards and the published variant settings")
 
     def get_function(self) -> Callable[[], Any]:
+        if self.adapter == "procgen_coinrun":
+            from clworldmodel.environments.coinrun import CoinRunFactory
+
+            return CoinRunFactory(self.name)
         return lambda: TransformReward(
             gym.make(
                 self.name,
@@ -297,6 +308,10 @@ class Config(Serialisable):
     shared_core_mode: SharedCoreMode = "trainable"
 
     action_space: int = 18
+    benchmark: Literal["atari", "procgen_coinrun"] = "atari"
+    interaction_counter_mode: Literal[
+        "legacy_trajectory_positions", "environment_steps"
+    ] = "legacy_trajectory_positions"
     replay_buffers: list[RbConfig] = field(default_factory=list)
     # ARROW only: split of total capacity 2 * data_n_max between FifoReplay vs LongTermReplay
     arrow_replay_capacity_ratio: ArrowReplayCapacityRatio = "50-50"
@@ -311,6 +326,12 @@ class Config(Serialisable):
     def __post_init__(self) -> None:
         if self.evolving_task0_profile != "fixed_v1":
             raise ValueError("Only the retained D-family fixed_v1 profile is supported")
+        if self.benchmark not in {"atari", "procgen_coinrun"}:
+            raise ValueError(f"Unknown benchmark: {self.benchmark!r}")
+        if self.interaction_counter_mode not in {
+            "legacy_trajectory_positions", "environment_steps"
+        }:
+            raise ValueError("Unknown interaction counter mode")
         if self.epochs < 1:
             raise ValueError("epochs must be positive")
         if self.compute_dtype not in {"float32", "bfloat16"}:
@@ -384,17 +405,39 @@ class Config(Serialisable):
             or self.evaluation_max_agent_decisions_per_episode != 32768
         ):
             raise ValueError("The exact evaluation episode safety cap is fixed at 32768 decisions")
-        if is_evolving_autoroute and (
-            self.evolving_task0_profile != "fixed_v1" or len(self.esc.env_configs) != 6
-            or self.epochs != 540 or self.esc.kwargs.get("swap_sched") != 90
-            or tuple(task.name for task in self.esc.env_configs) != (
-                "ALE/MsPacman-v5", "ALE/Boxing-v5", "ALE/CrazyClimber-v5",
-                "ALE/Frostbite-v5", "ALE/Seaquest-v5", "ALE/Enduro-v5",
-            )
-        ):
-            raise ValueError(
-                "Autoroute requires the original-six fixed_v1 540-epoch protocol"
-            )
+        if is_evolving_autoroute:
+            if self.benchmark == "procgen_coinrun":
+                from clworldmodel.environments.coinrun import COINRUN_TASKS
+
+                valid_benchmark = (
+                    self.epochs == 541
+                    and self.action_space == 15
+                    and self.env_repeat == 1
+                    and self.interaction_counter_mode == "environment_steps"
+                    and tuple(task.name for task in self.esc.env_configs) == COINRUN_TASKS
+                    and all(task.adapter == "procgen_coinrun" for task in self.esc.env_configs)
+                )
+            else:
+                valid_benchmark = (
+                    self.epochs == 540
+                    and self.action_space == 18
+                    and self.env_repeat == 4
+                    and self.interaction_counter_mode == "legacy_trajectory_positions"
+                    and tuple(task.name for task in self.esc.env_configs) == (
+                        "ALE/MsPacman-v5", "ALE/Boxing-v5", "ALE/CrazyClimber-v5",
+                        "ALE/Frostbite-v5", "ALE/Seaquest-v5", "ALE/Enduro-v5",
+                    )
+                    and all(task.adapter == "atari" for task in self.esc.env_configs)
+                )
+            if (
+                self.evolving_task0_profile != "fixed_v1"
+                or len(self.esc.env_configs) != 6
+                or self.esc.kwargs.get("swap_sched") != 90
+                or not valid_benchmark
+            ):
+                raise ValueError(
+                    "AWM-AutoRoute requires its declared six-task Atari or CoinRun protocol"
+                )
 
         is_evolving_shared_heads = False
         is_evolving_adaptive_compression_shared_heads = is_evolving_autoroute or (

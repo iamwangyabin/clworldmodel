@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch AWM (Accumulative World Modeling) or AWM-AutoRoute on Atari."""
+"""Launch AWM or AWM-AutoRoute on a declared benchmark protocol."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from run_arrow_ar50_atari import (
     _verify_primary_config,
 )
 from launcher_support import prepare_replay_symlink as _prepare_replay_symlink
-from summarize_continual_metrics import build_run_report
+from summarize_continual_metrics import build_raw_run_report, build_run_report
 
 
 FORMAL_TASK0_PROFILE = 'fixed_v1'
@@ -94,6 +94,11 @@ D_AUTOROUTE_PROTOCOL = (
     "Evolving-Core-DenseAcquire-AdaptiveQFP-SharedHeads-PrivateMLPAC-"
     "TwoFrameProbabilityRouter-ARROWParity-v4-OriginalSix-Atari-"
     "TaskAwareTraining-TaskIDFreeInference-Pilot"
+)
+D_AUTOROUTE_COINRUN_PROTOCOL = (
+    "Evolving-Core-DenseAcquire-AdaptiveQFP-SharedHeads-PrivateMLPAC-"
+    "TwoFrameProbabilityRouter-ARROWParity-v4-OriginalSix-ProcgenCoinRun-"
+    "541EpochRevisit-TaskAwareTraining-TaskIDFreeInference-Pilot"
 )
 AUTOROUTE_METHODS = (D_AUTOROUTE_METHOD,)
 AUTOROUTE_BEHAVIORS = (PRIVATE_MLP_AUTOROUTE_BEHAVIOR,)
@@ -409,7 +414,25 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--benchmark", choices=("atari", "procgen_coinrun"), default="atari"
+    )
     return parser
+
+
+def _coinrun_source_config(seed_index: int) -> tuple[Path, dict]:
+    from clworldmodel.environments.coinrun import COINRUN_TASKS
+
+    if not 0 <= seed_index < len(SEEDS):
+        raise ValueError("Invalid seed index")
+    folder = ARROW_ROOT / "Configs/CoinRun configs/CL-task configs/Original Order"
+    name = ",".join(COINRUN_TASKS)
+    path = folder / f"{name}-s{seed_index}-arrow.json"
+    source = json.loads(path.read_text())
+    reference = json.loads((folder / f"{name}-s0-arrow.json").read_text())
+    if {**source, "seed": SEEDS[0]} != reference or source["seed"] != SEEDS[seed_index]:
+        raise ValueError("CoinRun seed configuration differs from the published preset")
+    return path, source
 
 
 def _resolved_config(
@@ -420,6 +443,7 @@ def _resolved_config(
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
     prediction_head_profile: str = SHARED_DISTILLED_HEADS_PROFILE,
     adaptive_qfp_compression: bool = True,
+    benchmark: str = "atari",
 ) -> dict:
     """Compose AWM or AWM-AutoRoute without inheriting any retired method preset."""
     _protocol_for_task_order(
@@ -427,15 +451,33 @@ def _resolved_config(
         task0_profile, prediction_head_profile, behavior_profile,
         adaptive_qfp_compression,
     )
+    if benchmark not in {"atari", "procgen_coinrun"}:
+        raise ValueError(f"Unknown benchmark: {benchmark!r}")
+    selected_tasks = TASK_ORDERS[task_order]
+    if benchmark == "procgen_coinrun":
+        from clworldmodel.environments.coinrun import COINRUN_TASKS
+
+        if behavior_profile != PRIVATE_MLP_AUTOROUTE_BEHAVIOR:
+            raise ValueError("CoinRun is supported only by AWM-AutoRoute")
+        selected_tasks = COINRUN_TASKS
     config = copy.deepcopy(source)
     by_name = {task["name"]: task for task in config["esc"]["env_configs"]}
-    missing = [name for name in TASK_ORDERS[task_order] if name not in by_name]
+    missing = [name for name in selected_tasks if name not in by_name]
     if missing:
-        raise ValueError(f"Source config is missing required Atari tasks: {missing}")
+        raise ValueError(f"Source config is missing required benchmark tasks: {missing}")
     if config["esc"]["kwargs"].get("swap_sched") != TASK_DURATION_EPOCHS:
         raise ValueError("AWM-family protocols fix every task at 90 epochs")
-    config["esc"]["env_configs"] = [copy.deepcopy(by_name[name]) for name in TASK_ORDERS[task_order]]
-    config["epochs"] = len(TASK_ORDERS[task_order]) * TASK_DURATION_EPOCHS
+    config["esc"]["env_configs"] = [copy.deepcopy(by_name[name]) for name in selected_tasks]
+    config["epochs"] = len(selected_tasks) * TASK_DURATION_EPOCHS
+    if benchmark == "procgen_coinrun":
+        config.update(
+            benchmark=benchmark,
+            epochs=config["epochs"] + 1,
+            img_size=64,
+            interaction_counter_mode="environment_steps",
+        )
+        for task in config["esc"]["env_configs"]:
+            task["adapter"] = "procgen_coinrun"
     config.update({'random_policy': 'new',
  'continual_method': 'evolving_atomic_rssm_adaptive_compression_shared_heads_arrow',
  'rssm_num_experts': 6,
@@ -550,6 +592,11 @@ def _behavior_update_budget(config: dict) -> dict[str, int]:
             allocation[current_task_id] = current_updates
         for task_id, updates in allocation.items():
             totals[task_id] += TASK_DURATION_EPOCHS * updates
+    extra_epochs = int(config["epochs"]) - task_count * TASK_DURATION_EPOCHS
+    if extra_epochs:
+        if extra_epochs != 1 or current_fraction != 1.0:
+            raise ValueError("Only the fixed one-epoch private-policy revisit is supported")
+        totals[0] += updates_per_epoch
     return {str(task_id): updates for task_id, updates in totals.items()}
 
 
@@ -559,6 +606,9 @@ def _parameter_manifest(config: dict) -> dict:
     task_count = len(config["esc"]["env_configs"])
     if task_count < 1:
         raise ValueError("Evolving-Core parameter accounting requires tasks")
+    action_count = int(config["action_space"])
+    base_wm_parameters = ARROW_WORLD_MODEL_PARAMETERS + (action_count - 18) * 512
+    mlp_actor_parameters = MLP_ACTOR_PARAMETERS + (action_count - 18) * (512 + 1)
     mechanism_parameterization = config["task_mechanism_parameterization"]
     if mechanism_parameterization in {
         "dense_private",
@@ -579,7 +629,7 @@ def _parameter_manifest(config: dict) -> dict:
         config.get("task_shared_prediction_heads", False)
     )
     world_model_parameters = (
-        ARROW_WORLD_MODEL_PARAMETERS
+        base_wm_parameters
         + task_count * TASK_PROJECTOR_PARAMETERS
         + mechanism_parameters
         + (
@@ -589,12 +639,12 @@ def _parameter_manifest(config: dict) -> dict:
         )
     )
 
-    mlp_pair = MLP_ACTOR_PARAMETERS + MLP_CRITIC_PARAMETERS
+    mlp_pair = mlp_actor_parameters + MLP_CRITIC_PARAMETERS
 
     adaptive_hidden = 512
     adaptive_actor_residual = _residual_mechanism_parameters(
         in_features=1536,
-        out_features=18,
+        out_features=action_count,
         hidden_features=adaptive_hidden,
     )
     adaptive_critic_residual = _residual_mechanism_parameters(
@@ -613,7 +663,7 @@ def _parameter_manifest(config: dict) -> dict:
         world_model_parameters + task_count * mlp_pair
     )
     dense_v2_world_model_parameters = (
-        ARROW_WORLD_MODEL_PARAMETERS
+        base_wm_parameters
         + task_count * TASK_PROJECTOR_PARAMETERS
         + sum(
             TASK_MECHANISM_PARAMETERS + 12 * task_id
@@ -624,7 +674,7 @@ def _parameter_manifest(config: dict) -> dict:
     dense_v2_online_parameters = (
         dense_v2_world_model_parameters + task_count * mlp_pair
     )
-    arrow_online_parameters = ARROW_WORLD_MODEL_PARAMETERS + mlp_pair
+    arrow_online_parameters = base_wm_parameters + mlp_pair
     per_task_world_model_additions = {
         str(task_id): (
             TASK_PROJECTOR_PARAMETERS
@@ -768,6 +818,8 @@ def _parameter_manifest(config: dict) -> dict:
 def _budget_manifest(config: dict) -> dict:
     task_count = len(config["esc"]["env_configs"])
     decisions_per_epoch = int(config["n_sync"]) * int(config["gen_seq_len"])
+    if config.get("interaction_counter_mode") == "environment_steps":
+        decisions_per_epoch -= int(config["n_sync"])
     raw_frames_per_epoch = decisions_per_epoch * int(config["env_repeat"])
     online_updates = int(config["epochs"]) * int(config["steps_per_batch"])
     consolidation_updates = task_count * int(
@@ -800,6 +852,7 @@ def _budget_manifest(config: dict) -> dict:
         * int(config.get("ac_dream_steps", 16))
     )
     task_updates = TASK_DURATION_EPOCHS * int(config["steps_per_batch"])
+    extra_epochs = int(config["epochs"]) - task_count * TASK_DURATION_EPOCHS
     replay_budget = _arrow_replay_storage_budget(config)
     checkpoint_retention = config.get(
         "evolving_checkpoint_retention", "all_boundaries"
@@ -815,6 +868,11 @@ def _budget_manifest(config: dict) -> dict:
     return {
         "task_count": task_count,
         "task_duration_epochs": [TASK_DURATION_EPOCHS] * task_count,
+        "terminal_revisit": (
+            {"task_id": 0, "epochs": 1}
+            if int(config["epochs"]) > task_count * TASK_DURATION_EPOCHS
+            else None
+        ),
         "raw_environment_frames": raw_frames_per_epoch * int(config["epochs"]),
         "online_world_model_updates": online_updates,
         "boundary_consolidation_world_model_updates": consolidation_updates,
@@ -855,11 +913,15 @@ def _budget_manifest(config: dict) -> dict:
             int(config["epochs"]) * int(config["ac_train_steps"])
             + 0
         ),
-        "online_current_sequences": task_updates * int(config["mb_n_size"])
-        + (task_count - 1) * task_updates * int(config["current_batch_n"]),
-        "online_memory_sequences": (task_count - 1)
-        * task_updates
-        * int(config["memory_batch_n"]),
+        "online_current_sequences": (
+            task_updates * int(config["mb_n_size"])
+            + ((task_count - 1) * task_updates + extra_epochs * int(config["steps_per_batch"]))
+            * int(config["current_batch_n"])
+        ),
+        "online_memory_sequences": (
+            ((task_count - 1) * task_updates + extra_epochs * int(config["steps_per_batch"]))
+            * int(config["memory_batch_n"])
+        ),
         "actor_critic_updates_by_task_route": _behavior_update_budget(config),
         "actor_critic_update_budget_fixed": True,
         "shared_behavior_rehearsal_adds_optimizer_steps": False,
@@ -916,8 +978,11 @@ def main(argv: list[str] | None = None) -> int:
     project_git = (
         git_state(ROOT) if args.dry_run else require_synced_training_git_state(ROOT)
     )
-    source_path = _config_path("original", args.seed)
-    source = _verify_primary_config(source_path, "original", args.seed)
+    if args.benchmark == "procgen_coinrun":
+        source_path, source = _coinrun_source_config(args.seed)
+    else:
+        source_path = _config_path("original", args.seed)
+        source = _verify_primary_config(source_path, "original", args.seed)
     config = _resolved_config(
         source,
         task_order=args.task_order,
@@ -927,11 +992,12 @@ def main(argv: list[str] | None = None) -> int:
         behavior_profile=args.behavior_profile,
         prediction_head_profile=args.prediction_head_profile,
         adaptive_qfp_compression=args.adaptive_qfp_compression,
+        benchmark=args.benchmark,
     )
     if args.seed_value is not None:
         config["seed"] = args.seed_value
     seed_label = f"s{args.seed}" if args.seed_value is None else f"seed{args.seed_value}"
-    task_count = len(TASK_ORDERS[args.task_order])
+    task_count = len(config["esc"]["env_configs"])
     resolved_task0_profile = config["evolving_task0_profile"]
     protocol = _protocol_for_task_order(
         args.task_order,
@@ -942,9 +1008,12 @@ def main(argv: list[str] | None = None) -> int:
         behavior_profile=args.behavior_profile,
         adaptive_qfp_compression=args.adaptive_qfp_compression,
     )
+    if args.benchmark == "procgen_coinrun":
+        protocol = D_AUTOROUTE_COINRUN_PROTOCOL
     if args.task_order == "arrow-original-six" and args.classification != "pilot":
         raise ValueError("The original-six Evolving-Core campaign is pilot-only")
-    python = args.python.expanduser().resolve()
+    # Preserve the venv entry path: resolving its symlink selects the base environment.
+    python = Path(os.path.abspath(args.python.expanduser()))
     mechanism_output_suffix = (
         ""
         if args.mechanism_profile == DEFAULT_MECHANISM_PROFILE
@@ -976,6 +1045,7 @@ def main(argv: list[str] | None = None) -> int:
         else ROOT
         / "runs"
         / (
+            f"{'coinrun_' if args.benchmark == 'procgen_coinrun' else ''}"
             f"evolving_atomic_rssm{task0_output_suffix}{behavior_output_suffix}"
             f"{prediction_head_output_suffix}{adaptive_compression_output_suffix}_"
             f"{args.task_order}"
@@ -1030,7 +1100,8 @@ def main(argv: list[str] | None = None) -> int:
         "source_config": str(source_path),
         "seed_index": args.seed if args.seed_value is None else None,
         "seed": config["seed"],
-        "task_order": list(TASK_ORDERS[args.task_order]),
+        "benchmark": args.benchmark,
+        "task_order": [task["name"] for task in config["esc"]["env_configs"]],
         "task_identity_exposed_to_agent": True,
         "task_agnostic_claimed": False,
         "task_identity_exposed_during_training": True,
@@ -1173,7 +1244,11 @@ def main(argv: list[str] | None = None) -> int:
         "project_pythonpath_prepend": project_pythonpath,
         "world_model_compile": False,
         "metric_reporting": {
-            "schema": "arrow-paper-v1",
+            "schema": (
+                "raw-retention-v1"
+                if args.benchmark == "procgen_coinrun"
+                else "arrow-paper-v1"
+            ),
             "automatic_after_training": True,
             "required_output": str(output_dir / "continual_metrics.json"),
             "raw_checkpoint_matrix_preserved": True,
@@ -1184,6 +1259,41 @@ def main(argv: list[str] | None = None) -> int:
         "command": command,
         "resume_lineage": resume_lineage,
     }
+    if args.benchmark == "procgen_coinrun":
+        from clworldmodel.environments.coinrun import CoinRunFactory, PROCGEN_COMMIT
+
+        launch["environment_protocol"] = {
+            "procgen_source": "https://github.com/openai/procgen",
+            "procgen_commit": PROCGEN_COMMIT,
+            "observation": {"shape": [64, 64, 3], "dtype": "uint8", "resize": False},
+            "action_count": 15,
+            "dummy_previous_action": 4,
+            "frame_repeat": 1,
+            "reward_scale": 1,
+            "native_autoreset": "cache first frame, consume exactly once",
+            "seed_protocol": (
+                "SeedSequence-separated collection/validation/final/pruning; per-worker "
+                "reset seed modulo 2**31; explicit constructor reseed per exact evaluation episode"
+            ),
+            "variant_options": [
+                CoinRunFactory(task["name"]).options
+                for task in config["esc"]["env_configs"]
+            ],
+            "native_threads_per_worker": 0,
+            "collection_processes": config["n_sync"],
+            "terminal_revisit": {
+                "task_id": 0,
+                "epoch_zero_based": 540,
+                "epochs": 1,
+                "eligible_routes": list(range(6)),
+                "memory_routes": [1, 2, 3, 4, 5],
+                "new_consolidation_or_compression": False,
+            },
+            "interaction_counters": (
+                "actual env.step calls; initial reset rows are replay positions, not decisions"
+            ),
+            "same_evaluator_as_atari_awm_autoroute": True,
+        }
     print(json.dumps(launch, indent=2))
     rendered_env = [f"{key}={value}" for key, value in thread_env.items()]
     rendered_env.append(f"PYTHONPATH={env['PYTHONPATH']}")
@@ -1264,7 +1374,12 @@ def main(argv: list[str] | None = None) -> int:
     metric_report_path = output_dir / "continual_metrics.json"
     if return_code == 0 and not missing and not missing_consolidation_records:
         try:
-            _write_json(metric_report_path, build_run_report(output_dir))
+            report = (
+                build_raw_run_report(output_dir)
+                if args.benchmark == "procgen_coinrun"
+                else build_run_report(output_dir)
+            )
+            _write_json(metric_report_path, report)
         except (FileNotFoundError, KeyError, ValueError) as exc:
             metric_report_error = f"{type(exc).__name__}: {exc}"
 

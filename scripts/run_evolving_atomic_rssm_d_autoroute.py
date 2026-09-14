@@ -43,6 +43,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--benchmark", choices=("atari", "procgen_coinrun"), default="atari"
+    )
     return parser
 
 
@@ -56,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
 
     command = [
         "--task-order", "arrow-original-six",
+        "--benchmark", args.benchmark,
         "--task0-profile", "fixed_v1",
         "--prediction-head-profile", "shared_distilled",
         "--adaptive-qfp-compression",

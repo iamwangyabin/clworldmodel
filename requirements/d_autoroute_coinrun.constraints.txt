@@ -1,0 +1,13 @@
+# Key runtime constraints; every deployment also preserves full pip/conda metadata
+# and the SHA256 of the immutable runtime archive. Procgen source is pinned in pyproject.toml.
+torch==2.3.0
+numpy==1.26.4
+gymnasium==1.1.1
+gym==0.26.2
+gym3==0.3.3
+procgen==0.10.7+5e1dbf3
+ale-py==0.11.1
+tianshou==0.5.1
+sortedcontainers==2.4.0
+tensorboard==2.13.0
+cffi==1.17.1

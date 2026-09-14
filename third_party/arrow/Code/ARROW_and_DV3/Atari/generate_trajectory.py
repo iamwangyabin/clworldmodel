@@ -20,7 +20,10 @@ if TYPE_CHECKING:
     from clworldmodel.routing import RoutedActorBank
 
 
-def _two_frame_route_inputs(wm, router, obs, z, h, previous_action, reset, route_reset):
+def _two_frame_route_inputs(
+    wm, router, obs, z, h, previous_action, reset, route_reset,
+    *, dummy_previous_action=0,
+):
     """Score deterministic candidate histories; restore own history on a switch.
 
     Decoder alone receives posterior probabilities. The selected policy keeps
@@ -41,7 +44,7 @@ def _two_frame_route_inputs(wm, router, obs, z, h, previous_action, reset, route
             probe_z[first], probe_h[first] = initial_z.to(probe_z), initial_h.to(probe_h)
         probe_action = previous_action[rows].clone()
         probe_action[first] = 0
-        probe_action[first, 0] = 1  # episode-local dummy, not an ignored autoreset action
+        probe_action[first, dummy_previous_action] = 1
         priors[route_id] = (rows, first, probe_z, probe_h, probe_action)
         q, next_z, next_h = wm.rssm(
             probe_z, probe_action, probe_h, frames, first.float().unsqueeze(-1),
@@ -88,6 +91,7 @@ def _routed_policy_step(
     *,
     stochastic,
     route_reset=None,
+    dummy_previous_action=0,
 ):
     """Route each worker's RSSM and, when private, Actor by the same inferred ID.
 
@@ -108,6 +112,7 @@ def _routed_policy_step(
         route_reset = reset if route_reset is None else route_reset
         route_ids, z, h, previous_action = _two_frame_route_inputs(
             wm, router, obs, z, h, previous_action, reset, route_reset,
+            dummy_previous_action=dummy_previous_action,
         )
         next_z, next_h = None, None
         for route_id in route_ids.unique(sorted=True).tolist():
@@ -166,6 +171,33 @@ def _make_atari_env(
     if action_seed is not None:
         env.action_space.seed(action_seed)
     return env
+
+
+def _make_collection_env(env_fn, env_repeat, action_seed):
+    from clworldmodel.environments import PreparedEnvironmentFactory
+
+    if isinstance(env_fn, PreparedEnvironmentFactory):
+        return env_fn.prepare(env_repeat, action_seed)
+    return _make_atari_env(env_fn, env_repeat, action_seed)
+
+
+def _collection_action_spec(env_fns, wm=None):
+    from clworldmodel.environments import PreparedEnvironmentFactory
+
+    specs = [
+        (factory.action_count, factory.dummy_previous_action)
+        if isinstance(factory, PreparedEnvironmentFactory)
+        else (18, 0)
+        for factory in env_fns
+    ]
+    if not specs or any(spec != specs[0] for spec in specs):
+        raise ValueError("Collection workers must have matching action semantics")
+    action_count, dummy_action = specs[0]
+    if action_count < 1 or not 0 <= dummy_action < action_count:
+        raise ValueError("Invalid action count or dummy previous action")
+    if wm is not None and hasattr(wm, "a_dim") and wm.a_dim != action_count:
+        raise ValueError("World-model action size does not match environment adapter")
+    return action_count, dummy_action
 
 
 class EnvironmentSchedule:
@@ -416,9 +448,10 @@ def generate_trajectories(
         env_fns[i] if env_fns is not None else default_env_fn
         for i in range(n_sync)
     ]
+    action_count, dummy_action = _collection_action_spec(source_env_fns, wm)
     env = AsyncVectorEnv(
         [
-            partial(_make_atari_env, env_fn, env_repeat, action_seed)
+            partial(_make_collection_env, env_fn, env_repeat, action_seed)
             for env_fn, action_seed in zip(source_env_fns, action_seeds)
         ]
     )
@@ -438,7 +471,7 @@ def generate_trajectories(
                     n_samples += n_sync
                     obs, _ = env.reset(seed=reset_seeds)
                     for i in range(n_sync):
-                        acts[i].append(0)
+                        acts[i].append(dummy_action)
                         obss[i].append(obs[i])
                         rews[i].append(0)
                         conts[i].append(True)
@@ -449,12 +482,12 @@ def generate_trajectories(
 
                 n_samples += n_sync
                 if wm is None or ac is None:
-                    act = np.random.randint(0, 18, size=n_sync)
+                    act = np.random.randint(0, action_count, size=n_sync)
                 elif router is not None:
                     if z is None:
                         z, h = wm.rssm.initial_state(n_sync)
-                        act_t = torch.zeros(n_sync, 18, device=z.device)
-                        act_t[:, 0] = 1
+                        act_t = torch.zeros(n_sync, action_count, device=z.device)
+                        act_t[:, dummy_action] = 1
                     z, h, act = _routed_policy_step(
                         wm, ac, router,
                         torch.from_numpy(obs / 255).float().permute(0, 3, 1, 2).to(z.device),
@@ -462,14 +495,15 @@ def generate_trajectories(
                         torch.from_numpy(reset).float().unsqueeze(-1).to(z.device),
                         stochastic=not deterministic_policy,
                         route_reset=torch.from_numpy(route_reset).to(z.device),
+                        dummy_previous_action=dummy_action,
                     )
-                    act_t = torch.nn.functional.one_hot(act, 18)
+                    act_t = torch.nn.functional.one_hot(act, action_count)
                     act = act.cpu().numpy()
                 else:
                     if z is None:
                         z, h = wm.rssm.initial_state(n_sync)
-                        act_t = torch.zeros(n_sync, 18, device=z.device)
-                        act_t[:, 0] = 1  # Previous move would have been all 0s
+                        act_t = torch.zeros(n_sync, action_count, device=z.device)
+                        act_t[:, dummy_action] = 1
                     # Follow a stochastic policy
                     rssm_kwargs = {}
                     if task_id is not None:
@@ -497,7 +531,7 @@ def generate_trajectories(
                     else:
                         act_prob_dist = td.Categorical(logits=act_prob)
                         act = act_prob_dist.sample()
-                    act_t = torch.nn.functional.one_hot(act, 18)
+                    act_t = torch.nn.functional.one_hot(act, action_count)
                     act = act.cpu().numpy()
 
                 # NEXT_STEP resets a finished worker on the following step. The
@@ -541,7 +575,9 @@ def generate_trajectories(
     resets = [np.stack(e) for e in resets]
 
     return (
-        torch.nn.functional.one_hot(torch.from_numpy(np.concatenate(acts)[:n]).long(), 18).float(),
+        torch.nn.functional.one_hot(
+            torch.from_numpy(np.concatenate(acts)[:n]).long(), action_count
+        ).float(),
         torch.from_numpy(np.concatenate(obss)[:n] / 255).float().permute(0, 3, 1, 2)
         if not no_images
         else None,
@@ -557,7 +593,7 @@ def reinterpret_nt_to_t_n(
     if t * n != acts.shape[0]:
         raise ValueError(f"Illegal reinterpret (acts.shape={acts.shape}[0] != {t * n})")
     return (
-        acts.reshape(n, t, 18).swapaxes(0, 1),
+        acts.reshape(n, t, acts.shape[-1]).swapaxes(0, 1),
         obss.reshape(n, t, 3, 64, 64).swapaxes(0, 1),
         rews.reshape(n, t, 1).swapaxes(0, 1),
         conts.reshape(n, t, 1).swapaxes(0, 1),

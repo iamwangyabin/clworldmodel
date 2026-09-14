@@ -19,6 +19,23 @@ documented here, covered by focused parity tests, and followed by regenerating
 
 ## Current retirement update (2026-09-07)
 
+CoinRun support update (2026-09-14): extend the sole maintained
+**AWM-AutoRoute v4** implementation to ARROW's original six Procgen CoinRun
+variants under a separately named 541-epoch pilot protocol. The shared typed
+config now declares benchmark/adapter and interaction-counter semantics;
+collection accepts a project-owned prepared environment factory and derives
+the action count and dummy previous action (15 and 4 for CoinRun) rather than
+hardcoding Atari's 18 and 0. Atari defaults and tensor behavior remain
+unchanged. The sequential schedule explicitly separates the active task from
+the acquired route prefix, so the final Task-0 revisit keeps all six routes
+eligible and samples memory only from the other five without creating a
+seventh boundary. Resume accounting excludes initial reset replay positions
+for the environment-step counter and historical Atari checkpoint configs gain
+only default-off compatibility fields. Focused fixed-tensor adapter, schedule,
+budget, parameter, launcher and raw-return reporting tests cover these changes;
+a real Procgen smoke is required on the launch host before training. Historical
+first-frame CoinRun runs are not migrated or resumed.
+
 Launch preflight correction (2026-09-08): Atari's actual CLI still injected the
 retired `actor_kan_trainable_grid` field and replaced the resolved MLP setting
 with `None` when `--actor-network` was omitted. Remove the obsolete field and
