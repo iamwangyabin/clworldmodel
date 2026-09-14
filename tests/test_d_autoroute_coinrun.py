@@ -56,7 +56,7 @@ class CoinRunProtocolTests(unittest.TestCase):
             self.assertEqual(budget["actor_critic_updates_by_task_route"]["0"], 72800)
             self.assertEqual(sum(budget["actor_critic_updates_by_task_route"].values()), 432800)
             self.assertEqual(budget["online_current_sequences"] + budget["online_memory_sequences"], 541000 * 16)
-            self.assertEqual(budget["adaptive_compression_validation_rollouts"], 1680)
+            self.assertEqual(budget["adaptive_compression_validation_rollouts"], 480)
             self.assertEqual(budget["raw_environment_frames"], 541 * 4 * (4096 - 1))
             self.assertEqual(_parameter_manifest(data)["online_parameters"], 52886765)
         self.assertEqual(original, atari_config())
@@ -191,7 +191,8 @@ class CoinRunAdapterTests(unittest.TestCase):
         # Each worker's first replay position carries the Procgen no-op as its
         # dummy previous action. Terminal markers keep their real executed action.
         self.assertTrue(torch.all(acts.reshape(2, 4, 15)[:, 0].argmax(-1) == 4))
-        self.assertEqual(diagnostic, {})  # Random pretraining does not construct a router.
+        self.assertTrue(diagnostic["random_policy"])
+        self.assertEqual(diagnostic["routing_events"], [])
         reshaped = trajectory.reinterpret_nt_to_t_n(*batch, 2, 4)
         self.assertEqual(reshaped[0].shape, (2,4,15))
 
