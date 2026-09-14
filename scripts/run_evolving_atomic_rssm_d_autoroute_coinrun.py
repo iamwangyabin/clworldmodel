@@ -4,10 +4,14 @@
 
 Composes the same launcher/trainer/model as Atari; no benchmark-specific fork.
 """
+import sys
+
 from run_evolving_atomic_rssm_d_autoroute import main as _main
 
 
 def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
     return _main(["--benchmark", "procgen_coinrun", *(argv or [])])
 
 

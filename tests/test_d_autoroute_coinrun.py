@@ -5,6 +5,7 @@ import copy
 import io
 import json
 import pickle
+import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -111,6 +112,16 @@ class CoinRunProtocolTests(unittest.TestCase):
         self.assertEqual(launch["task_order"], list(COINRUN_TASKS))
         self.assertEqual(launch["metric_reporting"]["schema"], "raw-retention-v1")
         self.assertFalse(launch["task_identity_exposed_during_action_selection"])
+
+    def test_script_entrypoint_forwards_process_arguments(self):
+        import run_evolving_atomic_rssm_d_autoroute_coinrun as entry
+
+        with mock.patch.object(sys, "argv", ["coinrun", "--dry-run", "--cpu-threads", "7"]), \
+             mock.patch.object(entry, "_main", return_value=0) as delegated:
+            self.assertEqual(entry.main(), 0)
+        delegated.assert_called_once_with(
+            ["--benchmark", "procgen_coinrun", "--dry-run", "--cpu-threads", "7"]
+        )
 
 
 class FakeNative:
