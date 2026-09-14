@@ -191,7 +191,7 @@ class CoinRunAdapterTests(unittest.TestCase):
         # Each worker's first replay position carries the Procgen no-op as its
         # dummy previous action. Terminal markers keep their real executed action.
         self.assertTrue(torch.all(acts.reshape(2, 4, 15)[:, 0].argmax(-1) == 4))
-        self.assertEqual(diagnostic["environment_agent_decisions"], 6)
+        self.assertEqual(diagnostic, {})  # Random pretraining does not construct a router.
         reshaped = trajectory.reinterpret_nt_to_t_n(*batch, 2, 4)
         self.assertEqual(reshaped[0].shape, (2,4,15))
 

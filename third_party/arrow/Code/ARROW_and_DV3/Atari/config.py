@@ -719,23 +719,28 @@ class Config(Serialisable):
                     raise ValueError(
                         "Adaptive compression Q/F/P distillation scale must be positive"
                     )
-                expected_tasks = (
-                    "ALE/MsPacman-v5",
-                    "ALE/Boxing-v5",
-                    "ALE/CrazyClimber-v5",
-                    "ALE/Frostbite-v5",
-                    "ALE/Seaquest-v5",
-                    "ALE/Enduro-v5",
-                )
+                if self.benchmark == "procgen_coinrun":
+                    from clworldmodel.environments.coinrun import COINRUN_TASKS
+
+                    expected_tasks = COINRUN_TASKS
+                else:
+                    expected_tasks = (
+                        "ALE/MsPacman-v5",
+                        "ALE/Boxing-v5",
+                        "ALE/CrazyClimber-v5",
+                        "ALE/Frostbite-v5",
+                        "ALE/Seaquest-v5",
+                        "ALE/Enduro-v5",
+                    )
                 observed_tasks = tuple(task.name for task in self.esc.env_configs)
                 if observed_tasks != expected_tasks:
                     raise ValueError(
-                        "Adaptive compression v1 is fixed to the ARROW original-six "
+                        "Adaptive compression is fixed to the declared original-six "
                         f"order, got {observed_tasks}"
                     )
                 if sequential_task_durations != (90,) * len(expected_tasks):
                     raise ValueError(
-                        "Adaptive compression v1 fixes every original-six task to "
+                        "Adaptive compression fixes every original-six task to "
                         "90 epochs"
                     )
                 topology = {

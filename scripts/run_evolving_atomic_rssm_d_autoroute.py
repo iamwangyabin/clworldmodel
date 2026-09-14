@@ -16,6 +16,7 @@ directory. Absolute paths and user-home paths are preserved.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -53,9 +54,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.seed is None:
         args.seed = 0
-    def resolved(path: Path) -> str:
+    def resolved(path: Path, *, follow_symlinks: bool = True) -> str:
         expanded = path.expanduser()
-        return str((expanded if expanded.is_absolute() else ROOT / expanded).resolve())
+        rooted = expanded if expanded.is_absolute() else ROOT / expanded
+        return str(rooted.resolve() if follow_symlinks else Path(os.path.abspath(rooted)))
 
     command = [
         "--task-order", "arrow-original-six",
@@ -65,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         "--adaptive-qfp-compression",
         "--behavior-profile", PRIVATE_MLP_AUTOROUTE_BEHAVIOR,
         "--classification", args.classification,
-        "--python", resolved(args.python),
+        "--python", resolved(args.python, follow_symlinks=False),
         "--cpu-threads", str(args.cpu_threads),
     ]
     command.extend(("--seed", str(args.seed)) if args.seed_value is None else
