@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from run_evolving_atomic_rssm import (
+    AWM_ABLATIONS,
     D_AUTOROUTE_METHOD as METHOD_KEY,
     D_AUTOROUTE_PROTOCOL as PROTOCOL,
     PRIVATE_MLP_AUTOROUTE_BEHAVIOR,
@@ -44,6 +45,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--replay-mmap-root", type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=int, default=12)
+    parser.add_argument(
+        "--awm-ablation", choices=AWM_ABLATIONS, default="none",
+        help="One predeclared single-variable mechanism ablation.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -65,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         "--classification", args.classification,
         "--python", resolved(args.python),
         "--cpu-threads", str(args.cpu_threads),
+        "--awm-ablation", args.awm_ablation,
     ]
     command.extend(("--seed", str(args.seed)) if args.seed_value is None else
                    ("--seed-value", str(args.seed_value)))

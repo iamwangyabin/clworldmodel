@@ -17,6 +17,17 @@ documented here, covered by focused parity tests, and followed by regenerating
 `MANIFEST.sha256`. Clean project-owned implementations still belong under
 `src/clworldmodel/`.
 
+## AWM-AutoRoute mechanism ablation selector (2026-09-16)
+
+Add one typed, default-neutral `awm_ablation` config field for the four frozen
+single-variable paper controls. Existing mechanism-bank, functional-loss and
+gradient-composition branches already implement three controls; the `no_rcc`
+value only makes the existing adaptive-compression property false so the
+trainer retains dense Q/F/P modules and skips its return-gated compaction phase.
+The default `none` path is unchanged. Focused tests validate exact config diffs,
+budget accounting, rejection of combinations/unknown values, and unchanged
+default AWM-AutoRoute behavior. See Decision 0066 and the v1 ablation protocol.
+
 ## Baseline evaluation eligibility repair (2026-09-11)
 
 The retained Atari trainer's periodic evaluation caller unconditionally added

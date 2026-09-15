@@ -17,6 +17,13 @@ ArrowReplayCapacityRatio = Literal["50-50", "25-75", "75-25"]
 ObservationObjective = Literal["reconstruction"]
 ObservationEncoder = Literal["cnn"]
 ContinualMethod = Literal[("none", "bounded_dream_rehearsal", "evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow", "capacity_control_v1")]
+AWMAblation = Literal[
+    "none",
+    "no_reuse",
+    "no_functional_protection",
+    "no_conflict_projection",
+    "no_rcc",
+]
 SharedCoreMode = Literal["trainable", "evolving_replay_protected"]
 ActorNetwork = Literal[("mlp",)]
 ActorCriticOptimizer = Literal["adam", "laprop"]
@@ -179,6 +186,7 @@ class Config(Serialisable):
     fresh_ac: Union[bool, int] = False
 
     continual_method: ContinualMethod = "none"
+    awm_ablation: AWMAblation = "none"
     rssm_num_experts: int = 1
 
     n_sync: int = 2
@@ -384,6 +392,16 @@ class Config(Serialisable):
         is_cnn_mechanism_bank = False
         is_rec_rssm = False
         is_evolving_autoroute = self.uses_reconstruction_task_inference
+        if self.awm_ablation not in {
+            "none",
+            "no_reuse",
+            "no_functional_protection",
+            "no_conflict_projection",
+            "no_rcc",
+        }:
+            raise ValueError(f"Unknown AWM-AutoRoute ablation: {self.awm_ablation!r}")
+        if self.awm_ablation != "none" and not is_evolving_autoroute:
+            raise ValueError("AWM ablations require AWM-AutoRoute")
 
         expected_inference = (
             "two_frame_probability_reconstruction" if is_evolving_autoroute else "oracle"
@@ -485,6 +503,7 @@ class Config(Serialisable):
         if not 0 <= 0.05 < 1:
             raise ValueError("task_mechanism_max_validation_drop must lie in [0, 1)")
         evolving_defaults = {
+            "awm_ablation": "none",
             "evolving_task0_profile": "fixed_v1",
             "evolving_shared_core": False,
             "first_task_shared_core_lr": 2e-4,
@@ -562,6 +581,7 @@ class Config(Serialisable):
                 "task_private_actor_critic": True,
                 "task_atomic_routes": True,
                 "ac_lr": (1e-4),
+                "awm_ablation": self.awm_ablation,
             }
             if (is_evolving_adaptive_compression_shared_heads):
                 expected_evolving.update(
@@ -579,6 +599,18 @@ class Config(Serialisable):
                         "adaptive_compression_qfp_distill_scale": 1.0,
                     }
                 )
+            if self.awm_ablation == "no_functional_protection":
+                expected_evolving.update(
+                    {
+                        "interface_q_scale": 0.0,
+                        "interface_h_scale": 0.0,
+                        "interface_actor_scale": 0.0,
+                        "shared_prediction_distill_scale": 0.0,
+                        "adaptive_compression_qfp_distill_scale": 0.0,
+                    }
+                )
+            elif self.awm_ablation == "no_conflict_projection":
+                expected_evolving["component_gradient_projection"] = False
             expected_evolving.update(
                 task0_profile_overrides[self.evolving_task0_profile]
             )
@@ -689,7 +721,10 @@ class Config(Serialisable):
                     raise ValueError(
                         "Adaptive compression maximum return drop must lie in [0, 1)"
                     )
-                if self.adaptive_compression_qfp_distill_scale <= 0:
+                if (
+                    self.adaptive_compression_qfp_distill_scale <= 0
+                    and self.awm_ablation != "no_functional_protection"
+                ):
                     raise ValueError(
                         "Adaptive compression Q/F/P distillation scale must be positive"
                     )
@@ -726,7 +761,7 @@ class Config(Serialisable):
                     ),
                 }
                 expected_topology = {
-                    "task_mechanism_reuse": True,
+                    "task_mechanism_reuse": self.awm_ablation != "no_reuse",
                     "task_mechanism_num_atoms": 4,
                     "task_mechanism_recurrent_width": 512,
                     "task_mechanism_representation_width": 512,
@@ -1041,6 +1076,7 @@ class Config(Serialisable):
                 if (
                     (is_evolving_atomic)
                     and not self.task_mechanism_reuse
+                    and self.awm_ablation != "no_reuse"
                 ):
                     raise ValueError("Atomic RSSM requires atom reuse")
                 if self.fresh_ac is not False:
@@ -1289,7 +1325,11 @@ class Config(Serialisable):
     def uses_adaptive_qfp_compression(self) -> bool:
         """Whether completed Dense Q/F/P modules are return-gated and compacted."""
 
-        return self.continual_method in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}
+        return (
+            self.continual_method
+            in {"evolving_atomic_rssm_adaptive_compression_shared_heads_arrow", "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"}
+            and self.awm_ablation != "no_rcc"
+        )
 
 
     def get_env_schedule(self) -> EnvironmentSchedule:

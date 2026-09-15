@@ -95,6 +95,23 @@ D_AUTOROUTE_PROTOCOL = (
     "TwoFrameProbabilityRouter-ARROWParity-v4-OriginalSix-Atari-"
     "TaskAwareTraining-TaskIDFreeInference-Pilot"
 )
+AWM_ABLATIONS = (
+    "none",
+    "no_reuse",
+    "no_functional_protection",
+    "no_conflict_projection",
+    "no_rcc",
+)
+AWM_ABLATION_PROTOCOLS = {
+    "no_reuse": f"{D_AUTOROUTE_PROTOCOL}-NoReuse-Ablation-v1",
+    "no_functional_protection": (
+        f"{D_AUTOROUTE_PROTOCOL}-NoFunctionalProtection-Ablation-v1"
+    ),
+    "no_conflict_projection": (
+        f"{D_AUTOROUTE_PROTOCOL}-NoConflictProjection-Ablation-v1"
+    ),
+    "no_rcc": f"{D_AUTOROUTE_PROTOCOL}-NoRCC-Ablation-v1",
+}
 AUTOROUTE_METHODS = (D_AUTOROUTE_METHOD,)
 AUTOROUTE_BEHAVIORS = (PRIVATE_MLP_AUTOROUTE_BEHAVIOR,)
 ADAPTIVE_QFP_WIDTH_FRACTIONS = (0.75, 0.5, 0.25, 0.125)
@@ -144,6 +161,7 @@ def _protocol_for_task_order(
     prediction_head_profile: str = SHARED_DISTILLED_HEADS_PROFILE,
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
     adaptive_qfp_compression: bool = True,
+    awm_ablation: str = "none",
 ) -> str:
     _validate_mechanism_profile(task_order, mechanism_profile, mechanism_parameterization)
     _task0_profile_for_order(task_order, task0_profile)
@@ -154,6 +172,12 @@ def _protocol_for_task_order(
     protocols = {PRIVATE_MLP_BEHAVIOR: ADAPTIVE_QFP_COMPRESSION_PROTOCOL, PRIVATE_MLP_AUTOROUTE_BEHAVIOR: D_AUTOROUTE_PROTOCOL}
     if behavior_profile not in protocols:
         raise ValueError(f"Unsupported AWM-family behavior profile: {behavior_profile!r}")
+    if awm_ablation not in AWM_ABLATIONS:
+        raise ValueError(f"Unknown AWM-AutoRoute ablation: {awm_ablation!r}")
+    if awm_ablation != "none":
+        if behavior_profile != PRIVATE_MLP_AUTOROUTE_BEHAVIOR:
+            raise ValueError("AWM ablations require AWM-AutoRoute")
+        return AWM_ABLATION_PROTOCOLS[awm_ablation]
     return protocols[behavior_profile]
 
 
@@ -176,6 +200,8 @@ def _mechanism_capacity_manifest(
     task_count: int,
     mechanism_profile: str,
     mechanism_parameterization: str = DENSE_PRIVATE_PARAMETERIZATION,
+    reuse_enabled: bool = True,
+    adaptive_compression_enabled: bool = True,
 ) -> dict[str, object]:
     """Record fixed Atari RSSM capacity before allocating the full model."""
 
@@ -220,7 +246,7 @@ def _mechanism_capacity_manifest(
         "transition_prior": 0,
     }
     shared_total = sum(shared.values())
-    route_parameters = 3 * 4 * sum(range(task_count))
+    route_parameters = 3 * 4 * sum(range(task_count)) if reuse_enabled else 0
     result = {
         "profile": mechanism_profile,
         "parameterization": mechanism_parameterization,
@@ -235,6 +261,7 @@ def _mechanism_capacity_manifest(
             "transition_prior": [512, 1024],
         },
         "atoms_per_mechanism": 4,
+        "historical_reuse_enabled": reuse_enabled,
         "parameters_per_task": {**per_task, "total": per_task_total},
         "shared_frozen_down_parameters": {**shared, "total": shared_total},
         "private_mechanism_parameters": task_count * per_task_total,
@@ -243,7 +270,10 @@ def _mechanism_capacity_manifest(
             shared_total + task_count * per_task_total + route_parameters
         ),
     }
-    if mechanism_parameterization == ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION:
+    if (
+        mechanism_parameterization == ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION
+        and adaptive_compression_enabled
+    ):
         result["adaptive_compression"] = {
             "acquisition_widths": [
                 recurrent_width,
@@ -403,6 +433,12 @@ def _parser() -> argparse.ArgumentParser:
             "MLPs and adding two-frame probability reconstruction routing."
         ),
     )
+    parser.add_argument(
+        "--awm-ablation",
+        choices=AWM_ABLATIONS,
+        default="none",
+        help="One predeclared single-variable AWM-AutoRoute mechanism ablation.",
+    )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume-from", type=Path)
     parser.add_argument("--stop-after-first-task", action="store_true")
@@ -421,12 +457,13 @@ def _resolved_config(
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
     prediction_head_profile: str = SHARED_DISTILLED_HEADS_PROFILE,
     adaptive_qfp_compression: bool = True,
+    awm_ablation: str = "none",
 ) -> dict:
     """Compose AWM or AWM-AutoRoute without inheriting any retired method preset."""
     _protocol_for_task_order(
         task_order, mechanism_profile, mechanism_parameterization,
         task0_profile, prediction_head_profile, behavior_profile,
-        adaptive_qfp_compression,
+        adaptive_qfp_compression, awm_ablation,
     )
     config = copy.deepcopy(source)
     by_name = {task["name"]: task for task in config["esc"]["env_configs"]}
@@ -489,12 +526,26 @@ def _resolved_config(
  'adaptive_compression_lr': 0.0002,
  'adaptive_compression_rollouts': 16,
  'adaptive_compression_max_return_drop': 0.05,
- 'adaptive_compression_qfp_distill_scale': 1.0})
+ 'adaptive_compression_qfp_distill_scale': 1.0,
+ 'awm_ablation': awm_ablation})
     if behavior_profile in AUTOROUTE_BEHAVIORS:
         if behavior_profile == PRIVATE_MLP_AUTOROUTE_BEHAVIOR:
             config["continual_method"] = D_AUTOROUTE_METHOD
         config["task_route_inference"] = "two_frame_probability_reconstruction"
         config["task_route_inference_version"] = 4
+    if awm_ablation == "no_reuse":
+        config["task_mechanism_reuse"] = False
+    elif awm_ablation == "no_functional_protection":
+        for name in (
+            "interface_q_scale",
+            "interface_h_scale",
+            "interface_actor_scale",
+            "shared_prediction_distill_scale",
+            "adaptive_compression_qfp_distill_scale",
+        ):
+            config[name] = 0.0
+    elif awm_ablation == "no_conflict_projection":
+        config["component_gradient_projection"] = False
     for replay_config in config["replay_buffers"]:
         replay_config["rb_device"] = "cpu"
     return config
@@ -572,8 +623,9 @@ def _parameter_manifest(config: dict) -> dict:
             "Unknown mechanism parameterization in parameter ledger: "
             f"{mechanism_parameterization!r}"
         )
+    reuse_enabled = bool(config.get("task_mechanism_reuse", True))
     mechanism_parameters = shared_mechanism_parameters + sum(
-        private_mechanism_parameters + 12 * task_id
+        private_mechanism_parameters + (12 * task_id if reuse_enabled else 0)
         for task_id in range(task_count)
     )
     shared_prediction_heads = bool(
@@ -630,7 +682,7 @@ def _parameter_manifest(config: dict) -> dict:
         str(task_id): (
             TASK_PROJECTOR_PARAMETERS
             + private_mechanism_parameters
-            + 12 * task_id
+            + (12 * task_id if reuse_enabled else 0)
             + (
                 TASK_PRIVATE_HEAD_ADDITION_PARAMETERS
                 if task_id > 0 and not shared_prediction_heads
@@ -659,6 +711,7 @@ def _parameter_manifest(config: dict) -> dict:
             else 0
         ),
         "mechanism_parameterization": mechanism_parameterization,
+        "historical_reuse_enabled": reuse_enabled,
         "shared_frozen_down_parameters": shared_mechanism_parameters,
         "behavior_topology": (("per_task_private_mlp")),
         "behavior_parameters": behavior_parameters,
@@ -698,7 +751,11 @@ def _parameter_manifest(config: dict) -> dict:
             "contained_in_common_evolving_boundary_world_model_teacher": True,
             "growth_with_task_count": 0,
         }
-    if mechanism_parameterization == ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION:
+    compression_enabled = (
+        mechanism_parameterization == ADAPTIVE_DENSE_WIDTH_PARAMETERIZATION
+        and config.get("awm_ablation", "none") != "no_rcc"
+    )
+    if compression_enabled:
         dense_widths = [
             int(config["task_mechanism_recurrent_width"]),
             int(config["task_mechanism_representation_width"]),
@@ -774,7 +831,11 @@ def _budget_manifest(config: dict) -> dict:
     consolidation_updates = task_count * int(
         config["boundary_consolidation_steps"]
     )
-    adaptive_compression = config.get("continual_method") in {ADAPTIVE_QFP_COMPRESSION_METHOD, D_AUTOROUTE_METHOD}
+    adaptive_compression = (
+        config.get("continual_method")
+        in {ADAPTIVE_QFP_COMPRESSION_METHOD, D_AUTOROUTE_METHOD}
+        and config.get("awm_ablation", "none") != "no_rcc"
+    )
     adaptive_behavior_compression = (
         config.get("continual_method") == 'evolving_atomic_rssm_adaptive_qfp_ac_compression_shared_heads_arrow'
     )
@@ -936,7 +997,8 @@ def main(argv: list[str] | None = None) -> int:
         args.seed = 0
 
     if args.stop_after_first_task and (args.resume_from is not None
-            or args.behavior_profile != PRIVATE_MLP_AUTOROUTE_BEHAVIOR):
+            or args.behavior_profile != PRIVATE_MLP_AUTOROUTE_BEHAVIOR
+            or args.awm_ablation != "none"):
         raise ValueError("First-task host control requires fresh AWM-AutoRoute training")
     if args.cpu_threads < 1:
         raise ValueError("--cpu-threads must be positive")
@@ -954,6 +1016,7 @@ def main(argv: list[str] | None = None) -> int:
         behavior_profile=args.behavior_profile,
         prediction_head_profile=args.prediction_head_profile,
         adaptive_qfp_compression=args.adaptive_qfp_compression,
+        awm_ablation=args.awm_ablation,
     )
     if args.seed_value is not None:
         config["seed"] = args.seed_value
@@ -968,6 +1031,7 @@ def main(argv: list[str] | None = None) -> int:
         prediction_head_profile=args.prediction_head_profile,
         behavior_profile=args.behavior_profile,
         adaptive_qfp_compression=args.adaptive_qfp_compression,
+        awm_ablation=args.awm_ablation,
     )
     if args.task_order == "arrow-original-six" and args.classification != "pilot":
         raise ValueError("The original-six Evolving-Core campaign is pilot-only")
@@ -997,6 +1061,9 @@ def main(argv: list[str] | None = None) -> int:
     adaptive_compression_output_suffix = (
         "_adaptive_qfp_compression" if args.adaptive_qfp_compression else ""
     )
+    ablation_output_suffix = (
+        "" if args.awm_ablation == "none" else f"_{args.awm_ablation}"
+    )
     output_dir = (
         args.output_dir.expanduser().resolve()
         if args.output_dir is not None
@@ -1007,7 +1074,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{prediction_head_output_suffix}{adaptive_compression_output_suffix}_"
             f"{args.task_order}"
             f"{mechanism_output_suffix}_"
-            f"{seed_label}_{args.classification}"
+            f"{seed_label}{ablation_output_suffix}_{args.classification}"
         )
     )
     config_path = output_dir / "resolved_training_config.json"
@@ -1052,6 +1119,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.mechanism_profile == DEFAULT_MECHANISM_PROFILE
             else "Evolving-Core Atomic RSSM Compact Mechanism 128/128/64")))
         ),
+        "ablation": args.awm_ablation,
         "protocol": (protocol),
         "classification": args.classification,
         "status": "dry_run" if args.dry_run else "launching",
@@ -1096,7 +1164,9 @@ def main(argv: list[str] | None = None) -> int:
         "from_scratch": True,
         "behavior_profile": args.behavior_profile,
         "prediction_head_profile": args.prediction_head_profile,
-        "adaptive_qfp_compression": args.adaptive_qfp_compression,
+        "adaptive_qfp_compression": (
+            args.adaptive_qfp_compression and args.awm_ablation != "no_rcc"
+        ),
         "source_task1_snapshot": None,
         "shared_core": ("CNN, posterior/recurrent/prior RSSM, and one shared "
             "decoder/reward/continue set; always plastic and replay protected"
@@ -1106,7 +1176,7 @@ def main(argv: list[str] | None = None) -> int:
             ("per-task projector, physically width-adaptive Dense Q/F/P atoms, "
             "routes, and independent MLP actor-critic; decoder/reward/continue "
             "are shared"
-            if args.adaptive_qfp_compression
+            if args.adaptive_qfp_compression and args.awm_ablation != "no_rcc"
             else ("per-task projector, dense Q/F/P atoms, routes, and independent "
             "MLP actor-critic; decoder/reward/continue are shared"
             if args.prediction_head_profile == SHARED_DISTILLED_HEADS_PROFILE
@@ -1116,6 +1186,8 @@ def main(argv: list[str] | None = None) -> int:
             task_count=task_count,
             mechanism_profile=config["task_mechanism_capacity_profile"],
             mechanism_parameterization=config["task_mechanism_parameterization"],
+            reuse_enabled=config["task_mechanism_reuse"],
+            adaptive_compression_enabled=args.awm_ablation != "no_rcc",
         ),
         "capacity_control_profile": DEFAULT_MECHANISM_PROFILE,
         "capacity_ablation_only": (
@@ -1134,7 +1206,9 @@ def main(argv: list[str] | None = None) -> int:
                 "distillation_scale": config[
                     "shared_prediction_distill_scale"
                 ],
-                "component_gradient_projection": True,
+                "component_gradient_projection": config[
+                    "component_gradient_projection"
+                ],
                 "boundary_consolidation_and_rollback": True,
                 "extra_teacher_forward": False,
                 "extra_optimizer_updates": 0,
@@ -1151,7 +1225,11 @@ def main(argv: list[str] | None = None) -> int:
                 "current_old_update_split": [1.0, 0.0],
                 "extra_optimizer_updates": 0,
             })),
-        "gradient_rule": "per-component conflicting-current-direction projection",
+        "gradient_rule": (
+            "per-component conflicting-current-direction projection"
+            if config["component_gradient_projection"]
+            else "unprojected current plus memory gradients"
+        ),
         "interface_distillation": {
             "posterior_kl": config["interface_q_scale"],
             "layer_normalized_hidden_mse": config["interface_h_scale"],
@@ -1188,7 +1266,7 @@ def main(argv: list[str] | None = None) -> int:
                 "final_heldout_cohort_used_for_selection": False,
                 "actor_critic_compression": False,
             }
-            if args.adaptive_qfp_compression
+            if args.adaptive_qfp_compression and args.awm_ablation != "no_rcc"
             else None
         ),
         "budgets": _budget_manifest(config),
@@ -1291,7 +1369,7 @@ def main(argv: list[str] | None = None) -> int:
         "actor_critic_parameter_accounting.json",
     ]
     required.append("save_ac_bank.pt")
-    if args.adaptive_qfp_compression:
+    if args.adaptive_qfp_compression and args.awm_ablation != "no_rcc":
         required.extend(
             f"adaptive_qfp_compression/task_{task_id:02d}_boundary.json"
             for task_id in range(task_count)

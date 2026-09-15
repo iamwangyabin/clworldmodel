@@ -31,15 +31,27 @@ BEHAVIOR = "private_mlp_autoroute"
 METHOD = "evolving_atomic_rssm_adaptive_compression_shared_heads_autoroute_arrow"
 
 
-def new_config():
+def new_config(awm_ablation="none"):
     return _resolved_config(
         source_config(), task_order="arrow-original-six",
         prediction_head_profile="shared_distilled", adaptive_qfp_compression=True,
         behavior_profile=BEHAVIOR,
+        awm_ablation=awm_ablation,
     )
 
 
 class DAutorouteLauncherTests(unittest.TestCase):
+    def test_entrypoint_forwards_only_predeclared_ablation(self):
+        entry = importlib.import_module("run_evolving_atomic_rssm_d_autoroute")
+        with mock.patch.object(entry, "_launch", return_value=0) as launch:
+            entry.main(["--seed", "2", "--awm-ablation", "no_reuse", "--dry-run"])
+        command = launch.call_args.args[0]
+        self.assertEqual(
+            command[command.index("--awm-ablation") + 1], "no_reuse"
+        )
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            entry._parser().parse_args(["--awm-ablation", "invented"])
+
     def test_host_control_preserves_full_config_and_only_caps_execution(self):
         launcher = importlib.import_module("run_evolving_atomic_rssm")
         entry = importlib.import_module("run_evolving_atomic_rssm_d_autoroute")
@@ -172,6 +184,40 @@ class DAutorouteLauncherTests(unittest.TestCase):
 
 @unittest.skipUnless(vendor_available, "requires pinned Atari imports, no ROMs")
 class DAutorouteIntegrationTests(unittest.TestCase):
+    def test_four_single_variable_ablations_validate_and_report_exact_changes(self):
+        base = new_config()
+        expected_changes = {
+            "no_reuse": {"awm_ablation", "task_mechanism_reuse"},
+            "no_functional_protection": {
+                "awm_ablation", "interface_q_scale", "interface_h_scale",
+                "interface_actor_scale", "shared_prediction_distill_scale",
+                "adaptive_compression_qfp_distill_scale",
+            },
+            "no_conflict_projection": {
+                "awm_ablation", "component_gradient_projection",
+            },
+            "no_rcc": {"awm_ablation"},
+        }
+        for ablation, expected in expected_changes.items():
+            with self.subTest(ablation=ablation):
+                data = new_config(ablation)
+                config = Config.from_dict(data)
+                changed = {
+                    key for key in base.keys() | data.keys()
+                    if base.get(key) != data.get(key)
+                }
+                self.assertEqual(changed, expected)
+                self.assertEqual(config.awm_ablation, ablation)
+                self.assertEqual(
+                    config.uses_adaptive_qfp_compression,
+                    ablation != "no_rcc",
+                )
+                budget = _budget_manifest(data)
+                self.assertEqual(
+                    budget["adaptive_compression_world_model_updates"],
+                    0 if ablation == "no_rcc" else 6000,
+                )
+
     def test_host_control_boundary_predicate_does_not_touch_rng_or_stop_early(self):
         boundary = {"boundary_index": 1, "task_index": 0}
         rng = torch.random.get_rng_state().clone()

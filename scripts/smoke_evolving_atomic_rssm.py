@@ -34,6 +34,7 @@ import train  # noqa: E402
 from wm import WorldModel  # noqa: E402
 
 from run_evolving_atomic_rssm import (  # noqa: E402
+    AWM_ABLATIONS,
     ADAPTIVE_SHARED_RESIDUAL_MLP_BEHAVIOR,
     BEHAVIOR_PROFILES,
     COMPACT_MECHANISM_PROFILE,
@@ -64,6 +65,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=20260829)
+    parser.add_argument("--awm-ablation", choices=AWM_ABLATIONS, default="none")
     parser.add_argument(
         "--method-profile",
         choices=METHOD_PROFILES,
@@ -114,6 +116,7 @@ def _config(
     behavior_profile: str = PRIVATE_MLP_BEHAVIOR,
     prediction_head_profile: str = SHARED_DISTILLED_HEADS_PROFILE,
     method_profile: str = ADAPTIVE_QFP_COMPRESSION_PROFILE,
+    awm_ablation: str = "none",
 ) -> Config:
     profiles = {ADAPTIVE_QFP_COMPRESSION_PROFILE: PRIVATE_MLP_BEHAVIOR, D_AUTOROUTE_PROFILE: PRIVATE_MLP_AUTOROUTE_BEHAVIOR}
     if method_profile not in profiles:
@@ -126,6 +129,7 @@ def _config(
         mechanism_parameterization=mechanism_parameterization,
         prediction_head_profile=prediction_head_profile,
         behavior_profile=profiles[method_profile], adaptive_qfp_compression=True,
+        awm_ablation=awm_ablation,
     ))
 
 
@@ -220,6 +224,7 @@ def main() -> int:
         args.behavior_profile,
         args.prediction_head_profile,
         args.method_profile,
+        args.awm_ablation,
     )
     world_model = _world_model(config, device)
     train._world_model_parameter_accounting(world_model)
@@ -265,10 +270,11 @@ def main() -> int:
         lr=config.task_private_lr,
         fused=True,
     )
-    route_optimizer = torch.optim.Adam(
-        world_model.route_parameters(1),
-        lr=config.task_route_lr,
-        fused=True,
+    route_parameters = list(world_model.route_parameters(1))
+    route_optimizer = (
+        torch.optim.Adam(route_parameters, lr=config.task_route_lr, fused=True)
+        if route_parameters
+        else None
     )
     shared_aco = None
     actor = nn.Sequential(
@@ -477,9 +483,10 @@ def main() -> int:
             "layout": expected_layout,
             "loss": float(compression_loss.detach().cpu()),
             "qfp_distillation_loss": float(
-                compression_metrics[
-                    "Loss/evolving_qfp_distill_scaled"
-                ].detach().cpu()
+                compression_metrics.get(
+                    "Loss/evolving_qfp_distill_scaled",
+                    torch.zeros((), device=device),
+                ).detach().cpu()
             ),
             "optimizer_step": _optimizer_step(compression_optimizer),
             "world_model_parameters_before": dense_parameter_count,
@@ -499,6 +506,7 @@ def main() -> int:
         "compute_dtype": config.compute_dtype,
         "behavior_profile": (args.behavior_profile),
         "method_profile": args.method_profile,
+        "awm_ablation": args.awm_ablation,
         "prediction_head_profile": (
             SHARED_DISTILLED_HEADS_PROFILE
             if config.uses_shared_prediction_heads
@@ -523,7 +531,11 @@ def main() -> int:
         "optimizer_steps": {
             "shared": _optimizer_step(shared_optimizer),
             "private": _optimizer_step(private_optimizer),
-            "route": _optimizer_step(route_optimizer),
+            "route": (
+                _optimizer_step(route_optimizer)
+                if route_optimizer is not None
+                else 0
+            ),
         },
         "old_private_gradients_are_none": True,
         "world_model_parameter_accounting": train._world_model_parameter_accounting(world_model),
