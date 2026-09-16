@@ -872,6 +872,15 @@ Cross-revision checkpoint compatibility needs additional validation because
 obsolete configuration fields have been removed. See Decision 0057; neither
 dry runs nor the new tensor fixture establish a reproduced result.
 
+## Local evaluation parity update (2026-09-17)
+
+AWM-AutoRoute periodic evaluations and routing audits retain the 16-rollout
+monitoring budget, but its final all-task evaluation now uses 256 rollouts per
+task, matching the ARROW CoinRun evaluator. This changes evaluation precision
+only; training, replay, optimizer, and interaction budgets are unchanged. The
+final evaluation manifest records `rollouts_per_task: 256`; the summary reader
+uses that recorded value rather than assuming 16.
+
 ## Known issues at import
 
 1. Every Atari ARROW/DV3 JSON config contains seven keys missing from

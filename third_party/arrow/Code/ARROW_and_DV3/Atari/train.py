@@ -288,7 +288,10 @@ def _evaluate_policy_tasks(
     eligible_task_count: Optional[int] = None,
     routing_diagnostics: Optional[list[dict[str, Any]]] = None,
     oracle_routes: bool = False,
+    rollouts_per_task: int = 16,
 ) -> tuple[list[float], list[float]]:
+    if rollouts_per_task < 1:
+        raise ValueError("rollouts_per_task must be positive")
     if len(task_seeds) != len(eval_funcs):
         raise ValueError(
             "Evaluation task functions and fixed task seeds must have equal length"
@@ -305,7 +308,7 @@ def _evaluate_policy_tasks(
                 diagnostic = {}
                 mean, std = evaluate(
                     config.n_sync, wm=wm, ac=behavior, env_fns=env_fns,
-                    env_repeat=config.env_repeat, n_rollouts=16, seed=task_seed,
+                    env_repeat=config.env_repeat, n_rollouts=rollouts_per_task, seed=task_seed,
                     deterministic_policy=True,
                     eligible_route_ids=tuple(range(eligible_task_count)),
                     task_route_inference=config.task_route_inference,
@@ -349,7 +352,7 @@ def _evaluate_policy_tasks(
                     ac=task_aco.ac if task_aco is not None else None,
                     env_fns=env_fns,
                     env_repeat=config.env_repeat,
-                    n_rollouts=16,
+                    n_rollouts=rollouts_per_task,
                     seed=task_seed,
                     **evaluation_kwargs,
                 )
@@ -383,7 +386,7 @@ def _evaluate_policy_tasks(
                 ac=task_aco.ac if task_aco is not None else None,
                 env_fns=env_fns,
                 env_repeat=config.env_repeat,
-                n_rollouts=16,
+                n_rollouts=rollouts_per_task,
                 seed=task_seed,
                 **evaluation_kwargs,
             )
@@ -4744,6 +4747,7 @@ if __name__ == "__main__":
             distributed_context=distributed_context,
             eligible_task_count=len(eval_funcs),
             routing_diagnostics=final_routing,
+            rollouts_per_task=256,
         )
         final_raw_means, final_raw_stds = _raw_return_statistics(
             task_configs, final_scaled_means, final_scaled_stds
@@ -4764,7 +4768,7 @@ if __name__ == "__main__":
                 if config.uses_task_experts
                 else "stochastic"
             ),
-            "rollouts_per_task": 16,
+            "rollouts_per_task": 256,
             "tasks": [
                 {
                     "task_index": index,

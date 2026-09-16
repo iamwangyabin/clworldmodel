@@ -602,7 +602,7 @@ def build_run_report(
         "evaluation_protocol": {
             "policy": policy,
             "cohort_protocol": evaluation_protocol,
-            "rollouts_per_task": 16,
+            "rollouts_per_task": int(final.get("rollouts_per_task", 16)),
             "evaluation_scope": "all configured tasks",
             "evaluation_completed_epochs": evaluation_epochs,
             "task_completion_epochs": boundary_epochs,
