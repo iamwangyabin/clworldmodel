@@ -39,7 +39,7 @@ checkpoint。它们足够支持本文定义的离线 checkpoint differencing。
 ### Pilot P1 已有产物
 
 `dv3_fifo_original_s0_analysis` 已正常结束（epoch 540，return code 0），并在本地
-`runs/dv3_fifo_original_s0_analysis/` 保存了完整的 log、TensorBoard、7 份 snapshot
+`runs/analysis/forgetting_audit/dv3_fifo_original_s0_analysis/` 保存了完整的 log、TensorBoard、7 份 snapshot
 及全目录 checksum manifest。它提供单个 DreamerV3/FIFO seed 的 pilot 数据：可用于
 验证诊断指标、发现候选遗忘通道，但不能作为跨 seed 的论文结论。
 

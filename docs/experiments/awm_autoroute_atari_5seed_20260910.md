@@ -68,11 +68,12 @@ disk cleanup; the verified same-server archival below cleared this blocker.
   first epoch. These are startup/progress observations, not outcome claims.
 
 Ignored execution evidence is under
-`runs/awm_autoroute_atari_5seed_20260910/`: immutable `request.json`, current
+`runs/campaign_history/atari/awm_autoroute/awm_autoroute_atari_5seed_20260910/`: immutable `request.json`, current
 `campaign.json`, upstream verification and bundle, source-config reference,
 both hosts' test/smoke logs, per-run deployment records, and acceptance
 snapshots. The launch and inspection controllers are preserved there too.
 The preceding campaign and S0 complete backup remain separate.
+Completed run dirs themselves live under `runs/main_results/atari/awm_autoroute/`.
 
 ## Authorized 4090-2 disk cleanup
 

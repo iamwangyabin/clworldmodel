@@ -16,7 +16,8 @@ corrected full Atari result exists as of this audit.
 ## Preserved runs
 
 The original local artifacts remain under the ignored run collection
-`runs/dream_rehearsal_20260905/`; none are changed or deleted by this correction.
+the run dirs now under `runs/main_results/atari/dream_rehearsal/`
+(`bounded_s0`, `never_clear_s0`); none are changed or deleted by this correction.
 Their immutable launch provenance:
 
 | Run directory name | Recorded launch commit |

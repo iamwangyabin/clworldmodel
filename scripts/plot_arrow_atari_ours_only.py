@@ -35,18 +35,17 @@ from clworldmodel.evaluation.metrics import single_pass_metrics  # noqa: E402
 
 
 CONTINUAL_RUNS = (
-    ROOT / "runs" / "arrow_ar50_original_s0_analysis",
-    ROOT
-    / "runs"
-    / "arrow_ar50_cpu_fp32_original_seeds1_4_2x4090"
-    / "seed1_retry1",
-    ROOT / "runs" / "arrow_ar50_cpu_fp32_original_seeds1_4_2x4090" / "seed2",
-    ROOT / "runs" / "arrow_ar50_cpu_fp32_original_seeds1_4_2x4090" / "seed3",
-    ROOT / "runs" / "arrow_ar50_cpu_fp32_original_seeds1_4_2x4090" / "seed4",
+    ROOT / "runs/analysis/forgetting_audit/arrow_ar50_original_s0_analysis",
+    ROOT / "runs/main_results/atari/arrow50/seed1",
+    ROOT / "runs/main_results/atari/arrow50/seed2",
+    ROOT / "runs/main_results/atari/arrow50/seed3",
+    ROOT / "runs/main_results/atari/arrow50/seed4",
 )
 SINGLE_TASK_ROOTS = (
-    ROOT / "runs" / "arrow_single_task_s0_cpu_fp32_368f440_virtai4x24g",
-    ROOT / "runs" / "arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g",
+    ROOT
+    / "runs/supporting/normalization_anchors/arrow_single_task_s0_cpu_fp32_368f440_virtai4x24g",
+    ROOT
+    / "runs/supporting/normalization_anchors/arrow_single_task_seeds1_2_cpu_fp32_368f440_virtai4x24g",
 )
 DEFAULT_OUTPUT = ROOT / "runs" / "analysis" / "arrow_atari_ours_only_20260902"
 

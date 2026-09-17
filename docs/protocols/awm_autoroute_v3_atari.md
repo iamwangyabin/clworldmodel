@@ -72,7 +72,8 @@ An episode ending before observation 2 retains its first choice.
 
 Task order, durations, preprocessing, environment/update budgets, replay
 allocation/dtypes, world-model losses, private Actor-Critics, and oracle boundary
-selection gates remain [v2's](evolving_core_d_autoroute_v2_atari.md). Training is
+selection gates remain v2's (`evolving_core_d_autoroute_v2_atari.md`, removed
+from the working tree on 2026-09-14; recoverable from Git history). Training is
 task-aware; inference is task-ID-free, not fully task-agnostic learning.
 Evaluation is frozen/deterministic and never enters replay. Updates remain
 552,000 world-model and 432,000 Actor-Critic; selection uses 480 nominal oracle

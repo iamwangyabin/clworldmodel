@@ -20,11 +20,11 @@
   "source": {
     "run_id": "arrow_ar50_original_s0_analysis",
     "classification": "single_seed_original_arrow_diagnostic_reference",
-    "train_log": "runs/arrow_ar50_original_s0_analysis/train.log",
+    "train_log": "runs/analysis/forgetting_audit/arrow_ar50_original_s0_analysis/train.log",
     "train_log_sha256": "e12ebe3bbac2debc3b1d8904ff3e6efc6d742a8f9f2c0ec67a95a8f74eeb6875",
-    "launch_manifest": "runs/arrow_ar50_original_s0_analysis/launch.json",
+    "launch_manifest": "runs/analysis/forgetting_audit/arrow_ar50_original_s0_analysis/launch.json",
     "launch_manifest_sha256": "bed457441808e1265a51f0248e38fc4b8274497c3a1adb754b293a69ee65e545",
-    "resolved_config": "runs/arrow_ar50_original_s0_analysis/config.json",
+    "resolved_config": "runs/analysis/forgetting_audit/arrow_ar50_original_s0_analysis/config.json",
     "resolved_config_sha256": "d8e65f563f25bd803afe2f34dbc0573d0daf82ae177dbafa4542e47ec1c5bd2b",
     "event_file_sha256": "8538732307542c10822bd4414ba7ffefd7ba3b361b971d3323dac128e527d5f7"
   },

@@ -20,7 +20,7 @@ from artifact_io import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNS = ROOT / "runs"
+RUNS = ROOT / "runs" / "analysis" / "forgetting_audit"
 SCHEMA_VERSION = 1
 
 

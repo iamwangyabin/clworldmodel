@@ -48,4 +48,5 @@ a separate future protocol and must be applied to D and D-AutoRoute together.
 Existing v1 checkpoints and results remain valid only for the recorded
 SameStep/exact/all-seen protocol and are not resume-compatible evidence for v2.
 Their performance cannot estimate the isolated cost of automatic routing.
-See `docs/protocols/evolving_core_d_autoroute_v2_atari.md`.
+See `docs/protocols/evolving_core_d_autoroute_v2_atari.md` (removed from the
+working tree on 2026-09-14; recoverable from Git history).

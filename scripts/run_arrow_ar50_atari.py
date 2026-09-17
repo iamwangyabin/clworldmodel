@@ -102,7 +102,8 @@ def _parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=Path,
         help=(
-            "Persistent run directory. Defaults to runs/arrow_ar50_<curriculum>_"
+            "Persistent run directory. Defaults to "
+            "runs/main_results/atari/arrow50/arrow_ar50_<curriculum>_"
             "s<seed>_analysis under the repository."
         ),
     )
@@ -345,7 +346,12 @@ def main() -> int:
     output_dir = (
         args.output_dir.resolve()
         if args.output_dir is not None
-        else ROOT / "runs" / f"{output_prefix}_{run_schedule_label}_s{args.seed}_analysis"
+        else ROOT
+        / "runs"
+        / "main_results"
+        / "atari"
+        / "arrow50"
+        / f"{output_prefix}_{run_schedule_label}_s{args.seed}_analysis"
     )
     snapshot_dir = output_dir / "analysis_snapshots"
     env = os.environ.copy()

@@ -226,12 +226,12 @@
         "ALE/Enduro-v5"
       ],
       "source": {
-        "run_dir": "runs/arrow_ar50_original_s0_analysis",
-        "config": "runs/arrow_ar50_original_s0_analysis/config.json",
+        "run_dir": "runs/analysis/forgetting_audit/arrow_ar50_original_s0_analysis",
+        "config": "runs/analysis/forgetting_audit/arrow_ar50_original_s0_analysis/config.json",
         "config_sha256": "d8e65f563f25bd803afe2f34dbc0573d0daf82ae177dbafa4542e47ec1c5bd2b",
-        "train_log": "runs/arrow_ar50_original_s0_analysis/train.log",
+        "train_log": "runs/analysis/forgetting_audit/arrow_ar50_original_s0_analysis/train.log",
         "train_log_sha256": "e12ebe3bbac2debc3b1d8904ff3e6efc6d742a8f9f2c0ec67a95a8f74eeb6875",
-        "launch": "runs/arrow_ar50_original_s0_analysis/launch.json",
+        "launch": "runs/analysis/forgetting_audit/arrow_ar50_original_s0_analysis/launch.json",
         "launch_sha256": "bed457441808e1265a51f0248e38fc4b8274497c3a1adb754b293a69ee65e545",
         "final_evaluation": null,
         "final_evaluation_sha256": null
@@ -3153,12 +3153,12 @@
         "ALE/Enduro-v5"
       ],
       "source": {
-        "run_dir": "runs/dv3_fifo_original_s0_analysis",
-        "config": "runs/dv3_fifo_original_s0_analysis/config.json",
+        "run_dir": "runs/analysis/forgetting_audit/dv3_fifo_original_s0_analysis",
+        "config": "runs/analysis/forgetting_audit/dv3_fifo_original_s0_analysis/config.json",
         "config_sha256": "e4bcf3052ef949bc41715b10849d7d19eebdce3e73f85298181c5d29553da736",
-        "train_log": "runs/dv3_fifo_original_s0_analysis/train.log",
+        "train_log": "runs/analysis/forgetting_audit/dv3_fifo_original_s0_analysis/train.log",
         "train_log_sha256": "7ff0e5281f8d187e0b017853ec2cc9a4969641cece5ab9926d27673d99f05933",
-        "launch": "runs/dv3_fifo_original_s0_analysis/launch.json",
+        "launch": "runs/analysis/forgetting_audit/dv3_fifo_original_s0_analysis/launch.json",
         "launch_sha256": "03453049df6bc45d1b38f1076d3ceb084bfb4840a43c4b504085ff8e6790ccac",
         "final_evaluation": null,
         "final_evaluation_sha256": null

@@ -130,8 +130,12 @@ See Decisions 0062 and 0063.
 
 Do not restore retired algorithms just to satisfy their old method-specific
 tests. Shared functionality and its necessary tests belong to the retained
-methods. Preserve historical protocols, raw results, provenance and failed-run
-records; historical commands may require their recorded Git revision.
+methods. On 2026-09-14 the user removed retired-method protocols, decision
+records, and curated experiment records from the working tree; that provenance
+remains recoverable from Git history, and historical commands may require
+their recorded Git revision. Retained-method, baseline, and reference
+integration protocols, decisions, records, and failed-run records stay in the
+working tree.
 The retirement is not validated until retained-method tests, parity and
 checkpoint contracts pass; see Decisions 0057 and 0058 for the current migration status.
 

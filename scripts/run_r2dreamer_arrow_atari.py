@@ -71,7 +71,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="Persistent run directory; defaults under runs/.",
+        help="Persistent run directory; defaults under runs/main_results/atari/r2dreamer/.",
     )
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--cpu-threads", type=_positive_int)
@@ -210,7 +210,12 @@ def main() -> int:
     output_dir = (
         args.output_dir.resolve()
         if args.output_dir is not None
-        else ROOT / "runs" / f"{prefix}_{args.scope}_{args.curriculum}_s{args.seed}"
+        else ROOT
+        / "runs"
+        / "main_results"
+        / "atari"
+        / "r2dreamer"
+        / f"{prefix}_{args.scope}_{args.curriculum}_s{args.seed}"
     )
     snapshot_dir = output_dir / "analysis_snapshots"
     environment = os.environ.copy()

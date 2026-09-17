@@ -55,7 +55,8 @@ def _parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=Path,
         help=(
-            "Persistent run directory. Defaults to runs/dv3_fifo_<curriculum>_"
+            "Persistent run directory. Defaults to "
+            "runs/main_results/atari/dv3_fifo/dv3_fifo_<curriculum>_"
             "s<seed>_analysis under the repository."
         ),
     )
@@ -164,6 +165,9 @@ def main() -> int:
         if args.output_dir is not None
         else ROOT
         / "runs"
+        / "main_results"
+        / "atari"
+        / "dv3_fifo"
         / f"dv3_fifo_{args.curriculum}_s{args.seed}_analysis"
     )
     snapshot_dir = output_dir / "analysis_snapshots"

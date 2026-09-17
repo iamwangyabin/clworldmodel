@@ -94,7 +94,8 @@ def _parser(*, arrow_matched: bool = False) -> argparse.ArgumentParser:
         type=Path,
         help=(
             "Persistent run directory. Defaults to "
-            "runs/bounded_dream_rehearsal_<curriculum>_s<seed>_analysis."
+            "runs/main_results/atari/dream_rehearsal/"
+            "bounded_dream_rehearsal_<curriculum>_s<seed>_analysis."
         ),
     )
     parser.add_argument(
@@ -350,6 +351,9 @@ def main(*, arrow_matched: bool = False) -> int:
         if args.output_dir is not None
         else ROOT
         / "runs"
+        / "main_results"
+        / "atari"
+        / "dream_rehearsal"
         / default_run_name
     )
     config_path = output_dir / "resolved_training_config.json"

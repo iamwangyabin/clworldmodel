@@ -366,7 +366,7 @@
       "role": "derived_metric_report",
       "name": "local_s0_continual_metric_comparison_v1.json",
       "repository_path": "docs/protocols/references/local_s0_continual_metric_comparison_v1.json",
-      "sha256": "7821cb5e57c9ef56a794fd35922b97cd040abf7d762e61bb35108857ce85556c"
+      "sha256": "4fac110e9fbaeb01ce83cea46808ebc69798297b432ae07557f4724da698e3a9"
     },
     {
       "role": "launch_manifest",

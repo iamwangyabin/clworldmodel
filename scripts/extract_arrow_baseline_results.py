@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
 EVAL_RE = re.compile(
     r"Eval for epoch:\s+(?P<epoch>\d+)\s*\n"
     r"Eval means: (?P<means>\[[^\n]+\])\s*\n"
@@ -161,6 +163,11 @@ def build_results(run_dir: Path) -> dict[str, Any]:
         * 4
     )
 
+    try:
+        run_rel = run_dir.relative_to(ROOT)
+    except ValueError:
+        run_rel = Path("runs") / run_dir.name
+
     return {
         "provenance": {
             "run": run_dir.name,
@@ -171,8 +178,8 @@ def build_results(run_dir: Path) -> dict[str, Any]:
             "seedId": metadata["seed_id"],
             "seed": metadata["seed"],
             "complete": "[cuda-mem] training_end" in log_text,
-            "sourceLog": f"runs/{run_dir.name}/{log_path.name}",
-            "sourceConfig": f"runs/{run_dir.name}/tensorboard/config.json",
+            "sourceLog": f"{run_rel}/{log_path.name}",
+            "sourceConfig": f"{run_rel}/tensorboard/config.json",
         },
         "protocol": {
             "epochs": epochs,

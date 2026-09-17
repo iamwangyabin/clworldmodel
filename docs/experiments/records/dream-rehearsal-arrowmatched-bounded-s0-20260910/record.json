@@ -1,0 +1,458 @@
+{
+  "schema_version": 1,
+  "record_id": "dream-rehearsal-arrowmatched-bounded-s0-20260910",
+  "run_id": "dream_rehearsal_arrowmatched_bounded_s0_20260910",
+  "method": "Dream-Rehearsal-ArrowMatched-v1-Atari",
+  "protocol": "Dream-Rehearsal-ArrowMatched-v1-Atari",
+  "evidence_level": "pilot",
+  "classification": "reference-integration",
+  "status": "complete",
+  "recorded_at_utc": "2026-09-17T15:24:10Z",
+  "project_git": {
+    "commit": "9de1a014255959f87cf0646daf37defaaf09fc8a",
+    "clean": true,
+    "upstream": "origin/codex/dream-rehearsal-arrow-matched-3080-20260907",
+    "ahead": 0,
+    "behind": 0
+  },
+  "seed": {
+    "id": 0,
+    "value": 123456789
+  },
+  "task_awareness": "task_agnostic",
+  "task_order": [
+    "ALE/MsPacman-v5",
+    "ALE/Boxing-v5",
+    "ALE/CrazyClimber-v5",
+    "ALE/Frostbite-v5",
+    "ALE/Seaquest-v5",
+    "ALE/Enduro-v5"
+  ],
+  "completion": {
+    "total_task_count": 6,
+    "completed_task_count": 6,
+    "completed_epochs": 540,
+    "final_evaluation_performed": false,
+    "return_code": 0,
+    "started_at_utc": "2026-09-11T21:39:13.494507+00:00",
+    "finished_at_utc": "2026-09-13T11:02:40.097348+00:00"
+  },
+  "evaluation": {
+    "metric": "raw_environment_return",
+    "policy": "stochastic",
+    "cohort_protocol": "advancing",
+    "evaluation_transitions_enter_replay": false,
+    "checkpoints": [
+      {
+        "checkpoint_id": "task-boundary-01",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 90,
+        "completed_task_count": 1,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1980.0,
+            "raw_return_std": 581.1733820470445
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": -0.75,
+            "raw_return_std": 8.707037383633999
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 3725.0000536441803,
+            "raw_return_std": 567.3402740763074
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 80.0,
+            "raw_return_std": 35.881750236018306
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 191.25,
+            "raw_return_std": 129.2224341977816
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "task-boundary-02",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 180,
+        "completed_task_count": 2,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1673.125,
+            "raw_return_std": 262.123986645633
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 3.8125,
+            "raw_return_std": 4.876201774947382
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 414.28572790963307,
+            "raw_return_std": 188.44153344242267
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 36.25,
+            "raw_return_std": 23.41874249399399
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 67.5,
+            "raw_return_std": 55.62148865321747
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "task-boundary-03",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 270,
+        "completed_task_count": 3,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1507.5,
+            "raw_return_std": 370.22797031018604
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 52.6875,
+            "raw_return_std": 13.410437865707443
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 10411.111195882162,
+            "raw_return_std": 634.9882370216267
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 15.625,
+            "raw_return_std": 9.980449639169569
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 5.0,
+            "raw_return_std": 8.660254037844387
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "task-boundary-04",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 360,
+        "completed_task_count": 4,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1367.5,
+            "raw_return_std": 72.15434844830905
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 69.5625,
+            "raw_return_std": 13.711166753781386
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 11000.00011920929,
+            "raw_return_std": 0.0003153981341200579
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 150.625,
+            "raw_return_std": 12.48436522214886
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 61.25,
+            "raw_return_std": 11.110243021644486
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "task-boundary-05",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 450,
+        "completed_task_count": 5,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1457.5,
+            "raw_return_std": 207.2890493972125
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 74.3125,
+            "raw_return_std": 8.900272116626548
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 11000.0,
+            "raw_return_std": 0.00044956638411620297
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 160.0,
+            "raw_return_std": 0.0
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 170.0,
+            "raw_return_std": 20.0
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 0.0,
+            "raw_return_std": 0.0
+          }
+        ]
+      },
+      {
+        "checkpoint_id": "task-boundary-06",
+        "stage": "scheduled_periodic_task_boundary",
+        "completed_epochs": 540,
+        "completed_task_count": 6,
+        "cohort": "periodic_evaluation",
+        "rollouts_per_task": 16,
+        "tasks": [
+          {
+            "task_index": 0,
+            "task_name": "ALE/MsPacman-v5",
+            "raw_return_mean": 1761.875,
+            "raw_return_std": 222.2110131721648
+          },
+          {
+            "task_index": 1,
+            "task_name": "ALE/Boxing-v5",
+            "raw_return_mean": 72.5625,
+            "raw_return_std": 12.077710617083024
+          },
+          {
+            "task_index": 2,
+            "task_name": "ALE/CrazyClimber-v5",
+            "raw_return_mean": 10999.99988079071,
+            "raw_return_std": 0.0005717076686993502
+          },
+          {
+            "task_index": 3,
+            "task_name": "ALE/Frostbite-v5",
+            "raw_return_mean": 160.0,
+            "raw_return_std": 0.0
+          },
+          {
+            "task_index": 4,
+            "task_name": "ALE/Seaquest-v5",
+            "raw_return_mean": 138.75,
+            "raw_return_std": 25.950674365033368
+          },
+          {
+            "task_index": 5,
+            "task_name": "ALE/Enduro-v5",
+            "raw_return_mean": 1.5,
+            "raw_return_std": 1.5811388300841898
+          }
+        ]
+      }
+    ]
+  },
+  "headline": {
+    "summary": "Epoch 540 raw returns [1761.875, 72.5625, 10999.999881, 160.0, 138.75, 1.5] for Dream Rehearsal bounded-history; complete single-seed pilot."
+  },
+  "comparability": {
+    "direct_comparison_group": "dream-rehearsal-arrowmatched-pair-s0-20260910",
+    "claim": "Matched single-seed Dream Rehearsal pair: task order, interaction budget, world-model updates, base actor-critic updates, evaluator schedule and rehearsal schedule are shared; replay history capacity is the arm difference.",
+    "limitations": [
+      "Pilot evidence from one seed; not a paper-level multi-seed reproduction.",
+      "Atari/ARROW DreamerV3 adaptation replaces the Dream Rehearsal paper's MiniGrid stack.",
+      "Extra actor-only rehearsal updates are reported separately and are not compute-matched to plain Dreamer/ARROW.",
+      "Bounded history stores 524,288 transitions (1,024 trajectory slots) with uint8 mmap observations; logical bytes are reported separately.",
+      "The epoch-540 row is the final scheduled periodic evaluation (16 stochastic rollouts/task), not a held-out final cohort."
+    ]
+  },
+  "source_artifacts": [
+    {
+      "role": "launch_manifest",
+      "name": "runs/main_results/atari/dream_rehearsal/arrow_matched_bounded_s0_20260910/launch.json",
+      "sha256": "f822f09bb706bb8dfed7baf2c63a7919a692ca59e4b92600ddbedea32d5c653b",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "resolved_config",
+      "name": "runs/main_results/atari/dream_rehearsal/arrow_matched_bounded_s0_20260910/resolved_training_config.json",
+      "sha256": "7b227b785413700a13056c47d322b9524a72c444a86a235800497258b289ea3b",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "run_status",
+      "name": "runs/main_results/atari/dream_rehearsal/arrow_matched_bounded_s0_20260910/run_status.json",
+      "sha256": "07ae90bb9a9641df0965dc71bd9677c4efb959a03ff1a5f9cc96f188fe6158d2",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "full_training_log",
+      "name": "runs/main_results/atari/dream_rehearsal/arrow_matched_bounded_s0_20260910/train.log",
+      "sha256": "7327bb2ce285de30ab98dba76d80cfaddeb21714d33f272fc9086f6222ffcb7d",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "rehearsal_accounting",
+      "name": "runs/main_results/atari/dream_rehearsal/arrow_matched_bounded_s0_20260910/bounded_dream_rehearsal_accounting.json",
+      "sha256": "2186c305aba2ea9c0f842a8a719adf83cb2f3487cdd0c317773decc536237716",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "replay_storage_accounting",
+      "name": "runs/main_results/atari/dream_rehearsal/arrow_matched_bounded_s0_20260910/replay_mmap_storage_accounting.json",
+      "sha256": "575b7e1aadeb29e8095c86f22b19d605d5ce7d15fc1864a77c46d96b7950186e",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "actor_critic_parameter_accounting",
+      "name": "runs/main_results/atari/dream_rehearsal/arrow_matched_bounded_s0_20260910/actor_critic_parameter_accounting.json",
+      "sha256": "9b3e546c1136bfaaaffc814d9fd5779b0af24ebbca9b7919580aca4493dd954c",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "world_model_parameter_accounting",
+      "name": "runs/main_results/atari/dream_rehearsal/arrow_matched_bounded_s0_20260910/model_parameter_accounting.json",
+      "sha256": "d8a77f334136150e922065ed54750e81f5b8b066e7b7e01b4c29ff72f9a8c201",
+      "repository_copy_excluded": true
+    },
+    {
+      "role": "evaluation_seed_manifest",
+      "name": "runs/main_results/atari/dream_rehearsal/arrow_matched_bounded_s0_20260910/evaluation_seed_manifest.json",
+      "sha256": "c5ce9a2bcabcaaa0b73b9f63bcb7ba39233a43c2bee2f3befb1ec582d42084b4",
+      "repository_copy_excluded": true
+    }
+  ],
+  "notes": [
+    "Runs remain under the ignored runs/ boundary; this record preserves only compact provenance and evaluation evidence.",
+    "Launch used the clean, upstream-synced ARROW/Dream Rehearsal integration commit recorded above.",
+    "History arm: bounded; replay retention is uniform random-key reservoir sampling with 524,288 transitions.",
+    "Both arms used the same 554,900 extra actor-only rehearsal updates; world model and critic received zero rehearsal updates.",
+    "Evaluation transitions were isolated from replay and all model updates."
+  ],
+  "budgets": {
+    "task_duration_epochs": 90,
+    "training_epochs": 541,
+    "completed_evaluation_epoch": 540,
+    "agent_decisions": 8863744,
+    "raw_environment_frames": 35454976,
+    "world_model_updates": 541000,
+    "base_actor_updates": 432800,
+    "base_critic_updates": 432800,
+    "actor_updates_total_including_rehearsal": 987700,
+    "extra_actor_only_rehearsal_updates": 554900,
+    "periodic_evaluation_checkpoints": 55,
+    "evaluation_rollouts_per_task": 16,
+    "replay_transition_capacity": 524288,
+    "replay_trajectory_slots": 1024,
+    "replay_sequence_length": 512,
+    "replay_observation_dtype": "uint8",
+    "logical_replay_observation_bytes": 6442450944,
+    "logical_replay_tensor_bytes": 6486499328
+  },
+  "derived_metrics": {
+    "raw_return_vector_epoch_540": [
+      1761.875,
+      72.5625,
+      10999.99988079071,
+      160.0,
+      138.75,
+      1.5
+    ],
+    "raw_return_std_vector_epoch_540": [
+      222.2110131721648,
+      12.077710617083024,
+      0.0005717076686993502,
+      0.0,
+      25.950674365033368,
+      1.5811388300841898
+    ],
+    "source": "train.log Eval raw means/stds at epoch 540"
+  },
+  "parameter_accounting": {
+    "world_model_parameters": 19498853,
+    "observation_encoder_parameters": 691104,
+    "actor_parameters": 797202,
+    "critic_parameters": 918783,
+    "actor_critic_parameters": 1715985,
+    "scope": "parameters and registered buffers; excludes gradients, optimizer state and activations"
+  },
+  "runtime": {
+    "gpu": "NVIDIA GeForce RTX 3080",
+    "gpu_count": 1,
+    "gpu_memory_gib": 9.6236572265625,
+    "cpu_threads": 8,
+    "observation_storage": "file_mmap",
+    "observation_device": "cpu_mmap",
+    "upstream_arrow_commit": "cb05e7d97ed83c3cf6e528960db0da6868e29232",
+    "dream_rehearsal_reference_commit": "7680778f798be3a27a17c320cc875b573c45f0e1"
+  }
+}

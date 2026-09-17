@@ -20,13 +20,14 @@ are the reviewed source of truth in this directory.
 
 The sole formal project-owned paper method is **AWM-AutoRoute** (Decision 0065).
 AWM/D is retained only as its oracle/internal reference. Historical names,
-record IDs, protocol versions and raw results below remain provenance, but do
-not enter the active paper progress count unless the paper plan explicitly
-marks the corresponding run cell accepted. Renaming never upgrades old-router
-evidence to the maintained v4 protocol.
+record IDs, protocol versions and raw results for retired methods were removed
+from the working tree on 2026-09-14 and remain recoverable from Git history;
+they never entered the active paper progress count. Renaming never upgrades
+old-router evidence to the maintained v4 protocol.
 
 StableTargets and F/D-AutoKAN execution code was retired on 2026-09-07
-(Decision 0058). Result records below remain unchanged historical evidence.
+(Decision 0058); their result records were removed from the working tree on
+2026-09-14 and remain recoverable from Git history.
 
 ## What the current evidence says
 
@@ -39,19 +40,23 @@ not rewritten as successful exits. Fixed-anchor normalized metrics are labelled
 diagnostic rather than exact paper reproduction. The report is recomputable
 from Git alone using `python3 scripts/report_coinrun_baselines.py check`.
 
-The [retained-method archive checked on 2026-09-06](retained_methods_20260906.md)
-adds the completed **D** six-task seed-0 pilot, all ten **D-AutoRoute** partial
-Atari/CoinRun seed records with failed-parent/recovery provenance, the historical
-StableTargets single-task screen, and a separately labelled D zero-regularization
-ablation. The existing six-task StableTargets record is unchanged. No F/D-AutoKAN
-training result was found in the searched local archives and three servers.
-This newer evidence must not be confused with the retired dense Evolving-Core
-v2 partial record described below. D and D-AutoRoute are not direct members of
-the matched task-agnostic comparison group in the next table.
+Retained Atari evidence covers the seed-0 **ARROW-50** and **DreamerV3/FIFO**
+original-six records, eighteen single-task normalization anchors, the
+AWM-AutoRoute campaign archives
+([2-seed](awm_autoroute_atari_2seed_20260908.md),
+[5-seed](awm_autoroute_atari_5seed_20260910.md),
+[replacement-seed log](awm_autoroute_replacement_seeds_20260909.md)), the
+[capacity-organization pilot](capacity_organization_pilot_20260911.md), and the
+Dream Rehearsal reference-integration audits
+([fidelity](dream_rehearsal_fidelity_audit_20260905.md),
+[memory pair](dream_rehearsal_memory_pair_3080_20260906.md)). The completed
+Arrow-matched Dream Rehearsal full-history and bounded-history Atari pilots
+from 2026-09-10 are indexed as compact pilot records; their large replay and
+training artifacts remain outside Git under `runs/`.
 
 There is no universal "best raw return": Atari games have different reward
-scales, and several records use different task-awareness, evaluation cohorts,
-or compute. Raw returns must remain per task.
+scales, and records use different task-awareness, evaluation cohorts, or
+compute. Raw returns must remain per task.
 
 Within the matched original-six, task-agnostic, advancing-cohort, seed-0 local
 comparison group:
@@ -60,46 +65,13 @@ comparison group:
 |---|---:|---:|---:|---:|
 | ARROW-50 | 0.849806 | **0.897343** | 0.622579 | 0.548055 |
 | DreamerV3/FIFO | 2.386320 | 0.230955 | -0.030802 | 0.012898 |
-| FastKAN StableTargets | **0.114152** | 0.827486 | **0.792280** | **0.675309** |
 
 These are single-seed diagnostic values, not an official multi-seed ranking.
 Forward transfer is unavailable because aligned single-task acquisition curves
 were not preserved. The exact raw checkpoint matrices and source hashes are in
-the corresponding records.
-
-A historical **early-curriculum task-aware** record is the
-partial dense Evolving-Core run. Its accepted fixed-validation vectors were:
-
-- after three tasks: MsPacman `2164.375`, Boxing `86.625`, CrazyClimber
-  `96550.001`;
-- after four tasks: MsPacman `2074.375`, Boxing `87.5625`, CrazyClimber
-  `87457.144`, Frostbite `272.5`.
-
-That run stopped after 404 completed epochs with only four accepted task
-boundaries and no final evaluation, so it is not a six-task result. It exposes
-task identity, uses a fixed evaluator cohort, and adds boundary-consolidation
-updates; it must not be presented as a fair superiority result over ARROW.
-
-For the directly aligned Evolving-Core Task-0 acquisition diagnostic, all three
-records use seed 0, the same fixed 16-rollout cohort, and the same 90-epoch
-budget:
-
-| Mechanism | Pre-consolidation | Consolidation candidate | Accepted |
-|---|---:|---:|---:|
-| Dense 512/512/256 | 2025.625 | 1994.375 | 1994.375 |
-| SharedDown 512/512/256 | 1588.75 | 1497.5 | 1588.75 (rollback) |
-| Compact 128/128/64 | 1100.0 | 1155.0 | 1155.0 |
-
-SharedDown's candidate crossed the five-percent guard and was rolled back. The
-compact run later stopped during Boxing, so only its Task-0 row belongs in this
-aligned comparison. This is one seed and says nothing yet about continual
-retention.
-
-The task-aware CNN FullBank three-task pilot has held-out final raw returns
-`[1341.875, 80.0625, 108675.005]` for MsPacman, Boxing, and CrazyClimber. It
-uses a different extra-sample protocol, so it is not directly ranked against
-the dense run or the matched task-agnostic group. The `2595.625` FullBank
-MsPacman number is a single-task acquisition gate, not a continual result.
+the corresponding records. Retired-method rows that previously appeared here
+(FastKAN StableTargets, Evolving-Core, CNN FullBank) were removed together
+with their records on 2026-09-14 and remain recoverable from Git history.
 
 ## Repository storage boundary
 
