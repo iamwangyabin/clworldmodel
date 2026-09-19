@@ -16,6 +16,7 @@ import hashlib
 import importlib
 import json
 import math
+import os
 import platform
 import sys
 from dataclasses import dataclass
@@ -533,6 +534,8 @@ def _runtime_environment(torch: Any, device: Any) -> dict[str, Any]:
         "torch": torch.__version__,
         "cuda_runtime": torch.version.cuda,
         "cudnn": torch.backends.cudnn.version(),
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "cuda_device_count": torch.cuda.device_count(),
         "device": str(device),
         "accelerator": accelerator,
         "deterministic_algorithms_enabled": torch.are_deterministic_algorithms_enabled(),
