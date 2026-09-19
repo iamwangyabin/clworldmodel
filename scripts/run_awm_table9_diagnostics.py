@@ -16,6 +16,7 @@ import hashlib
 import importlib
 import json
 import math
+import platform
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -517,6 +518,29 @@ def _write_result(path: Path, payload: Mapping[str, Any]) -> None:
     write_sha256_sidecar(path)
 
 
+def _runtime_environment(torch: Any, device: Any) -> dict[str, Any]:
+    accelerator = None
+    if device.type == "cuda":
+        properties = torch.cuda.get_device_properties(device)
+        accelerator = {
+            "name": properties.name,
+            "total_memory_bytes": properties.total_memory,
+            "visible_device_index": device.index if device.index is not None else 0,
+        }
+    return {
+        "python": sys.version,
+        "platform": platform.platform(),
+        "torch": torch.__version__,
+        "cuda_runtime": torch.version.cuda,
+        "cudnn": torch.backends.cudnn.version(),
+        "device": str(device),
+        "accelerator": accelerator,
+        "deterministic_algorithms_enabled": torch.are_deterministic_algorithms_enabled(),
+        "cudnn_deterministic": torch.backends.cudnn.deterministic,
+        "cudnn_benchmark": torch.backends.cudnn.benchmark,
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--run-dir", type=Path, required=True)
@@ -569,12 +593,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         "project_git": git,
         "source_run": str(run_dir),
         "source_training_commit": frozen.snapshot["project_git_commit"],
+        "source_artifacts": {
+            "final_evaluation_sha256": _sha256(run_dir / "final_evaluation.json"),
+            "evaluation_seed_manifest_sha256": _sha256(
+                run_dir / "evaluation_seed_manifest.json"
+            ),
+        },
         "snapshot": {
             "path": str(frozen.snapshot_path),
             "sha256": frozen.snapshot_sha256,
             "completed_epochs": frozen.snapshot["completed_epochs"],
         },
         "training_seed": frozen.config.seed,
+        "runtime_environment": _runtime_environment(
+            frozen.vendor.torch, next(frozen.world_model.parameters()).device
+        ),
         "outputs": produced,
         "parameter_versions_unchanged": True,
         "training_or_optimizer_steps": 0,
