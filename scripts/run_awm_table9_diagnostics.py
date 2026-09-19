@@ -285,6 +285,19 @@ def _return_diagnostics(frozen: FrozenRun) -> dict[str, Any]:
     )
     task_seeds = [int(seed) for seed in seed_manifest["final_evaluation"]["task_base_seeds"]]
     eval_funcs = config.get_env_schedule().eval_funcs()
+    rerun_routing: list[dict[str, Any]] = []
+    auto_means, auto_stds = frozen.vendor.train._evaluate_policy_tasks(
+        config,
+        frozen.world_model,
+        None,
+        eval_funcs,
+        task_seeds,
+        actor_critic_bank=frozen.actor_bank,
+        eligible_task_count=config.rssm_num_experts,
+        routing_diagnostics=rerun_routing,
+        oracle_routes=False,
+    )
+    auto = _condition_rows(config, auto_means, auto_stds)
     oracle_means, oracle_stds = frozen.vendor.train._evaluate_policy_tasks(
         config,
         frozen.world_model,
@@ -308,7 +321,12 @@ def _return_diagnostics(frozen: FrozenRun) -> dict[str, Any]:
             oracle_routes=True,
         )
     no_reuse = _condition_rows(config, no_reuse_means, no_reuse_stds)
-    auto = _source_auto_rows(frozen.run_dir, config)
+    saved_auto = _source_auto_rows(frozen.run_dir, config)
+    routing_total = sum(int(row["audit"]["episode_starts"]) for row in rerun_routing)
+    routing_correct = sum(
+        int(row["audit"]["confusion_matrix"][task_id][task_id])
+        for task_id, row in enumerate(rerun_routing)
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": "awm_table9_paired_return_diagnostics",
@@ -316,9 +334,10 @@ def _return_diagnostics(frozen: FrozenRun) -> dict[str, Any]:
         "heldout_task_base_seeds": task_seeds,
         "rollouts_per_task_per_condition": 16,
         "conditions": {
-            "auto_route_saved_final": auto,
+            "auto_route_same_runtime": auto,
             "oracle_route": oracle,
             "oracle_route_reuse_disabled": no_reuse,
+            "auto_route_saved_final_reference": saved_auto,
         },
         "paired_raw_return_differences": {
             "auto_minus_oracle": paired_differences(
@@ -327,11 +346,21 @@ def _return_diagnostics(frozen: FrozenRun) -> dict[str, Any]:
             "reuse_on_minus_off_oracle_route": paired_differences(
                 oracle, no_reuse, name="reuse_on_minus_off_raw_return"
             ),
+            "saved_auto_minus_same_runtime_auto": paired_differences(
+                saved_auto, auto, name="saved_auto_minus_same_runtime_auto_raw_return"
+            ),
+        },
+        "same_runtime_auto_routing": {
+            "correct": routing_correct,
+            "total": routing_total,
+            "accuracy": routing_correct / routing_total,
         },
         "guardrails": {
             "same_frozen_checkpoint": True,
             "same_evaluation_seed_cohort": True,
             "same_rollout_budget": True,
+            "auto_and_oracle_same_runtime": True,
+            "saved_final_auto_used_only_as_replication_reference": True,
             "reuse_intervention_changes_weights": False,
             "reuse_intervention_uses_oracle_route_to_avoid_router_confound": True,
             "evaluation_transitions_enter_replay": False,

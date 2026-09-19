@@ -1,6 +1,13 @@
 # AWM Table 9 Frozen Diagnostics v1
 
-Status: fixed evaluation-only protocol, 2026-09-19.
+Status: fixed evaluation-only protocol with same-runtime amendment, 2026-09-19.
+
+The first completed audit reused the original saved auto-route return while the
+new oracle pass ran on the diagnostic host. Before interpreting that gap for the
+paper, the audit was amended to rerun auto-route in the same process, hardware,
+software environment, checkpoint, and seed cohort as oracle-route. This is a
+stricter nuisance-variable control, not a response to favorable performance.
+The originally saved auto-route result remains only as a replication reference.
 
 ## Cohort
 
@@ -16,10 +23,11 @@ the five-seed main table without an explicit cohort label.
 Use each run's final boundary-6 inference snapshot and the exact held-out final
 task seeds recorded in `evaluation_seed_manifest.json`.
 
-1. Reuse the saved final auto-route returns, after checking that they are the
-   task-ID-free evaluation after 540 completed epochs.
-2. Evaluate the same checkpoint and cohort with oracle task routes.
-3. Evaluate it again with oracle routes after disabling the three RSSM
+1. Rerun auto-route from the frozen checkpoint on the diagnostic host.
+2. Retain the saved final auto-route returns only as a cross-runtime replication
+   reference after checking that they are task-ID-free and after 540 epochs.
+3. Evaluate the same checkpoint and cohort with oracle task routes.
+4. Evaluate it again with oracle routes after disabling the three RSSM
    mechanism banks' historical reuse contributions. Do not alter any tensor.
 
 Each newly evaluated condition uses the original 16 rollouts per task. The
