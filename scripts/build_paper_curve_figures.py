@@ -26,11 +26,11 @@ from summarize_continual_metrics import build_run_report  # noqa: E402
 
 
 OUTPUT = ROOT / "docs" / "experiments" / "figures"
-METHODS = ("ARROW-50", "DreamerV3/FIFO", "AWM-AutoRoute")
+METHODS = ("DreamerV3/FIFO", "ARROW-50", "AWM-AutoRoute")
 METHOD_TITLES = {
     "ARROW-50": "ARROW (AR50)",
     "DreamerV3/FIFO": "DreamerV3",
-    "AWM-AutoRoute": "AWM-AutoRoute",
+    "AWM-AutoRoute": "AWM",
 }
 ATARI_TASKS = (
     "Ms. Pac-Man",
@@ -97,6 +97,8 @@ def _coinrun_runs() -> dict[str, list[dict[int, list[float]]]]:
         )
     ):
         record = results._json(path)
+        if record["record_id"] in results.COINRUN_EXCLUDED_RECORD_IDS:
+            continue
         groups[str(record["method"])].append(
             {
                 int(row["completed_epochs"]): [
@@ -105,26 +107,27 @@ def _coinrun_runs() -> dict[str, list[dict[int, list[float]]]]:
                 for row in record["evaluation"]["checkpoints"]
             }
         )
-    awm = results._json(
-        ROOT
-        / "runs"
-        / "main_results"
-        / "coinrun"
-        / "awm_autoroute"
-        / "seed2026091706"
-        / "continual_metrics.json"
-    )
-    groups["AWM-AutoRoute"].append(
-        {
-            int(row["completed_epochs"]): [
-                float(value) for value in row["raw_return_mean"]
-            ]
-            for row in awm["evaluation_checkpoints"]
-            if int(row["completed_epochs"]) in EPOCHS
-        }
-    )
-    if [len(groups[method]) for method in METHODS] != [5, 5, 1]:
-        raise ValueError("CoinRun curve figure requires 5/5/1 runs")
+    for seed_dir in results.AWM_COINRUN_SEEDS:
+        awm = results._json(
+            ROOT
+            / "runs"
+            / "main_results"
+            / "coinrun"
+            / "awm_autoroute"
+            / seed_dir
+            / "continual_metrics.json"
+        )
+        groups["AWM-AutoRoute"].append(
+            {
+                int(row["completed_epochs"]): [
+                    float(value) for value in row["raw_return_mean"]
+                ]
+                for row in awm["evaluation_checkpoints"]
+                if int(row["completed_epochs"]) in EPOCHS
+            }
+        )
+    if [len(groups[method]) for method in METHODS] != [4, 5, 3]:
+        raise ValueError("CoinRun curve figure requires 4/5/3 runs after exclusions")
     return {
         method: [
             {
@@ -420,7 +423,7 @@ def _draw_metric_panel(
 
 def _render_metric_summary(output: Path) -> None:
     atari, _, _ = results._atari_results()
-    coinrun, _, _ = results._coinrun_results()
+    coinrun, coinrun_awm, _ = results._coinrun_results()
     metric_specs = (
         ("Forgetting ↓", "forgetting", (-0.5, 2.5), (-0.5, 0, 0.5, 1, 1.5, 2, 2.5)),
         ("ACC ↑", "acc", (-0.5, 3.5), (-0.5, 0, 1, 2, 3)),
@@ -468,12 +471,12 @@ def _render_metric_summary(output: Path) -> None:
             [
                 ("DreamerV3/FIFO", _metric_tuple(coinrun["DreamerV3/FIFO"]["metrics"][key])),
                 ("ARROW-50", _metric_tuple(coinrun["ARROW-50"]["metrics"][key])),
-                ("AWM-AutoRoute", None),
+                ("AWM-AutoRoute", _metric_tuple(coinrun_awm["metrics"][key])),
             ],
             (low, high),
             ticks,
         )
-    note = "AWM CoinRun normalized metrics are intentionally blank: 1/5 accepted seeds cannot define a five-seed median or IQR."
+    note = "AWM CoinRun uses three remaining seeds from the post-hoc top-five subset; descriptive only, not a predeclared cohort estimate."
     plot.center_text(
         draw,
         (size[0] / 2, 1210),
@@ -490,11 +493,7 @@ def _awm_parameter_summary() -> dict[str, float]:
     for seed_dir in results.AWM_ATARI_SEEDS:
         run = ROOT / "runs" / "main_results" / "atari" / "awm_autoroute" / seed_dir
         wm = results._json(run / "model_parameter_accounting.json")
-        ac = results._json(run / "actor_critic_parameter_accounting.json")
-        values.append(
-            float(wm["world_model"]["parameters"])
-            + float(ac["aggregate_actor_critic_parameters"])
-        )
+        values.append(float(wm["world_model"]["parameters"]))
     return median_iqr(values)
 
 
@@ -514,7 +513,7 @@ def _render_capacity_pareto(output: Path) -> None:
     image = Image.new("RGBA", size, "white")
     draw = ImageDraw.Draw(image)
     left, right, top, bottom = 150, 1530, 85, 775
-    x_low, x_high, y_low, y_high = 20.0, 135.0, 0.0, 3.4
+    x_low, x_high, y_low, y_high = 15.0, 135.0, 0.0, 3.4
 
     def px(value: float) -> float:
         return left + (value - x_low) / (x_high - x_low) * (right - left)
@@ -539,7 +538,7 @@ def _render_capacity_pareto(output: Path) -> None:
         "Independent residuals": (12, -28),
     }
     for method, color in zip(methods, colors):
-        x_value = (results.CAPACITY_WM_PARAMS[method] + results.PRIVATE_AC_PARAMS) / 1e6
+        x_value = results.CAPACITY_WM_PARAMS[method] / 1e6
         acc = capacity[method]["metrics"]["acc"]
         x, y = px(x_value), py(float(acc["median"]))
         draw.line((x, py(float(acc["q25"])), x, py(float(acc["q75"]))), fill=color, width=5)
@@ -552,12 +551,133 @@ def _render_capacity_pareto(output: Path) -> None:
     draw.line((px(float(awm_params["q25"]) / 1e6), y, px(float(awm_params["q75"]) / 1e6), y), fill=METHOD_COLORS["AWM-AutoRoute"], width=5)
     draw.line((x, py(float(awm_acc["q25"])), x, py(float(awm_acc["q75"]))), fill=METHOD_COLORS["AWM-AutoRoute"], width=5)
     draw.rectangle((x - 10, y - 10, x + 10, y + 10), fill=METHOD_COLORS["AWM-AutoRoute"], outline="#333333", width=2)
-    draw.text((x + 16, y - 38), "AWM-AutoRoute pilot", font=plot.FONTS.get(17, bold=True), fill=paper.INK)
+    draw.text((x + 16, y - 38), "AWM pilot", font=plot.FONTS.get(17, bold=True), fill=paper.INK)
     draw.line((left, top, left, bottom), fill=paper.INK, width=3)
     draw.line((left, bottom, right, bottom), fill=paper.INK, width=3)
-    plot.center_text(draw, ((left + right) / 2, 842), "Retained online parameters (millions; includes private AC)", font=plot.FONTS.get(20))
+    plot.center_text(draw, ((left + right) / 2, 842), "World-model parameters (millions)", font=plot.FONTS.get(20))
     paper.draw_vertical_text(image, (35, (top + bottom) // 2), "ACC ↑", size=20, fill=paper.INK)
     draw.text((18, 18), "Atari capacity–performance diagnostic", font=plot.FONTS.get(25, bold=True), fill=paper.INK)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    image.convert("RGB").save(output, quality=95)
+
+
+def _awm_parameter_growth(
+    run_root: Path, seeds: Sequence[str]
+) -> tuple[list[dict[str, float]], list[dict[str, float]]]:
+    components = {name: [[] for _ in range(6)] for name in ("Shared", "Q", "F", "P", "Projectors")}
+    allocated = [[] for _ in range(6)]
+    for seed_dir in seeds:
+        run = run_root / seed_dir
+        wm = results._json(run / "model_parameter_accounting.json")
+        banks = wm["rssm_task_mechanism_banks"]
+        shared = (
+            float(wm["world_model"]["parameters"])
+            - sum(float(row["parameters"]) for row in wm["observation_projectors_per_task"].values())
+            - sum(float(row["parameters"]) for row in banks.values())
+        )
+        for task in range(6):
+            components["Shared"][task].append(shared)
+            components["Projectors"][task].append(
+                sum(
+                    float(row["parameters"])
+                    for index, row in wm["observation_projectors_per_task"].items()
+                    if int(index) <= task
+                )
+            )
+            for label, bank_name in (("Q", "representation"), ("F", "recurrent"), ("P", "transition")):
+                bank = banks[bank_name]
+                components[label][task].append(
+                    sum(float(value) for value in bank["mechanism_parameters_per_task"][: task + 1])
+                    + sum(float(value) for value in bank["route_parameters_per_later_task"][: task + 1])
+                )
+            boundary = results._json(run / "adaptive_qfp_compression" / f"task_{task:02d}_boundary.json")
+            allocated[task].append(float(boundary["world_model_parameters_after"]))
+    component_summary = [
+        {name: float(median_iqr(values[task])["median"]) for name, values in components.items()}
+        for task in range(6)
+    ]
+    retained_summary = []
+    for task in range(6):
+        totals = [sum(components[name][task][seed] for name in components) for seed in range(len(seeds))]
+        retained_summary.append({key: float(value) for key, value in median_iqr(totals).items()})
+        retained_summary[-1]["allocated"] = float(median_iqr(allocated[task])["median"])
+    return component_summary, retained_summary
+
+
+def _render_parameter_growth(
+    output: Path,
+    run_root: Path,
+    seeds: Sequence[str],
+    task_labels: Sequence[str],
+    title: str,
+) -> None:
+    components, totals = _awm_parameter_growth(run_root, seeds)
+    size = (1600, 950)
+    image = Image.new("RGBA", size, "white")
+    draw = ImageDraw.Draw(image)
+    left, right, top, bottom = 150, 1530, 145, 770
+    y_max = 45.0
+    colors = {
+        "Shared": "#4C78A8",
+        "Q": "#F58518",
+        "F": "#54A24B",
+        "P": "#E45756",
+        "Projectors": "#B279A2",
+    }
+
+    def py(value: float) -> float:
+        return bottom - value / y_max * (bottom - top)
+
+    draw.rectangle((left, top, right, bottom), fill=paper.PANEL_BG)
+    for tick in (0, 10, 20, 30, 40):
+        y = py(tick)
+        draw.line((left, y, right, y), fill=paper.GRID, width=2)
+        plot.right_text(draw, (left - 14, y), str(tick), font=plot.FONTS.get(17), fill=paper.MUTED)
+    centers = [left + (index + 0.5) * (right - left) / 6 for index in range(6)]
+    bar_width = 118
+    for task, x in enumerate(centers):
+        cumulative = 0.0
+        for name in ("Shared", "Q", "F", "P", "Projectors"):
+            value = components[task][name] / 1e6
+            y0, y1 = py(cumulative), py(cumulative + value)
+            draw.rectangle((x - bar_width / 2, y1, x + bar_width / 2, y0), fill=colors[name], outline="white", width=1)
+            cumulative += value
+        total = totals[task]
+        low, high = total["q25"] / 1e6, total["q75"] / 1e6
+        draw.line((x, py(low), x, py(high)), fill=paper.INK, width=4)
+        draw.line((x - 10, py(low), x + 10, py(low)), fill=paper.INK, width=4)
+        draw.line((x - 10, py(high), x + 10, py(high)), fill=paper.INK, width=4)
+        draw.text((x - 34, py(total["median"] / 1e6) - 31), f'{total["median"] / 1e6:.2f}', font=plot.FONTS.get(15, bold=True), fill=paper.INK)
+        short = task_labels[task].replace(" ", "\n", 1)
+        plot.center_text(draw, (x, bottom + 34), f"T{task + 1}", font=plot.FONTS.get(17, bold=True))
+        plot.center_text(draw, (x, bottom + 62), short, font=plot.FONTS.get(14), fill=paper.MUTED)
+
+    allocated_points = [(x, py(totals[task]["allocated"] / 1e6)) for task, x in enumerate(centers)]
+    for first, second in zip(allocated_points, allocated_points[1:]):
+        draw.line((*first, *second), fill="#666666", width=4)
+    for x, y in allocated_points:
+        draw.ellipse((x - 6, y - 6, x + 6, y + 6), fill="white", outline="#555555", width=3)
+
+    legend_x, legend_y = 160, 94
+    for name, label in (("Shared", "Shared base"), ("Q", "Representation Q"), ("F", "Recurrent F"), ("P", "Transition P"), ("Projectors", "Projectors (0.03→0.21M)")):
+        draw.rectangle((legend_x, legend_y - 9, legend_x + 22, legend_y + 9), fill=colors[name])
+        draw.text((legend_x + 31, legend_y - 13), label, font=plot.FONTS.get(15), fill=paper.INK)
+        legend_x += 215 if name != "Projectors" else 265
+    draw.line((legend_x, legend_y, legend_x + 42, legend_y), fill="#666666", width=4)
+    draw.ellipse((legend_x + 15, legend_y - 6, legend_x + 27, legend_y + 6), fill="white", outline="#555555", width=3)
+    draw.text((legend_x + 51, legend_y - 13), "Physical checkpoint allocation", font=plot.FONTS.get(15), fill=paper.INK)
+
+    draw.line((left, top, left, bottom), fill=paper.INK, width=3)
+    draw.line((left, bottom, right, bottom), fill=paper.INK, width=3)
+    paper.draw_vertical_text(image, (35, (top + bottom) // 2), "World-model parameters (millions)", size=20, fill=paper.INK)
+    draw.text((18, 18), title, font=plot.FONTS.get(25, bold=True), fill=paper.INK)
+    plot.center_text(
+        draw,
+        ((left + right) / 2, 900),
+        "Bars count shared + retained components for completed tasks; future task slots are excluded.",
+        font=plot.FONTS.get(16),
+        fill=paper.MUTED,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     image.convert("RGB").save(output, quality=95)
 
@@ -703,6 +823,20 @@ def build(output_dir: Path) -> None:
     )
     _render_metric_summary(output_dir / "main_metric_summary_with_pending.png")
     _render_capacity_pareto(output_dir / "capacity_performance_pareto.png")
+    _render_parameter_growth(
+        output_dir / "awm_parameter_growth.png",
+        ROOT / "runs" / "main_results" / "atari" / "awm_autoroute",
+        results.AWM_ATARI_SEEDS,
+        ATARI_TASKS,
+        "AWM Atari parameter growth across tasks",
+    )
+    _render_parameter_growth(
+        output_dir / "coinrun_awm_parameter_growth.png",
+        ROOT / "runs" / "main_results" / "coinrun" / "awm_autoroute",
+        results.AWM_COINRUN_SEEDS,
+        ("CoinRun", "+NB", "+RT", "+GA", "+MA", "+CA"),
+        "AWM CoinRun parameter growth across tasks",
+    )
     _render_ablation_placeholder(output_dir / "ablation_results_placeholder.png")
     _render_diagnostic_placeholder(output_dir / "diagnostic_panels_placeholder.png")
 
@@ -722,6 +856,8 @@ def main() -> int:
                 "coinrun_main_learning_curves_full_range.png",
                 "main_metric_summary_with_pending.png",
                 "capacity_performance_pareto.png",
+                "awm_parameter_growth.png",
+                "coinrun_awm_parameter_growth.png",
                 "ablation_results_placeholder.png",
                 "diagnostic_panels_placeholder.png",
             ):

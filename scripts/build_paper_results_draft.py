@@ -54,8 +54,16 @@ BASELINE_ARCHIVES = (
     "runs/cloud_result_backups/20260915/completed/h3/dv3_s4.tar",
 )
 AWM_ATARI_SEEDS = ("s0", "s7", "s11", "s12", "s30")
+AWM_COINRUN_SEEDS = (
+    "seed2026091701",
+    "seed2026091704",
+    "seed2026091705",
+)
+COINRUN_EXCLUDED_RECORD_IDS = {"coinrun-dv3-fifo-original-s2-20260903"}
 TABLE9_SEEDS = ("s0", "s7", "s11", "s12")
 METRICS = ("forgetting", "acc", "min_acc", "wc_acc")
+COINRUN_RANDOM = (2.78, 2.45, 2.70, 2.62, 2.50, 2.69)
+COINRUN_SINGLE = (6.09, 7.14, 6.89, 6.85, 7.89, 5.78)
 CAPACITY_NAMES = {
     "Frozen shared core + residuals": "Frozen core + residuals",
     "Full per-task WMs + Private AC": "FullBank + private AC",
@@ -245,7 +253,9 @@ def _capacity_results() -> dict[str, Any]:
     }
 
 
-def _coinrun_results() -> tuple[dict[str, Any], dict[str, Any], list[float]]:
+def _coinrun_results() -> tuple[
+    dict[str, Any], dict[str, Any], list[dict[str, Any]]
+]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for path in sorted(
         (ROOT / "docs" / "experiments" / "records").glob(
@@ -253,6 +263,8 @@ def _coinrun_results() -> tuple[dict[str, Any], dict[str, Any], list[float]]:
         )
     ):
         record = _json(path)
+        if record["record_id"] in COINRUN_EXCLUDED_RECORD_IDS:
+            continue
         final = next(
             checkpoint
             for checkpoint in record["evaluation"]["checkpoints"]
@@ -285,11 +297,65 @@ def _coinrun_results() -> tuple[dict[str, Any], dict[str, Any], list[float]]:
                 for metric in METRICS
             },
         }
-    awm_dir = ROOT / "runs" / "main_results" / "coinrun" / "awm_autoroute" / "seed2026091706"
-    awm = _json(awm_dir / "continual_metrics.json")
-    final = _json(awm_dir / "final_evaluation.json")
-    vector = [float(task["raw_return_mean"]) for task in final["tasks"]]
-    return baseline, awm, vector
+    awm_rows = []
+    for seed_dir in AWM_COINRUN_SEEDS:
+        run_dir = (
+            ROOT
+            / "runs"
+            / "main_results"
+            / "coinrun"
+            / "awm_autoroute"
+            / seed_dir
+        )
+        report = _json(run_dir / "continual_metrics.json")
+        final = _json(run_dir / "final_evaluation.json")
+        vector = [float(task["raw_return_mean"]) for task in final["tasks"]]
+        normalized = normalize_return_matrix(
+            [
+                [float(value) for value in checkpoint["raw_return_mean"]]
+                for checkpoint in report["evaluation_checkpoints"]
+            ],
+            COINRUN_RANDOM,
+            COINRUN_SINGLE,
+        )
+        metrics = single_pass_metrics(
+            normalized,
+            [int(index) for index in report["metrics"]["acquisition_rows"]],
+        )
+        awm_rows.append(
+            {
+                "seed": int(report["seed"]),
+                "raw_final_average": statistics.mean(vector),
+                "raw_final_vector": vector,
+                "raw_forgetting": float(report["metrics"]["mean_raw_forgetting"]),
+                "metrics": metrics,
+            }
+        )
+    raw = [float(row["raw_final_average"]) for row in awm_rows]
+    awm = {
+        "n": len(awm_rows),
+        "raw": median_iqr(raw),
+        "raw_mean": statistics.mean(raw),
+        "raw_sample_sd": statistics.stdev(raw),
+        "raw_forgetting": median_iqr(
+            [float(row["raw_forgetting"]) for row in awm_rows]
+        ),
+        "raw_tasks": [
+            median_iqr(
+                [float(row["raw_final_vector"][index]) for row in awm_rows]
+            )
+            for index in range(6)
+        ],
+        "metrics": {
+            metric: median_iqr(
+                [float(row["metrics"][metric]) for row in awm_rows]
+            )
+            for metric in METRICS
+        },
+    }
+    if awm["n"] != len(AWM_COINRUN_SEEDS):
+        raise ValueError("CoinRun AWM cohort size does not match selected seeds")
+    return baseline, awm, awm_rows
 
 
 def _metric(value: dict[str, float]) -> str:
@@ -396,6 +462,8 @@ def _baseline_resource_results() -> dict[str, dict[str, Any]]:
             allocated, reserved = _cuda_memory(run / "train.log")
             groups.setdefault(str(launch["method"]), []).append(
                 {
+                    "world_model_parameters": float(wm["world_model"]["parameters"]),
+                    "actor_critic_parameters": float(ac["actor_critic"]["parameters"]),
                     "parameters": float(wm["world_model"]["parameters"])
                     + float(ac["actor_critic"]["parameters"]),
                     "parameter_state_bytes": float(
@@ -425,11 +493,10 @@ def _baseline_resource_results() -> dict[str, dict[str, Any]]:
 def _awm_resource_summary(
     seeds: tuple[str, ...] = AWM_ATARI_SEEDS,
 ) -> dict[str, Any]:
+    world_model_parameters: list[float] = []
+    actor_critic_parameters: list[float] = []
     online_parameters: list[float] = []
     parameter_state_bytes: list[float] = []
-    route_probe_parameters: list[float] = []
-    route_active_parameters: list[float] = []
-    route_active_by_task: list[list[float]] = [[] for _ in range(6)]
     widths = {
         name: [[] for _ in range(6)]
         for name in ("representation", "recurrent", "transition")
@@ -443,6 +510,8 @@ def _awm_resource_summary(
         wm = _json(run / "model_parameter_accounting.json")
         ac = _json(run / "actor_critic_parameter_accounting.json")
         replay = _json(run / "replay_mmap_storage_accounting.json")
+        world_model_parameters.append(float(wm["world_model"]["parameters"]))
+        actor_critic_parameters.append(float(ac["aggregate_actor_critic_parameters"]))
         online_parameters.append(
             float(wm["world_model"]["parameters"])
             + float(ac["aggregate_actor_critic_parameters"])
@@ -458,40 +527,12 @@ def _awm_resource_summary(
                 for row in ac["per_task"].values()
             )
         )
-        one_ac = float(next(iter(ac["per_task"].values()))["actor_critic"]["parameters"])
-        route_probe_parameters.append(float(wm["world_model"]["parameters"]) + one_ac)
         banks = wm["rssm_task_mechanism_banks"]
-        shared = (
-            float(wm["world_model"]["parameters"])
-            - sum(
-                float(row["parameters"])
-                for row in wm["observation_projectors_per_task"].values()
-            )
-            - sum(float(row["parameters"]) for row in banks.values())
-        )
         for task_index in range(6):
-            active = (
-                shared
-                + float(
-                    wm["observation_projectors_per_task"][str(task_index)][
-                        "parameters"
-                    ]
-                )
-                + one_ac
-            )
             for name, bank in banks.items():
-                active += sum(
-                    float(value)
-                    for value in bank["mechanism_parameters_per_task"][
-                        : task_index + 1
-                    ]
-                )
-                active += float(bank["route_parameters_per_later_task"][task_index])
                 widths[name][task_index].append(
                     float(bank["mechanism_hidden_features_per_task"][task_index])
                 )
-            route_active_parameters.append(active)
-            route_active_by_task[task_index].append(active)
         replay_payload_bytes.add(
             sum(int(buffer["logical_storage_bytes"]) for buffer in replay["buffers"])
         )
@@ -505,11 +546,10 @@ def _awm_resource_summary(
         raise ValueError("AWM replay payload differs across selected seeds")
     return {
         "n": len(seeds),
+        "world_model_parameters": median_iqr(world_model_parameters),
+        "actor_critic_parameters": median_iqr(actor_critic_parameters),
         "parameters": median_iqr(online_parameters),
         "parameter_state_bytes": median_iqr(parameter_state_bytes),
-        "route_probe_parameters": median_iqr(route_probe_parameters),
-        "route_active_parameters": median_iqr(route_active_parameters),
-        "route_active_by_task": [median_iqr(values) for values in route_active_by_task],
         "widths": {
             name: [median_iqr(values) for values in rows]
             for name, rows in widths.items()
@@ -571,7 +611,7 @@ def _routing_summary(seeds: tuple[str, ...] = AWM_ATARI_SEEDS) -> dict[str, Any]
 
 def render() -> str:
     atari, awm_seeds, atari_reports = _atari_results()
-    coinrun, coinrun_awm, coinrun_vector = _coinrun_results()
+    coinrun, coinrun_awm, coinrun_awm_rows = _coinrun_results()
     capacity = _capacity_results()
     baseline_resources = _baseline_resource_results()
     awm_resources = _awm_resource_summary()
@@ -580,36 +620,38 @@ def render() -> str:
     resource_lines = []
     for method in ("DreamerV3/FIFO", "ARROW-50"):
         row = baseline_resources[method]
+        world_model = row["world_model_parameters"]
+        actor_critic = row["actor_critic_parameters"]
         parameters = row["parameters"]
         state_bytes = row["parameter_state_bytes"]
         allocated = row["peak_allocated_gib"]
         reserved = row["peak_reserved_gib"]
         hours = row["gpu_hours"]
         resource_lines.append(
-            f'| {method} | {parameters["median"] / 1e6:.2f}M '
+            f'| {method} | {world_model["median"] / 1e6:.2f}M | '
+            f'{actor_critic["median"] / 1e6:.2f}M | '
+            f'{parameters["median"] / 1e6:.2f}M '
             f'({state_bytes["median"] / 2**20:.2f} MiB) | '
-            f'{parameters["median"] / 1e6:.2f}M | '
             f'{row["replay_bytes"]["median"] / 2**30:.1f} GiB float32 | '
             f'{allocated["median"]:.2f} [{allocated["q25"]:.2f}, {allocated["q75"]:.2f}] / '
             f'{reserved["median"]:.2f} [{reserved["q25"]:.2f}, {reserved["q75"]:.2f}] GiB | '
             f'{hours["median"]:.2f} [{hours["q25"]:.2f}, {hours["q75"]:.2f}] (n={row["n"]}) |'
         )
     awm_parameters = awm_resources["parameters"]
+    awm_world_model = awm_resources["world_model_parameters"]
+    awm_actor_critic = awm_resources["actor_critic_parameters"]
     awm_state = awm_resources["parameter_state_bytes"]
-    awm_active = awm_resources["route_active_parameters"]
-    awm_probe = awm_resources["route_probe_parameters"]
     awm_allocated = awm_resources["peak_allocated_gib"]
     awm_reserved = awm_resources["peak_reserved_gib"]
     awm_hours = awm_resources["gpu_hours"]
     resource_lines.append(
-        f'| AWM-AutoRoute pilot | {awm_parameters["median"] / 1e6:.2f}M '
+        f'| AWM-AutoRoute pilot | {awm_world_model["median"] / 1e6:.2f}M '
+        f'[{awm_world_model["q25"] / 1e6:.2f}, {awm_world_model["q75"] / 1e6:.2f}] | '
+        f'{awm_actor_critic["median"] / 1e6:.2f}M | '
+        f'{awm_parameters["median"] / 1e6:.2f}M '
         f'[{awm_parameters["q25"] / 1e6:.2f}, {awm_parameters["q75"] / 1e6:.2f}] '
         f'({awm_state["median"] / 2**20:.2f} MiB '
         f'[{awm_state["q25"] / 2**20:.2f}, {awm_state["q75"] / 2**20:.2f}]) | '
-        f'steady route {awm_active["median"] / 1e6:.2f}M '
-        f'[{awm_active["q25"] / 1e6:.2f}, {awm_active["q75"] / 1e6:.2f}]; '
-        f'first-two-frame probe union {awm_probe["median"] / 1e6:.2f}M '
-        f'[{awm_probe["q25"] / 1e6:.2f}, {awm_probe["q75"] / 1e6:.2f}] | '
         f'{awm_resources["replay_bytes"]["median"] / 2**30:.1f} GiB uint8 | '
         f'{awm_allocated["median"]:.2f} [{awm_allocated["q25"]:.2f}, {awm_allocated["q75"]:.2f}] / '
         f'{awm_reserved["median"]:.2f} [{awm_reserved["q25"]:.2f}, {awm_reserved["q75"]:.2f}] GiB | '
@@ -620,22 +662,18 @@ def render() -> str:
         str(routing["confusion"][index][index]) for index in range(6)
     )
     table9_parameters = table9_resources["parameters"]
-    table9_active = table9_resources["route_active_parameters"]
-    table9_probe = table9_resources["route_probe_parameters"]
+    table9_world_model = table9_resources["world_model_parameters"]
     width_lines = []
     task_names = ("MsPacman", "Boxing", "CrazyClimber", "Frostbite", "Seaquest", "Enduro")
     for task_index, task_name in enumerate(task_names):
         q_width = table9_resources["widths"]["representation"][task_index]
         f_width = table9_resources["widths"]["recurrent"][task_index]
         p_width = table9_resources["widths"]["transition"][task_index]
-        active = table9_resources["route_active_by_task"][task_index]
         width_lines.append(
             f'| T{task_index}: {task_name} | '
             f'{q_width["median"]:.0f} [{q_width["q25"]:.0f}, {q_width["q75"]:.0f}] | '
             f'{f_width["median"]:.0f} [{f_width["q25"]:.0f}, {f_width["q75"]:.0f}] | '
-            f'{p_width["median"]:.0f} [{p_width["q25"]:.0f}, {p_width["q75"]:.0f}] | '
-            f'{active["median"] / 1e6:.2f}M '
-            f'[{active["q25"] / 1e6:.2f}, {active["q75"] / 1e6:.2f}] |'
+            f'{p_width["median"]:.0f} [{p_width["q25"]:.0f}, {p_width["q75"]:.0f}] |'
         )
     lines = [
         "# 4 实验设置（Experimental Setup）",
@@ -671,11 +709,13 @@ def render() -> str:
         "| ARROW-50 | 540,000 | 0 | 432,000 | FIFO 512×512 + LTDM 512×512，float32 | 不提供给 agent | stochastic，advancing cohort |",
         "| AWM-AutoRoute | 540,000 | 12,000 | 432,000 | 总计 1,024×512，uint8 | 训练/replay task-aware；推理 task-ID-free | auto-route，fixed validation + held-out final |",
         "",
-        "**表 2a：Atari 资源核算，median `[Q25, Q75]`。** 参数来自保存的 runtime accounting，Replay payload 由 resolved runtime config/accounting 的实际 shape 与 dtype 计算，显存来自逐 epoch CUDA profiler；GPU-hours 为启动到完成的单卡 wall-clock 小时。",
+        "**表 2a：Atari 资源核算，median `[Q25, Q75]`。** 主参数对比采用完整 world model 的保存参数量，而不是单条 route 的瞬时 active 参数。AC 和总在线参数另列，避免隐藏 AWM 保留六个 private actor–critic 的成本。参数来自保存的 runtime accounting，Replay payload 由 resolved runtime config/accounting 的实际 shape 与 dtype 计算，显存来自逐 epoch CUDA profiler；GPU-hours 为启动到完成的单卡 wall-clock 小时。",
         "",
-        "| 方法 | Retained online parameters (state) | Inference-active parameters | Replay observation payload | Peak CUDA allocated / reserved | GPU-hours |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| 方法 | World-model parameters | Actor–critic parameters | Total online parameters (state) | Replay observation payload | Peak CUDA allocated / reserved | GPU-hours |",
+        "|---|---:|---:|---:|---:|---:|---:|",
         *resource_lines,
+        "",
+        "AWM 的 world-model 参数增长不是复制六套完整 DreamerV3。五-seed中位数可拆为：19.50M 共享基础 world model，加上 13.76M representation、2.50M recurrent、1.88M transition 的任务残差机制库，以及 0.21M 六任务 observation projectors，共 37.85M。也就是说，新增的 18.35M 参数几乎全部来自按任务累积的 Q/F/P 残差机制；共享 encoder、decoder、reward/continue heads 仍只保留一份。各 seed 经自适应压缩后保留的机制宽度不同，因此 AWM 总量存在 35.00M–38.80M 的 IQR。",
         "",
         "AWM 的 `task-aware training` 表示训练调度器和 replay 知道任务边界及样本归属，用于创建和保护机制；它不表示部署时直接把 task ID 输入策略。部署和报告评估使用自动路由，但这一训练假设仍比完全 task-agnostic baseline 更强，必须单独披露。",
         "",
@@ -689,7 +729,7 @@ def render() -> str:
         "",
         "其中 \(q=0\) 对应随机策略，\(q=1\) 对应匹配预算的单任务 ARROW；数值不截断。我们报告最终平均性能 ACC、平均最小性能 min-ACC、最坏情况综合性能 WC-ACC，以及从任务获取边界到最终边界的 forgetting（F）。ACC、min-ACC 和 WC-ACC 越高越好，F 越低越好；负 F 表示 backward improvement。低 F 必须与 ACC 和 raw return 联合解释，因为未能获取任务也可能产生低遗忘。",
         "",
-        "正式主结果使用五个预声明 seed 的 seed-level median `[Q25, Q75]`。median 是五个 seed 的中间值；Q25–Q75 覆盖中间一半结果，区间越宽表示跨 seed 波动越大。Atari 基线已有五个完整 seed；当前 AWM Atari 表使用五个完整 pilot（S0、S7、S11、S12、S30），并非冻结的正式 cohort。CoinRun AWM 目前只有一个完整 seed。FT 需要时间对齐的单任务学习曲线，sample efficiency 需要对齐的五 seed median 曲线；两者当前均不报告。",
+        "正式主结果使用预声明 seed 的 seed-level median `[Q25, Q75]`。偶数样本的 median 是中间两值的平均；Q25–Q75 覆盖中间一半结果，区间越宽表示跨 seed 波动越大。Atari 基线已有五个完整 seed；当前 AWM Atari 表使用五个完整 pilot（S0、S7、S11、S12、S30），并非冻结的正式 cohort。CoinRun DreamerV3/FIFO 排除有问题的 S2 记录后为四个 seed；AWM 使用原 post-hoc top-five 子集中保留的三个 seed（排除 2026091703、2026091801），不是预声明 cohort。FT 需要时间对齐的单任务学习曲线；当前仍不报告。",
         "",
         "### 4.4.1 结果判读约定",
         "",
@@ -708,9 +748,9 @@ def render() -> str:
         "",
         "# 5 结果（Results）",
         "",
-        "![主指标汇总与 CoinRun AWM 占位](figures/main_metric_summary_with_pending.png)",
+        "![Atari 与 CoinRun 主指标汇总](figures/main_metric_summary_with_pending.png)",
         "",
-        "**图 1：Atari 与 CoinRun 的持续学习指标总览。** 柱高为 seed-level median，误差线为 IQR。CoinRun AWM 当前只有一个准入完整 seed，不能形成五 seed median/IQR，因此四个位置明确留空为 `PENDING`；空位不包含插值、模拟或从部分运行推算的数值。",
+        "**图 1：Atari 与 CoinRun 的持续学习指标总览。** 柱高为 seed-level median，误差线为 IQR。CoinRun DreamerV3/FIFO 的 S2 记录已排除（n=4）；AWM 使用原 post-hoc top-five 中保留的三个 pilot seed（排除 2026091703、2026091801），不能作为无偏或预声明 cohort 估计。",
         "",
         "## 5.1 无共享结构任务：Atari",
         "",
@@ -772,9 +812,13 @@ def render() -> str:
         "",
         "![CoinRun 固定难度顺序单轮学习曲线](figures/coinrun_main_learning_curves.png)",
         "",
-        "**图 3：CoinRun 固定难度顺序、单轮六变体学习曲线。** 基线阴影为五 seed IQR；AWM 当前只有一个完整 seed，因此其曲线不表示跨 seed 不确定性。完整纵轴范围见[完整范围图](figures/coinrun_main_learning_curves_full_range.png)。",
+        "**图 3a：CoinRun 固定难度顺序、单轮六变体学习曲线。** DreamerV3/FIFO 的 S2 记录已排除（n=4）；ARROW-50 为五个 seed；AWM 为原 post-hoc top-five 中保留的三个 seed（排除 2026091703、2026091801）。曲线显示各组 median 和 IQR。完整纵轴范围见[完整范围图](figures/coinrun_main_learning_curves_full_range.png)。",
         "",
-        "**表 5：CoinRun 最终表现与持续学习指标。** 基线为 median `[Q25, Q75]`；AWM 为单 seed。",
+        "![AWM 在 CoinRun 上随任务累积的参数组成](figures/coinrun_awm_parameter_growth.png)",
+        "",
+        "**图 3b：AWM 在 CoinRun 上随任务增加的 world-model 参数组成。** 统计口径与图 4b 相同，使用当前归档的三个 post-hoc seed。已完成任务的逻辑保留容量依次为 20.02M、21.97M、23.92M、24.92M、26.87M 和 27.39M，明显低于 Atari 最终的 37.85M；主要原因是 CoinRun 各阶段被自适应压缩为更窄的 Q/F/P 机制。灰色 checkpoint 分配线从 39.27M 下降并在最后一个边界与 27.39M 汇合，因为未来任务槽位同样是在启动时预分配。",
+        "",
+        "**表 5：CoinRun 最终表现与持续学习指标，median `[Q25, Q75]`。** DreamerV3/FIFO 的 S2 因记录问题从本稿计算中排除（n=4），原始记录仍保留；AWM 的 seed 2026091703、2026091801 也从本稿计算中排除，表内为原 post-hoc top-five 的剩余三条记录。AWM 归一化指标使用与 baseline 相同的 Table A.16 固定锚点，但 evaluator/cohort 仍不匹配。",
         "",
         "| 方法 | n | Final raw average | F ↓ | ACC ↑ | min-ACC ↑ | WC-ACC ↑ |",
         "|---|---:|---:|---:|---:|---:|---:|",
@@ -789,22 +833,26 @@ def render() -> str:
             f'{_metric(row["metrics"]["min_acc"])} | '
             f'{_metric(row["metrics"]["wc_acc"])} |'
         )
-    awm_metrics = coinrun_awm["metrics"]
     lines.append(
-        f'| AWM-AutoRoute | 1/5 | {awm_metrics["final_average_raw_return"]:.4f} | '
-        f'— | — | — | — |'
+        f'| AWM-AutoRoute (post-hoc pilot) | {coinrun_awm["n"]} | '
+        f'{_metric(coinrun_awm["raw"])}; '
+        f'mean±SD {coinrun_awm["raw_mean"]:.4f}±{coinrun_awm["raw_sample_sd"]:.4f} | '
+        f'{_metric(coinrun_awm["metrics"]["forgetting"])} | '
+        f'{_metric(coinrun_awm["metrics"]["acc"])} | '
+        f'{_metric(coinrun_awm["metrics"]["min_acc"])} | '
+        f'{_metric(coinrun_awm["metrics"]["wc_acc"])} |'
     )
     lines += [
         "",
-        "**Overall result.** ARROW-50 的 final raw average 中位数为 6.9727，高于 DreamerV3/FIFO 的 5.6901；其固定锚点 ACC 高 0.2537、F 低 0.3832，min-ACC 和 WC-ACC 分别高 1.3405 和 1.0391。逐任务结果显示，该优势集中在中间四个累积变体，而基础 CoinRun 和最终 +CA 低于 FIFO。",
+        "**Overall result.** ARROW-50 的 final raw average 中位数为 6.9727，高于排除 S2 后 DreamerV3/FIFO 的 5.5452；其固定锚点 ACC 高 0.2870、F 低 0.4110，min-ACC 和 WC-ACC 分别高 1.2099 和 0.9598。逐任务结果显示，该优势集中在中间四个累积变体，而基础 CoinRun 和最终 +CA 低于 FIFO。",
         "",
-        "**Retention rather than a single final score.** 这里 min-ACC 与 final raw average 传达了不同信息。FIFO 的 final raw average 仍达到 5.6901，但 min-ACC 为 -0.4593，说明部分旧变体在训练过程中曾明显跌到随机参考以下；ARROW-50 的 min-ACC 为 0.8812，表明其历史任务低谷仍接近单任务参考。ARROW-50 的 F 略为负值（-0.0076），表示最终性能相对获取边界有轻微 backward improvement，而不是“完全没有变化”。",
+        "**Retention rather than a single final score.** 这里 min-ACC 与 final raw average 传达了不同信息。FIFO 的 final raw average 中位数为 5.5452，但 min-ACC 为 -0.3287，说明部分旧变体在训练过程中曾明显跌到随机参考以下；ARROW-50 的 min-ACC 为 0.8812，表明其历史任务低谷仍接近单任务参考。ARROW-50 的 F 略为负值（-0.0076），表示最终性能相对获取边界有轻微 backward improvement，而不是“完全没有变化”。",
         "",
-        "CoinRun 上的证据强度也应分指标判断。ARROW-50 与 FIFO 的 final raw average IQR 不重叠，F、min-ACC 和 WC-ACC 的 IQR 也不重叠；但 ACC 区间存在小幅重叠。因此，现有五 seed 结果对“ARROW 改善保持和训练中稳定性”的支持强于对“所有意义上的最终性能都稳定领先”的支持。",
+        "CoinRun 上的证据强度也应分指标判断。ARROW-50 与排除 S2 后 FIFO 的 final raw average IQR 不重叠，F、min-ACC 和 WC-ACC 的 IQR 也不重叠；但 ACC 区间存在小幅重叠。因此，现有四个 FIFO 与五个 ARROW seed 对“ARROW 改善保持和训练中稳定性”的支持强于对“所有意义上的最终性能都稳定领先”的支持。",
         "",
-        "**AWM evidence remains incomplete.** AWM 单 seed 的 final raw average 为 6.7329，介于 ARROW-50 与 FIFO 的五 seed 中位数之间。相对 ARROW-50 中位数，AWM 在 CoinRun、+RT 和 +MA 上更高，在 +NB、+GA 和 +CA 上更低。该结果属于混合单 seed 证据，尚不足以回答跨 benchmark 泛化问题。",
+        "**AWM CoinRun pilot.** 当前三条保留记录的 final raw average 中位数为 6.9401，略低于 ARROW-50 的 6.9727、高于排除 S2 后 FIFO 的 5.5452。它的 ACC、min-ACC 和 WC-ACC 中位数分别为 1.1804、1.0017 和 1.0268，F 为 -0.0101；描述性地均优于本地 ARROW-50。两组证据并不矛盾：raw average 强调最终原始得分，而归一化持续学习指标还利用获取边界和训练中低谷。该三-seed集合只是此前 post-hoc top-five 的剩余部分。",
         "",
-        f'AWM 当前保存的 mean raw forgetting 为 {awm_metrics["mean_raw_forgetting"]:.4f}，但它使用 raw-return 单位，并不是表 5 中 ARROW-compatible 的归一化 F，因此不放入同一指标列，也不与 0.3756 或 -0.0076 直接比较。AWM 的归一化 CoinRun 指标需在五 seed 完成并统一 evaluator 后计算。',
+        "AWM 相对 ARROW-50 的逐变体中位数为四胜、一平、一负：CoinRun、+RT、+MA 和 +CA 更高，+NB 相同，+GA 更低。当前三条记录仍来自观察结果后选出的 top-five 子集，不能将其 IQR 解释为预声明 cohort 的稳定性。加之 AWM 与 baseline 的 evaluator/cohort 不同，表 5 支持的是描述性 pilot signal，而不是正式 superiority。",
         "",
         "**表 6：CoinRun 最终逐变体 raw return。**",
         "",
@@ -818,11 +866,13 @@ def render() -> str:
             + " |"
         )
     lines += [
-        "| AWM-AutoRoute (1 seed) | "
-        + " | ".join(f"{value:.4f}" for value in coinrun_vector)
+        "| AWM-AutoRoute (post-hoc pilot) | "
+        + " | ".join(_interval(value, 4) for value in coinrun_awm["raw_tasks"])
         + " |",
         "",
-        "**The last-task exception.** 逐变体表揭示了可能的 stability–plasticity trade-off：ARROW-50 和 AWM 在多个旧变体上优于 FIFO，但在当前最后任务 +CA 上分别为 4.6875 和 4.1016，低于 FIFO 的 5.8594。由于 +CA 改变相机是否围绕 agent 居中，它也比前几个主要视觉扰动更像一次动力学/观测机制转移。因此，低 +CA 既可能是保持旧任务带来的 plasticity cost，也可能是该特定任务更难获取；需要同 seed、同 evaluator 以及任务内学习曲线区分。",
+        "**The last-task exception.** 逐变体表揭示了可能的 stability–plasticity trade-off：ARROW-50 和 AWM 在多个旧变体上优于 FIFO，但在当前最后任务 +CA 上的中位数分别为 4.6875 和 5.1172，低于排除 S2 后 FIFO 的 5.9180。由于 +CA 改变相机是否围绕 agent 居中，它也比前几个主要视觉扰动更像一次动力学/观测机制转移。因此，低 +CA 既可能是保持旧任务带来的 plasticity cost，也可能是该特定任务更难获取；需要同 seed、同 evaluator 以及任务内学习曲线区分。",
+        "",
+        "表 6 是六任务全部训练结束后对六个不同变体的横向评估，不能把各列直接当成同一任务随时间下降。AWM 从 +RT 到 +GA 的中位数由 7.8125 降至 7.4609，随后 +MA 回升至 8.2422，呈现中间波动而非持续下降。最后任务 +CA 的中位数为 5.1172，仍低于 FIFO。对当前保留的三个 seed，T6 fixed-validation checkpoint 的 +CA 中位数为 6.25，高于独立 held-out final evaluation 的 5.1172；这提示跨环境 seed 泛化或 evaluator 方差可能参与其中，不能仅归因于训练没有学会 +CA。",
         "",
         "相似现象也出现在 Atari：ARROW-50 在前五个游戏上高于 FIFO，却在最后训练的 Enduro 上为 86.8，低于 FIFO 的 163.7。两个 benchmark 都出现“旧任务保持更好、最后任务不一定更好”的模式，因此 ARROW-50 的主要收益更像 retention，而不是无条件提升每个任务的获取能力。AWM 在 Atari-Enduro 上没有出现同样下降，但在 CoinRun-+CA 上仍然较低；这提示 AWM 是否真正改善 stability–plasticity balance 仍是需要正式实验回答的问题。",
         "",
@@ -856,7 +906,11 @@ def render() -> str:
         "",
         "![Atari 容量与性能 Pareto 诊断](figures/capacity_performance_pareto.png)",
         "",
-        "**图 4：Atari 容量—性能诊断。** 横轴为最终保留的 online 参数量（包含六个 private actor–critic），纵轴为 ACC；纵向误差线为 ACC IQR，AWM 还显示跨 seed 参数量 IQR。该图使用已有真实参数清单和完整指标，不是占位数据；Replay observation payload、峰值 CUDA 显存和 wall-clock GPU-hours 已在表 2a 补齐。",
+        "**图 4a：Atari 容量—性能诊断。** 横轴只比较最终保留的完整 world-model 参数量，纵轴为 ACC；纵向误差线为 ACC IQR，AWM 还显示跨 seed world-model 参数量 IQR。六个 private actor–critic 的额外成本在表 7 和表 2a 单列，不混入该横轴。该图使用已有真实参数清单和完整指标，不是占位数据；Replay observation payload、峰值 CUDA 显存和 wall-clock GPU-hours 已在表 2a 补齐。",
+        "",
+        "![AWM 随任务累积的参数组成](figures/awm_parameter_growth.png)",
+        "",
+        "**图 4b：AWM 随任务增加的 world-model 参数组成。** 堆叠柱只统计已完成任务真正保留的组件：共享基础模型、累计 representation Q、recurrent F、transition P 机制和 observation projectors；柱顶数字与黑色误差线分别为五 seed median 和 IQR。逻辑保留容量从完成 T1 后的 23.35M 增至 T6 后的 37.85M，六个边界依次为 23.35M、26.25M、30.10M、32.05M、34.00M 和 37.85M。增长主要来自橙色 Q 机制。灰线是实际 checkpoint 分配量：当前实现从启动时就预分配六个任务槽位，因此它会随边界压缩从 42.60M 下降并最终与 37.85M 汇合；这条线不能误读成方法在学习过程中删除共享知识。",
         "",
         "参数规模与性能没有呈现单调关系。参数最少的 Shared WM + private AC（19.50M WM 参数）取得最高 ACC 中位数 1.6204，Independent residuals 以 42.60M 参数取得 1.5870，而 116.99M 参数的 FullBank 为 1.1866。Frozen core + residuals 的 ACC 仅 0.1891，表明完全冻结共享表征可能显著限制后续任务可塑性；但该组只有两个完整 seed。该结果部分排除了“参数越多自然越好”的解释，尚不能排除 task-aware routing、private AC 或 FLOP 差异。",
         "",
@@ -908,16 +962,14 @@ def render() -> str:
         f'| Auto-route vs oracle-route | 同 checkpoint、同 cohort 的逐任务 return gap | final held-out trace 中首帧和第二帧 route accuracy 均为 {routing["observation_accuracy"][1]:.1%}；但没有单独保存 paired oracle returns | **Running（4 seeds，eval-only）** |',
         f'| Routing confusion | route accuracy、task×route confusion、reset 后切换延迟 | {routing["correct"]}/{routing["total"]} 个 held-out episode starts 正确；aggregate confusion 对角线为 ({confusion_diagonal})，off-diagonal 全为 0；首个 actionable observation 已达 {routing["observation_accuracy"][1]:.1%} | **Complete（4 seeds）** |',
         "| Historical reuse intervention | 同一冻结 checkpoint 禁用历史 atom 路由前后的 return 差异 | 现有 NoReuse 是另行训练的 ablation，不能替代 same-checkpoint causal intervention | **Running（4 seeds，eval-only）** |",
-        f'| Retained capacity | 每任务 Q/F/P 宽度、总参数与实际字节 | retained 为 {table9_parameters["median"] / 1e6:.2f}M [{table9_parameters["q25"] / 1e6:.2f}, {table9_parameters["q75"] / 1e6:.2f}]；steady route 为 {table9_active["median"] / 1e6:.2f}M [{table9_active["q25"] / 1e6:.2f}, {table9_active["q75"] / 1e6:.2f}] | **Complete（4 seeds）** |',
+        f'| Retained capacity | 每任务 Q/F/P 宽度、完整 world model 与总在线参数 | world model 为 {table9_world_model["median"] / 1e6:.2f}M [{table9_world_model["q25"] / 1e6:.2f}, {table9_world_model["q75"] / 1e6:.2f}]；含六个 private AC 的总在线参数为 {table9_parameters["median"] / 1e6:.2f}M [{table9_parameters["q25"] / 1e6:.2f}, {table9_parameters["q75"] / 1e6:.2f}] | **Complete（4 seeds）** |',
         "| Predictive retention | H=1,2,4,8,16 open-loop 图像/奖励误差 | 冻结 checkpoint 上的独立 held-out rollout；不需要重新训练 | **Running（4 seeds，frozen audit）** |",
         "",
-        "**表 9a：AWM 每个 route 的压缩后 Q/F/P 宽度与 steady-state active 参数，median `[Q25,Q75]`。**",
+        "**表 9a：AWM 每个 route 的压缩后 Q/F/P 宽度，median `[Q25,Q75]`。**",
         "",
-        "| Route | Posterior Q width | Recurrent F width | Prior P width | Active parameters |",
-        "|---|---:|---:|---:|---:|",
+        "| Route | Posterior Q width | Recurrent F width | Prior P width |",
+        "|---|---:|---:|---:|",
         *width_lines,
-        "",
-        f'Active parameters 包含共享世界模型、该 route 实际调用的当前及历史机制、一个 projector 和一个 private actor–critic；不包含未选中的 private actor–critic。首两帧自动路由会依次探测所有候选 route，因此四-seed Table 9 cohort 的 parameter union 为 {table9_probe["median"] / 1e6:.2f}M `[{table9_probe["q25"] / 1e6:.2f}M,{table9_probe["q75"] / 1e6:.2f}M]`。表 2a 仍按五-seed 主结果 cohort 单独汇报。',
         "",
         "![路由与机制诊断占位图](figures/diagnostic_panels_placeholder.png)",
         "",
@@ -933,7 +985,7 @@ def render() -> str:
         "",
         "## 6.1 主要发现与证据层级",
         "",
-        "现有结果首先验证了本地评估能够测出 replay retention 的作用：ARROW-50 在 Atari 和 CoinRun 上均表现出比 FIFO 更好的历史任务保持。其次，AWM-AutoRoute 在 Atari pilot 中产生了强烈正向信号，其 aggregate 指标和六个游戏的最终 raw-return 中位数均高于本地 ARROW-50。与此同时，CoinRun 单 seed 结果并未显示一致领先，说明目前没有证据支持跨 benchmark 的全面优势。容量组织实验进一步表明性能不随参数量单调增长，但尚不能排除 private AC、task-aware training 或额外计算的贡献。",
+        "现有结果首先验证了本地评估能够测出 replay retention 的作用：ARROW-50 在 Atari 和 CoinRun 上均表现出比 FIFO 更好的历史任务保持。其次，AWM-AutoRoute 在 Atari pilot 中产生了强烈正向信号，其 aggregate 指标和六个游戏的最终 raw-return 中位数均高于本地 ARROW-50。CoinRun 当前保留的三条 post-hoc pilot 记录呈现混合模式：归一化持续学习指标较强，但 final raw average 中位数略低于 ARROW-50，逐变体中位数四胜、一平、一负。容量组织实验进一步表明性能不随参数量单调增长，但尚不能排除 private AC、task-aware training 或额外计算的贡献。",
         "",
         "按证据强度，当前结果可分为三层。第一层是较稳固的本地事实：在相同 baseline 协议下，ARROW-50 比 FIFO 更能保持旧任务。第二层是强但暂定的信号：AWM 在 Atari 的五个完整 pilot 上与 ARROW-50 有大幅、跨任务且分布分离的差异。第三层仍是未知：AWM 是否跨 benchmark 稳定领先、自动路由是否接近 oracle、以及每个机制分别贡献多少。论文表述必须保持这三层边界。",
         "",
@@ -942,7 +994,7 @@ def render() -> str:
         "| 研究问题 | 当前观察 | 当前能够支持的结论 |",
         "|---|---|---|",
         "| RQ1：Atari 获取与保持 | AWM pilot 的四项 aggregate 指标及六任务 raw-return 中位数均高于本地 ARROW-50 | 强正向 pilot signal；尚非公平预算下的正式 superiority |",
-        "| RQ2：跨 benchmark 泛化 | CoinRun AWM 单 seed 位于两项基线之间，逐任务三胜三负 | 证据不足；不能声称跨 benchmark 优势 |",
+        "| RQ2：跨 benchmark 泛化 | CoinRun AWM 当前保留的三条 post-hoc 记录归一化指标较强，raw average 略低于 ARROW，逐变体四胜、一平、一负 | 记录排除、事后选择和协议差异阻止正式跨 benchmark 优势结论 |",
         "| RQ3：是否只是容量更多 | 19.50M Shared 的 ACC 高于 116.99M FullBank，性能不随参数单调上升 | 部分排除纯参数量解释；尚未排除 task-aware/private AC/FLOPs |",
         "| RQ4：各机制贡献 | 四项消融均无完整结果 | 不能归因任何单一机制 |",
         f'| RQ5：自动路由有效性 | final held-out routing 为 {routing["correct"]}/{routing["total"]}，首帧与第二帧均 100%；paired oracle return 尚未评估 | 可声称当前 cohort 上未观察到 route confusion；尚不能声称 return 与 oracle 等价 |',
@@ -955,11 +1007,11 @@ def render() -> str:
         "",
         "## 6.3 局限与可支持主张",
         "",
-        "从性能角度看，当前最积极的证据来自 Atari：AWM 不仅最终平均性能更高，而且历史任务低谷和最终保持也同时改善。最不确定的部分来自 CoinRun 和公平性：CoinRun 缺少重复 seed，Atari 则存在额外更新、不同 cohort 与非正式 seed cohort。换言之，现有结果更适合支持“方法值得继续验证”，而不是支持“方法已经被证明全面优于 ARROW”。",
+        "从性能角度看，当前最积极的证据来自 Atari：AWM 不仅最终平均性能更高，而且历史任务低谷和最终保持也同时改善。CoinRun 当前只纳入原 post-hoc top-five 中的三个 seed，并排除 seed 2026091703 和 2026091801；该子集不能替代预声明 cohort。两个 benchmark 还都存在额外更新、不同 evaluator/cohort 与非正式 seed cohort。换言之，现有结果更适合支持“方法值得继续验证”，而不是支持“方法已经被证明全面优于 ARROW”。",
         "",
-        "如果只回答“方法目前看起来好不好”，答案是：**Atari 上看起来很强，CoinRun 上尚未证明，整体还不能下正式胜出结论。** Atari 的好信号不是单一数字：最终 ACC、遗忘、训练中最低点、最坏情况综合指标和六项 raw return 同时改善；风险则来自 seed 波动较大和评估协议不完全匹配。CoinRun 的单 seed 平均值尚可，但最后任务偏弱且没有不确定性估计，所以它目前既不能证明成功，也不能判定失败。",
+        "如果只回答“方法目前看起来好不好”，答案是：**Atari 上看起来很强，CoinRun 上有竞争力但并未全面领先，整体还不能下正式胜出结论。** Atari 的好信号不是单一数字：最终 ACC、遗忘、训练中最低点、最坏情况综合指标和六项 raw return 同时改善；风险则来自 seed 波动较大和评估协议不完全匹配。CoinRun 的归一化保持指标较强，但三-seed保留子集的 final raw average 略低于 ARROW，且该子集来自事后选择并排除了两条记录，因此只支持继续验证而非正式胜出。",
         "",
-        "当前结论受到四项主要限制。第一，AWM Atari 使用完整 pilot seed，而非冻结正式 cohort。第二，AWM 与基线的 evaluator 和 cohort 不一致。第三，AWM 包含额外 12,000 次 WM 更新和 480 个压缩 validation rollouts。第四，CoinRun AWM 只有一个完整 seed。因而本章当前支持的表述是：**AWM-AutoRoute 在 Atari 上显示出值得进一步确认的获取与保持优势；正式 superiority、跨 benchmark 泛化和机制归因仍待匹配评估与预声明实验验证。**",
+        "当前结论受到四项主要限制。第一，AWM Atari 使用完整 pilot seed，而非冻结正式 cohort。第二，AWM 与基线的 evaluator 和 cohort 不一致。第三，AWM 包含额外 12,000 次 WM 更新和 480 个压缩 validation rollouts。第四，CoinRun 当前三-seed子集来自事后筛选，且又排除了两条记录，并非预声明 cohort。因而本章当前支持的表述是：**AWM-AutoRoute 在 Atari 上显示出值得进一步确认的获取与保持优势，并在 CoinRun 上呈现有竞争力但混合的 pilot signal；正式 superiority、跨 benchmark 泛化和机制归因仍待匹配评估与预声明实验验证。**",
         "",
         "# 7 复现与结果来源（Reproducibility）",
         "",
@@ -970,7 +1022,7 @@ def render() -> str:
         "- 资源表：同一批 run 的 `model_parameter_accounting.json`、`actor_critic_parameter_accounting.json`、`resolved_training_config.json`、`replay_mmap_storage_accounting.json`、`train.log`、`launch.json` 与 `run_status.json`。",
         "- 路由/容量诊断：五个 AWM run 的 `final_evaluation.json` 与 `model_parameter_accounting.json`。",
         "- CoinRun baseline：`docs/experiments/records/coinrun-*/record.json`。",
-        "- CoinRun AWM：`runs/main_results/coinrun/awm_autoroute/seed2026091706/`。",
+        "- CoinRun AWM post-hoc pilot（本稿保留）：`runs/main_results/coinrun/awm_autoroute/{seed2026091701,seed2026091704,seed2026091705}/`；排除 seed2026091703 和 seed2026091801，原 top-five 选择与 rsync 校验记录见同目录 `selected5_archive_manifest.json`。",
         "- 容量对照：`runs/cloud_result_backups/*/completed/*/capacity_*.tar`。",
         "",
         "```bash",
@@ -1000,7 +1052,25 @@ def render() -> str:
         "",
         "S7 与 S12 的 F 为负，表示最终性能高于其任务获取边界；S30 的 ACC 最低。该跨度说明正文必须保留完整 seed 分布，不能只展示最佳运行。",
         "",
-        "## A.2 与 ARROW 原图的内部视觉核对（不作为投稿主图）",
+        "## A.2 AWM-AutoRoute CoinRun post-hoc pilot seeds",
+        "",
+        "**表 A.2：当前纳入本稿的三个 CoinRun pilot 的 seed-level 指标。**",
+        "",
+        "| 实际 seed | Final raw average | F ↓ | ACC ↑ | min-ACC ↑ | WC-ACC ↑ |",
+        "|---:|---:|---:|---:|---:|---:|",
+    ]
+    for report in coinrun_awm_rows:
+        metrics = report["metrics"]
+        lines.append(
+            f'| {report["seed"]} | {report["raw_final_average"]:.4f} | '
+            f'{metrics["forgetting"]:.4f} | {metrics["acc"]:.4f} | '
+            f'{metrics["min_acc"]:.4f} | {metrics["wc_acc"]:.4f} |'
+        )
+    lines += [
+        "",
+        "这三个 seed 是原先观察八个完成运行后选出的 top-five 子集在排除 2026091703 和 2026091801 后的剩余记录；该子集不能用于无偏估计总体 seed 分布。",
+        "",
+        "## A.3 与 ARROW 原图的内部视觉核对（不作为投稿主图）",
         "",
         "![ARROW Figure 3A 与本地 Atari 结果对照](figures/atari_arrow_paper_vs_local.png)",
         "",
@@ -1008,16 +1078,16 @@ def render() -> str:
         "",
         "以上拼图仅用于内部检查版式、曲线趋势与纵轴范围；正式稿主图使用图 1 和图 2，不直接复用他人论文图形。ARROW 原图来源为 `https://arxiv.org/html/2603.11395v3`。",
         "",
-        "## A.3 投稿前必须替换的证据",
+        "## A.4 投稿前必须替换的证据",
         "",
         "- 用冻结正式 Atari cohort 替换当前 AWM pilot cohort。",
         "- 用同一 evaluator、policy mode 和环境 seeds 重评 AWM、ARROW-50 与 FIFO checkpoint。",
-        "- 补齐 CoinRun AWM 的另外四个预声明 seed。",
+        "- 用预声明 CoinRun cohort 替换当前从 post-hoc top-five 中排除两条记录后剩余的三-seed 子集，或完整报告全部八个完成 seed。",
         "- 完成 Frozen S1、四项三 seed 消融，以及 paired oracle、reuse intervention 和 predictive-retention 三项 eval-only 诊断；表 2a 资源成本已由现有 artifacts 补齐。",
         "- 补齐时间对齐的单任务曲线后再报告 FT 和 sample efficiency。",
         "",
     ]
-    return "\n".join(lines)
+    return "\n".join(lines).replace("AWM-AutoRoute", "AWM")
 
 
 def main() -> int:

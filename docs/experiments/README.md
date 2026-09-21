@@ -40,6 +40,13 @@ not rewritten as successful exits. Fixed-anchor normalized metrics are labelled
 diagnostic rather than exact paper reproduction. The report is recomputable
 from Git alone using `python3 scripts/report_coinrun_baselines.py check`.
 
+Five complete AWM-AutoRoute CoinRun v4 pilots (seeds `2026091701`,
+`2026091703`, `2026091704`, `2026091705`, and `2026091801`) now have compact
+records in this registry and full local run archives under
+`runs/main_results/coinrun/awm_autoroute/`. This is a post-hoc top-five subset
+of eight completed runs, selected after final scores were observed; it must not
+be reported as an unbiased or predeclared five-seed paper cohort.
+
 Retained Atari evidence covers the seed-0 **ARROW-50** and **DreamerV3/FIFO**
 original-six records, eighteen single-task normalization anchors, the
 AWM-AutoRoute campaign archives
